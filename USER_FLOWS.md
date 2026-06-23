@@ -6,8 +6,8 @@
 > (Design direction)** and the grief-tech UX research (`research/ux.md`); browse/timeline/search
 > patterns draw on `research/catalog-pkg.md` §4.
 >
-> **Authored by:** UX/UI Design sub-agent. **Status:** proposed — **awaiting independent red-team**
-> before the gate passes. **Scope:** the v1 (M1) experience for **Elena** (primary, non-technical,
+> **Authored by:** UX/UI Design sub-agent. **Status:** proposed — **revised per red-team round 1**
+> (AC-13 contrast tokens, settings, ordering); **awaiting re-review** before the gate passes. **Scope:** the v1 (M1) experience for **Elena** (primary, non-technical,
 > grieving, often 60+) and the duty of care toward **Mateo** (the archive's eventual inheritor).
 > Acceptance ties: **AC-4, AC-6, AC-7, AC-8, AC-12, AC-13, AC-14, AC-15**.
 
@@ -40,7 +40,8 @@ casual, deeply respectful, quietly matter-of-fact** — never formal, never chum
 exclamatory. *Trustworthiness, not friendliness, earns the right to be used here.*
 
 ### P2 — Name the person; make grief implicit
-Within the first two steps, onboarding asks **the loved one's name**, and from then on the UI uses
+By the **second screen** — right after a combined welcome-and-privacy step (Journey A, Step 1) —
+onboarding asks **the loved one's name**, and from then on the UI uses
 *their name* everywhere — never "the deceased," "the contact," or "your loved one." Grief is
 acknowledged **once**, gently, at the start ("Gathering these memories is a meaningful thing to do —
 we'll take it one step at a time"), then never mentioned again unless the user initiates it. We never
@@ -89,6 +90,13 @@ its **empty / loading / error** states. Wireframes are ASCII sketches for intent
 All copy uses the loved one's name once known; `[Name]` is the placeholder. All flows are **fully
 offline** and **keyboard-operable** with a **visible focus ring** (§6).
 
+> **Icons are bundled SVGs, not emoji.** The emoji in these wireframes (🔒 💬 🖼 📦 📘 💼 ▶ 🔊 ✉ 🔎 🖥)
+> are **ASCII-sketch placeholders only**. The build ships a **single bundled, monochrome SVG icon set**
+> (vendored under `assets/`, no remote/CDN images — **AC-4**), each icon given an `aria-label` (or
+> `aria-hidden` when purely decorative beside a text label). Color emoji are avoided deliberately: they
+> can fail the non-text contrast bar (§6), render inconsistently across OSes, and are mis-announced by
+> screen readers. The friendly privacy lock is the **SoftLockGlyph** component, not a 🔒 glyph.
+
 ### Journey A — First-run onboarding
 
 **Goal:** welcome the user, earn trust about privacy, learn the loved one's name, choose where the
@@ -108,7 +116,7 @@ step footer carries the **PrivacyBadge** line.
 │              memories — one step at a time.              │
 │                                                          │
 │         ┌────────────────────────────────────┐           │
-│         │     Start bringing memories  →     │           │   ← primary (sage), ≥56px tall
+│         │     Start bringing memories  →     │           │   ← primary CTA (sage-600), ≥56px tall
 │         └────────────────────────────────────┘           │
 │              Show me around first                        │   ← quiet text link
 │                                                          │
@@ -116,23 +124,25 @@ step footer carries the **PrivacyBadge** line.
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Step 0 — Welcome (emotional entry).** Full-screen warm canvas, a single centered serif heading,
-generous whitespace. One gentle grief acknowledgment line. Two choices only: **Start bringing
-memories** / **Show me around first**. *Emotion:* arrival should feel like a calm room, not a setup
-screen — stillness communicates safety before a word is read.
+**Step 0 — Welcome (emotional entry + privacy you can feel).** Full-screen warm canvas, a single
+centered serif heading, generous whitespace. One gentle grief acknowledgment line, and — folded into
+this same calm screen rather than gated behind an extra click — a short, plain privacy reassurance the
+user can believe: **"Everything stays on your device. Your memories never leave this computer — no
+account, no cloud, nothing is uploaded."** A soft rounded-lock illustration (**SoftLockGlyph**); no
+cloud/globe imagery. Two choices only: **Start bringing memories** / **Show me around first**.
+*Emotion:* arrival should feel like a calm room, not a setup screen — stillness communicates safety,
+and the privacy promise answers Elena's fear that memories could "leak onto the internet" *before* she
+invests any effort. Folding privacy into the welcome keeps it **one decision per screen** (P3) while
+letting the loved one's name arrive by the very next screen (P2). (P2, P4; AC-4; `ux.md` §2.5.)
 
-**Step 1 — Privacy reassurance.** A short, plain reassurance the user can believe: **"Everything
-stays on your device. Your memories never leave this computer — there's no account, no cloud, nothing
-is uploaded."** A soft rounded-lock illustration; no cloud/globe imagery. A single **"I understand —
-let's begin"** continues. *Emotion:* directly answers Elena's fear that memories could "leak onto the
-internet" before she invests any effort. (AC-4; `ux.md` §2.5.)
+**Step 1 — Name your loved one (by the second screen — P2).** One large text input (≥48px tall, 20px
+text), bordered with the **`--color-border-interactive`** token so the field reads clearly as an
+editable control (§5.3, §6). Label: **"Who are you honoring?"** Helper: *"We'll use their name as we
+go."* From here, every UI string uses the name. *Emotion:* personalizes the whole experience and
+quietly signals this is about a *person*, not data — and, landing on the second screen, it makes the
+product feel personal almost immediately. (P2; `ux.md` §1.4.2, §4.2 Step 1.)
 
-**Step 2 — Name your loved one.** One large text input (≥48px tall, 20px text). Label: **"Who are
-you honoring?"** Helper: *"We'll use their name as we go."* From here, every UI string uses the name.
-*Emotion:* personalizes the whole experience and quietly signals this is about a *person*, not data.
-(`ux.md` §1.4.2, §4.2 Step 1.)
-
-**Step 3 — Choose where [Name]'s library lives.** Plain framing, **not** "select database path":
+**Step 2 — Choose where [Name]'s library lives.** Plain framing, **not** "select database path":
 **"Where should we keep [Name]'s memories on this computer?"** A sensible **default is pre-filled and
 recommended** — a *"Kawsay — [Name]"* folder inside the user's Documents — with a single **"Change…"**
 (opens the native folder picker via **LibraryLocationPicker**). Helper: *"This is a private folder on
@@ -140,13 +150,13 @@ your computer. The original photos and messages always stay where they are; Kaws
 here."* *Emotion:* removes a technical decision most users shouldn't have to make, while giving
 control to those who want it; reiterates "originals stay put" (AC-14).
 
-**Step 4 — Choose a starting source.** Hands off to **Journey B**. Copy: **"Where are some of
+**Step 3 — Choose a starting source.** Hands off to **Journey B**. Copy: **"Where are some of
 [Name]'s memories?"** plus a persistent **"I'll add this later"** escape hatch. *Emotion:* the user
 is now oriented, reassured, and ready — with no pressure to do it all at once.
 
 | State | Behavior |
 |---|---|
-| **Happy** | Welcome → privacy → name → library location → first source, each step one decision. |
+| **Happy** | Welcome (privacy reassurance folded in) → name → library location → first source, each step one decision. |
 | **Empty** | No prior library exists → this is the canonical first-run path (above). |
 | **Loading** | Steps are instant; no spinners. Creating the library folder shows a brief inline *"Setting up [Name]'s library…"* (≤1s) with no blocking modal. |
 | **Error** | Chosen folder not writable / no space → plain message *"We can't save to that folder. Let's pick another place."* + re-open picker; never a raw OS error or path/errno. Folder already contains a Kawsay library → offer **"Open the existing library"** vs **"Choose a different place."** |
@@ -401,6 +411,56 @@ voices at once.
 
 ---
 
+### Journey G — Settings (minimal, accessibility-first)
+
+**Goal:** give the few controls a non-technical, grieving user actually needs — **without** a sprawling
+preferences screen — and make the **AC-13 accessibility controls reachable** from one calm place. All
+of these are also honored from OS/system settings by default; Settings simply makes them visible and
+adjustable in-app. Reached via the quiet **Settings** entry at the foot of the sidebar (§3), opening a
+single scrollable **SettingsPanel** — never a modal maze. One idea per row, large hit targets, plain
+labels. (P3, P5; AC-13; PRD §5.2.)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Settings                                                │  ← serif h1
+│                                                          │
+│  Text size            [ A−  ●———○———○  A+ ]  Sample 18px │  ← TextSizeControl (live preview)
+│  Reduce motion        ( ●) On   ( ) Off                  │  ← ReducedMotionToggle (On is default)
+│  Screen-reader mode   ( ) On   ( ●) Auto-detect          │  ← AccessibilityToggle (explicit override)
+│  ────────────────────────────────────────────────────── │
+│  [Name]'s library     /Users/…/Documents/Kawsay — [Name] │  ← LibraryLocationRow
+│                       [ Change where this is saved ]      │
+│                       [ Open another library… ]           │  ← switch library (Journey-A chooser)
+│  ────────────────────────────────────────────────────── │
+│  About & privacy      Your memories never leave this …    │  ← restates AC-4; app version
+│  🖥 Private & on this computer                            │  ← persistent PrivacyBadge
+└──────────────────────────────────────────────────────────┘
+```
+
+**Controls (each an AC-13 surface).**
+- **Text size** (**TextSizeControl**) — a large stepper/slider with a **live preview**; never shrinks
+  body below `--text-base` (16px); maps onto the OS font-scale and stays lossless to **200%** (§6).
+- **Reduce motion** (**ReducedMotionToggle**) — **On by default** (mirrors `prefers-reduced-motion`);
+  turning it on collapses all motion to opacity/instant and stills the breathing icon (§5.6).
+- **Screen-reader mode** (**AccessibilityToggle**) — the **explicit toggle** §6 requires: *Auto-detect*
+  (default; Electron enables a11y when VoiceOver/JAWS is seen) with a manual **On** override for users
+  whose AT isn't detected.
+- **Library location** (**LibraryLocationRow**, reusing **LibraryLocationPicker**) — shows the current
+  folder, **Change where this is saved**, and **Open another library…** (the switch/multi-loss path,
+  §3). Changing or switching **never** moves or deletes originals (AC-14); the existing-library-found
+  case is handled as in Journey A.
+- **About & privacy** — restates **"Your memories never leave this computer"** (AC-4) and the app
+  version; no account, no sign-in, nothing to sync.
+
+| State | Behavior |
+|---|---|
+| **Happy** | Open Settings → adjust a control → change applies **immediately** with a quiet confirmation; no "Save" pressure, no restart. |
+| **Empty** | N/A (controls always present). Before any import, Settings is still reachable from the welcome screen's *"Show me around first"* siblings. |
+| **Loading** | Instant; changing the library location shows the same brief inline *"Setting up…"* as Journey A, never a blocking modal. |
+| **Error** | New library folder not writable / no space → the Journey-A plain message + re-pick; switching to a folder with an existing library offers **"Open the existing library"** vs **"Choose a different place."** Never a raw OS error or path/errno. |
+
+---
+
 ## 3. Information architecture & navigation
 
 **Mental model:** *one library for one person, made of memories that arrive from sources and are
@@ -409,21 +469,37 @@ to look through it. (MISSION §2, §4; PRD §3.)
 
 ```
 Kawsay
-└── [Name]'s Library  ........................ the single top-level home (one library per person in v1)
+└── [Name]'s Library  ........................ the home; one library open at a time — switchable (Journey G)
     ├── Timeline  (home view) ................ reverse-chronological, month-grouped — Journey D
     ├── Search ............................... full-text + filters over the same items — Journey E
     ├── Add memories ......................... source picker → guided walkthrough → import — Journeys B, C
     │   └── Sources (provenance list) ........ WhatsApp · Photos · Takeout · Facebook · LinkedIn
     │       └── per-source detail ............ what came from here · re-import more · Undo (AC-14)
     ├── Memory view (overlay) ................ single item + play media — Journey F
-    └── Settings (minimal) ................... library location · text size · reduced motion · about/privacy
+    └── Settings (minimal) ................... text size · reduced motion · accessibility toggle · library location · open another library · about/privacy — Journey G
 ```
 
 **Primary navigation — a calm left sidebar** with at most a handful of always-visible destinations,
 ordered by how often they're used: **Timeline**, **Search**, **Add memories**, then a quiet
 **Sources** list (provenance). Large hit targets (≥48px rows), the current section clearly marked,
-plain labels. The sidebar is **hidden during onboarding** (one-thing-at-a-time) and **revealed only
-after the first successful import** (progressive disclosure, Hick's Law; `ux.md` §1.4.5, §4.1).
+plain labels. A single quiet **Settings** entry (gentle gear, plain label) sits at the **foot of the
+sidebar**, separated from the browse destinations — always reachable but never competing for
+attention (Journey G). The sidebar is **hidden during onboarding** (one-thing-at-a-time) and
+**revealed only after the first successful import** (progressive disclosure, Hick's Law; `ux.md`
+§1.4.5, §4.1).
+
+**Library scope — one library at a time, switchable (v1).** A single library is the home (one library
+per person). But grief is not singular — a person may be honoring **more than one loss** — so v1 is
+**not** locked to a single library forever: it keeps **one library open at a time** and offers an
+**"Open another library…"** path from **Settings** (Journey G) and from the welcome screen's *"Show me
+around first"* siblings. On launch, if exactly one library exists it opens straight to it; if **more
+than one** exists, a calm **library chooser** lists them by name (no pressure, no "recent" urgency).
+Creating/curating *many* libraries side-by-side, merging, or cross-library search is **explicitly
+deferred** beyond M1 (rationale: keeps the mental model and the catalog scope simple for a non-technical,
+grieving user — MISSION §2, P3). The **existing-library-found** case is handled gracefully wherever a
+location is chosen: **LibraryLocationPicker**'s `existing-library-found` state and Journey A's folder
+error both offer **"Open the existing library"** vs **"Choose a different place,"** so an already-made
+library is never overwritten or duplicated.
 
 **How sources / timeline / search relate.**
 - **Sources are the inputs**, never the primary way to browse — they exist so the user (and later
@@ -451,42 +527,52 @@ interactive components have a visible **focus** state and meet hit-target minimu
 | Component | Purpose | Key states |
 |---|---|---|
 | **AppShell** | Top-level layout: sidebar + content + status bar; owns reduced-motion/theme context. | onboarding (no sidebar) · main (sidebar shown) |
-| **Sidebar / NavRail** | Primary navigation to Timeline · Search · Add memories · Sources. | default · active item · hover · focus · hidden (onboarding) |
+| **Sidebar / NavRail** | Primary navigation to Timeline · Search · Add memories · Sources, with a quiet **Settings** entry at its foot. | default · active item · hover · focus · hidden (onboarding) |
 | **PrivacyBadge** | The always-visible "Private & on this computer / never leaves this computer" reassurance. | status-bar (compact) · step-footer (full sentence) |
 | **StatusBar** | Slim persistent bar hosting PrivacyBadge + library name. | default |
 | **ReassuranceNote** | Inline gentle micro-copy ("You can come back anytime — nothing will be lost"). | info · privacy · pacing |
 | **Toast / QuietToast** | Non-blocking, auto-dismiss confirmation (no urgency, no error use). | success · info (never auto-plays sound) |
+| **Icon** | Renders a glyph from the **single bundled, monochrome SVG icon set** (no remote/CDN, no color emoji — AC-4); meaningful icons take an `aria-label`, decorative ones are `aria-hidden`. Stroke/fill meets non-text contrast (§6). | decorative (aria-hidden) · labeled (aria-label) |
 
 ### Onboarding & import
 | Component | Purpose | Key states |
 |---|---|---|
-| **WelcomeHero** | Step-0 full-screen warm welcome + grief acknowledgment + two choices. | default |
+| **WelcomeHero** | Step-0 full-screen warm welcome: grief acknowledgment **+ folded-in privacy reassurance** (SoftLockGlyph, "never leaves this computer") + two choices — so the loved one's name can be asked on the very next screen (P2). | default |
 | **WalkthroughStepper** | The wizard frame for onboarding **and** per-source export walkthroughs; "Step X of N", Back/Next, focus-moves-to-h1. | first · middle · last · per-step |
-| **NameInput** | Large single field capturing the loved one's name. | empty · filled · invalid (blank) · focus |
+| **NameInput** | Large single field capturing the loved one's name; border uses **`--color-border-interactive`** (≥4.5:1) so the editable control is unmistakable, not a faint hairline. | empty · filled · invalid (blank) · focus |
 | **LibraryLocationPicker** | Plain-language chooser for where the library lives, with recommended default + native picker. | default (recommended) · changed · error (not writable / no space) · existing-library-found |
 | **SourceCard** | Large, tappable card for one source (icon + plain one-liner). | default · hover · focus · pressed · disabled |
 | **WalkthroughStep** | One illustrated export step: screenshot + one sentence + "I've done this / Show me again". | default · screenshot-loading · help-link-fallback |
 | **BrowseButton** | The **primary** file/folder picker action (never drag-only). | default · hover · focus · pressed |
-| **Dropzone** | Optional drag-and-drop **enhancement** wrapping BrowseButton. | idle · drag-over (ghost/magnet) · invalid-type · disabled |
+| **Dropzone** | Optional drag-and-drop **enhancement** wrapping BrowseButton; its dashed outline uses **`--color-border-interactive`** (≥4.5:1), never a sub-3:1 hairline, so the drop target is a real visible affordance. | idle · drag-over (ghost/magnet) · invalid-type · disabled |
 | **ImportProgress** | Percent-done bar + running tally + plain activity text + breathing icon (motion-gated). | indeterminate(<brief) · running · paused · complete · error; live-region announces |
 | **WhatWeFoundSummary** | Completion payoff: first memory + warm count + single "See everything". | with-skips · without-skips |
 | **SkippedItemsPanel** | Lists items that couldn't be read (filename + plain reason) — never silent drops (AC-15). | hidden(0 skipped) · shown · expanded |
 | **UndoBanner** | Persistent "added · Undo" affordance for the last import (AC-14). | visible · undoing · dismissed |
+
+### Settings (minimal — AC-13 controls)
+| Component | Purpose | Key states |
+|---|---|---|
+| **SettingsPanel** | Single scrollable home for the few real preferences (Journey G); reached from the sidebar foot — never a modal maze. | default |
+| **TextSizeControl** | Large stepper/slider for body text size with **live preview**; never below `--text-base` (16px); stays lossless to 200% (§6). | default · changed · at-min · at-max |
+| **ReducedMotionToggle** | On/Off for motion; **On by default** (mirrors `prefers-reduced-motion`); off-thread, applies instantly (§5.6). | on (default) · off |
+| **AccessibilityToggle** | The explicit screen-reader toggle §6 requires: **Auto-detect** (default) with a manual **On** override. | auto-detect (default) · on |
+| **LibraryLocationRow** | Shows current library folder; **Change where this is saved** + **Open another library…** (switch/multi-loss path, §3); reuses **LibraryLocationPicker**; originals never moved (AC-14). | default · changing · open-another · existing-library-found · error (not writable / no space) |
 
 ### Browse, search & memory
 | Component | Purpose | Key states |
 |---|---|---|
 | **TimelineGrid** | Virtualized, month-grouped grid of memories at 10k+ items (AC-8). | loading · populated · scrolling · empty |
 | **MonthHeader** | Sticky month/year divider for orientation. | default · sticky/pinned |
-| **MemoryCard** | One memory's thumbnail + type affordance (▶/🔊/✉); never auto-plays. | default · hover · focus · loading(skeleton) · thumb-error |
+| **MemoryCard** | One memory's thumbnail + type affordance (bundled play/voice/message icons, not emoji); any date/caption text uses **`--color-text-secondary`** (≥4.5:1), never tertiary; never auto-plays. | default · hover · focus · loading(skeleton) · thumb-error |
 | **LazyThumbnail** | Loads a thumbnail from the local protocol only when visible. | placeholder/blur · loaded · error |
-| **SearchBar** | Persistent plain-words search input. | empty · typing · searching · has-results · no-results |
+| **SearchBar** | Persistent plain-words search input; border uses **`--color-border-interactive`** (≥4.5:1) so the field is clearly an interactive control. | empty · typing · searching · has-results · no-results |
 | **FilterChips** | Toggleable filters (type · source · date range); composable with search. | inactive · active · removable · group |
 | **DateRangePicker** | Plain calendar range filter. | default · range-selected · cleared |
 | **MediaViewer / Lightbox** | Focused single-memory overlay with prev/next + keyboard nav. | photo · video(poster) · audio · message · loading · error |
 | **VoiceNotePlayer** | Waveform + duration + **explicit** Play for voice notes (no auto-play). | idle · playing · paused · buffering · error |
 | **VideoPlayer** | Poster + **explicit** Play; pauses any other playing media. | idle(poster) · playing · paused · buffering · error |
-| **ProvenanceMeta** | Shows who/when/which-source for a memory (faithful attribution). | default |
+| **ProvenanceMeta** | Shows who/when/which-source for a memory (faithful attribution); its timestamp/source line is small text, so it uses **`--color-text-secondary`** #5C504A (6.98:1), **never** `--color-text-tertiary` (3.57:1 — fails AA for small text). | default |
 
 ### Feedback, empty & error primitives
 | Component | Purpose | Key states |
@@ -495,7 +581,7 @@ interactive components have a visible **focus** state and meet hit-target minimu
 | **ErrorBanner** | Plain-language, non-technical error surface (no codes). | inline · dismissible · with-retry · with-reveal-original |
 | **ConfirmDialog** | Confirmation only for genuinely consequential actions (e.g., Undo an import); destructive action visually separated. | default · destructive · loading |
 | **PlayButton** | Shared explicit-intent media trigger used by voice/video. | idle · active · focus · disabled |
-| **IconButton / Button** | Token-driven buttons honoring hit-target minimums. | primary · secondary · ghost · hover · focus · pressed · disabled |
+| **IconButton / Button** | Token-driven buttons honoring hit-target minimums. **Primary CTA** = `--color-sage-600` fill (6.70:1 on canvas) with a **`--color-text-on-primary`** label (#FFFFFF, **7.46:1** on sage-600), set at large/semibold (≥`--text-md`, `--font-semibold`); focus uses the sage-600 ring. Never sage-500 for the fill. | primary · secondary · ghost · hover · focus · pressed · disabled |
 | **SoftLockGlyph** | Friendly rounded lock used in privacy moments (not a vault padlock). | default |
 
 ---
@@ -531,12 +617,13 @@ candlelit parchment, aged wood, dried botanicals; nothing harsh, nothing cold.*
 --color-surface-tinted:  #F0EBE4;  /* subtle tinted areas */
 --color-surface-sunken:  #EDE6DD;  /* sidebar, inactive panes */
 
-/* TEXT — warm near-black, never harsh #000 */
---color-text-primary:    #2A1F1A;  /* body — ~12:1 on canvas */
---color-text-secondary:  #5C504A;  /* captions, labels */
---color-text-tertiary:   #8A7D76;  /* timestamps, hints */
---color-text-disabled:   #C0B4AC;  /* disabled, placeholder */
+/* TEXT — warm near-black, never harsh #000 (ratios = WCAG 2.1 vs --color-canvas; see §6.1) */
+--color-text-primary:    #2A1F1A;  /* body — 14.4:1 on canvas */
+--color-text-secondary:  #5C504A;  /* captions, labels, timestamps, hints — 6.98:1 (use for ALL small text) */
+--color-text-tertiary:   #8A7D76;  /* decorative / non-text only — 3.57:1; NEVER small text */
+--color-text-disabled:   #C0B4AC;  /* disabled, placeholder (exempt from contrast minimums) */
 --color-text-inverse:    #FAF7F4;  /* text on dark surfaces */
+--color-text-on-primary: #FFFFFF;  /* label on the sage-600 CTA fill — 7.46:1 (use large/semibold) */
 ```
 
 ### 5.2 Color — sage (primary interactive) & clay (warm accent)
@@ -544,8 +631,9 @@ candlelit parchment, aged wood, dried botanicals; nothing harsh, nothing cold.*
 ```css
 /* SAGE — primary interactive (renewal, calm, hospice/wellness lineage) */
 --color-sage-50:  #F0F5F2;  --color-sage-100: #DCE9E2;  --color-sage-200: #B8D2C5;
---color-sage-300: #8DB8A4;  --color-sage-400: #619B84;  --color-sage-500: #3F7D64; /* primary CTA */
---color-sage-600: #2E5E4A;  --color-sage-700: #1F4234;  --color-sage-800: #132B22;
+--color-sage-300: #8DB8A4;  --color-sage-400: #619B84;  --color-sage-500: #3F7D64; /* accent — large-text/non-text only, 4.36:1 (NOT CTA fill / NOT small text) */
+--color-sage-600: #2E5E4A;  /* primary CTA fill & focus ring — 6.70:1 on canvas, 7.46:1 on white */
+--color-sage-700: #1F4234;  --color-sage-800: #132B22;
 --color-sage-900: #0A1811;
 
 /* CLAY — warm secondary accent (humanity without aggression) */
@@ -565,8 +653,11 @@ candlelit parchment, aged wood, dried botanicals; nothing harsh, nothing cold.*
 ### 5.3 Color — borders, semantic status & focus
 
 ```css
-/* BORDERS & DIVIDERS */
+/* DIVIDERS — DECORATIVE ONLY; never the sole affordance for an interactive control (sub-3:1 on canvas) */
 --color-border-subtle:  #E6DDD5;  --color-border-default: #D1C5BB;  --color-border-strong: #B5A89D;
+
+/* INTERACTIVE BOUNDARY — inputs, controls, dropzone outline, control edges (≥3:1 min, target ≥4.5:1) */
+--color-border-interactive: #6E6259;  /* 5.30:1 on canvas · 5.91:1 on surface-raised · ≥4.77:1 on every surface */
 
 /* SEMANTIC STATUS — muted, warm, never alarming-bright */
 --color-success-bg: #EEF5F0;  --color-success-text: #215C38;  --color-success-border: #B2D6BD;
@@ -574,14 +665,20 @@ candlelit parchment, aged wood, dried botanicals; nothing harsh, nothing cold.*
 --color-warning-bg: #FDF6E6;  --color-warning-text: #6B4500;  --color-warning-border: #EDD898;
 --color-info-bg:    #EEF3F7;  --color-info-text:    #1C4565;  --color-info-border:    #B0CEE4;
 
-/* FOCUS RING — sage, 3px solid, 3px offset (see §6) */
---color-focus-ring: #3F7D64;
+/* FOCUS RING — sage-600, 3px solid, 3px offset (see §6) — 6.70:1 on canvas, 7.46:1 on white */
+--color-focus-ring: #2E5E4A;
 ```
 
-> **Contrast note (verify in build):** `--color-text-primary` on `--color-canvas` ≈ **12:1** (passes
-> the ≥7:1 body target). `--color-sage-500` on `--color-canvas` ≈ **5.2:1** — acceptable for large
-> text / non-text UI, **but small body text must use `--color-text-primary`, not sage**. Re-validate
-> every text/background pair before merge (rubric R3; `ux.md` §2.4 note, §3.2).
+> **Contrast — re-validated against WCAG 2.1 (full verified table in §6.1).** Earlier figures here were
+> wrong and have been corrected. `--color-text-primary` on `--color-canvas` = **14.4:1** (passes ≥7:1
+> body). The earlier claim that `--color-sage-500` is "5.2:1" was incorrect — it is only **4.36:1**, so
+> sage-500 is reserved for **large-text/non-text accents** and is **never** the CTA fill or small body
+> text. The **primary-CTA fill and focus ring use `--color-sage-600` #2E5E4A = 6.70:1** on canvas
+> (7.46:1 on white), with a `--color-text-on-primary` (#FFFFFF, **7.46:1**) label. **All small text
+> (timestamps, hints, captions, provenance) uses `--color-text-secondary` #5C504A = 6.98:1**, never
+> `--color-text-tertiary` (3.57:1). **Interactive control borders use `--color-border-interactive`
+> #6E6259 = 5.30:1**; the light `--color-border-*` divider tokens are decorative only and must never be
+> the sole affordance for a control. (Rubric R3; `ux.md` §2.4 note, §3.2.)
 
 ### 5.4 Typography
 
@@ -673,19 +770,56 @@ bar (AC-13).
 
 | Area | Commitment |
 |---|---|
-| **Text contrast** | Target **≥7:1** for normal body text (AA min 4.5:1); **≥4.5:1** for large text (≥18px / 14px bold). Small body text always uses `--color-text-primary`; never small sage-on-canvas. (R3.) |
-| **Non-text contrast** | Buttons, icons, input borders, focus ring **≥4.5:1** (AA min 3:1) against adjacent colors. |
-| **Visible focus** | A **3px solid sage focus ring at 3px offset** (`--color-focus-ring`) on **every** interactive element; focus is **never** removed, only restyled. Visible for mouse and keyboard. |
+| **Text contrast** | Target **≥7:1** for normal body text (AA min 4.5:1); **≥4.5:1** for large text (≥18px / 14px bold). **All small text (timestamps, hints, captions, provenance) uses `--color-text-secondary` (6.98:1) or `--color-text-primary` (14.4:1)** — **never** `--color-text-tertiary` (3.57:1) and never small sage-on-canvas. (R3; §6.1.) |
+| **Non-text contrast** | Buttons, icons, **interactive control borders** (inputs, dropzone outline, control edges → `--color-border-interactive`, 5.30:1), and the **focus ring** (`--color-focus-ring` = sage-600, 6.70:1) are **≥4.5:1** (AA min 3:1) against adjacent colors. The decorative `--color-border-*` dividers and status-chip/banner outlines are exempt (WCAG 1.4.11): they are never the sole affordance — each is reinforced by a tinted fill, a ≥7:1 text label, and/or a labeled icon. (§6.1.) |
+| **Visible focus** | A **3px solid sage-600 focus ring at 3px offset** (`--color-focus-ring` #2E5E4A) on **every** interactive element; focus is **never** removed, only restyled. Visible for mouse and keyboard. |
 | **Hit targets** | **≥44×44px** minimum, **prefer 48px**, **56px** for primary actions; **≥8px** between adjacent targets (tremor tolerance). |
 | **Keyboard** | Everything operable without a mouse: logical tab order, Enter/Space activation, `Esc` closes overlays, `←/→` prev/next in MediaViewer. **No keyboard traps.** Drag-and-drop is never the only path — a **BrowseButton** primary always exists (AC-12). |
 | **Focus management (wizard)** | On each onboarding/walkthrough step change, **move focus to the step's `<h1>`** so screen-reader users are re-oriented and short-term-memory load is reduced. |
-| **Screen readers** | Correct ARIA roles/labels on all controls. **Import progress is an `aria-live="polite"` region** announcing milestones ("84 messages found", "Import complete — 347 photos"). Decorative illustrations are `aria-hidden`; meaningful images have alt text (e.g. a photo's date/source). Electron auto-enables a11y when VoiceOver/JAWS is detected; expose an explicit toggle in Settings. |
+| **Screen readers** | Correct ARIA roles/labels on all controls. **Import progress is an `aria-live="polite"` region** announcing milestones ("84 messages found", "Import complete — 347 photos"). UI glyphs come from the **bundled monochrome SVG `Icon` set** (no color emoji, which can mis-announce and fail non-text contrast): meaningful icons carry an `aria-label`, decorative ones are `aria-hidden`; meaningful images have alt text (e.g. a photo's date/source). Electron auto-enables a11y when VoiceOver/JAWS is detected; an **explicit override (AccessibilityToggle) lives in Settings** (Journey G). |
 | **No auto-play** | **No audio or video ever auto-plays** — voice notes and videos require an explicit Play; `Space` only toggles play **after** the player has focus. (Protects against a loved one's voice starting unexpectedly.) |
 | **Reduced motion** | Honored by **default** (§5.6); no animation exceeds 3 Hz; **zero flashing** anywhere. |
 | **Resize / zoom** | Layout remains usable and lossless at **200%** OS font scaling; respects system font-size; no fixed-height text clipping. |
 | **Plain language** | All copy at a **6th–8th-grade** reading level, sentences **≤15–20 words**, one idea per paragraph, **no jargon** and **no error codes** surfaced to users (stable codes like `ERR_ARCHIVE_UNSAFE_PATH` are for tests only). Spell actions out step-by-step. (`ux.md` §3.4.) |
 | **No time pressure** | No session timeouts, no countdowns, no auto-advancing steps; the user sets the pace (P3). |
 | **Forgiving by design** | Error *prevention* first (separated destructive actions, confirmation for Undo); originals never deleted (AC-14); every import undoable; partial failures surfaced, never silent (AC-15). |
+
+### 6.1 Verified contrast table (WCAG 2.1)
+
+Every foreground/background pair below was **re-computed with the WCAG 2.1 sRGB relative-luminance
+formula** (`L = 0.2126·R + 0.7152·G + 0.0722·B` on linearized channels; ratio `= (L₁+0.05)/(L₂+0.05)`),
+not estimated. This table is the ground truth for rubric R3/R10 and supersedes any older inline figure.
+Background is `--color-canvas` #F6F2EE unless noted. "Target" is the **stricter of** the WCAG 2.1 AA
+minimum and this doc's self-imposed goal for the audience.
+
+| Foreground | Background | Ratio | Target | Verdict |
+|---|---|---:|---|---|
+| `--color-text-primary` #2A1F1A | canvas | **14.40:1** | ≥7:1 body | ✅ pass |
+| `--color-text-secondary` #5C504A | canvas | **6.98:1** | ≥4.5:1 small text | ✅ pass — **use for all small text** (timestamps, hints, captions, provenance) |
+| `--color-text-tertiary` #8A7D76 | canvas | **3.57:1** | ≥4.5:1 small text | ❌ fail for text → **restricted to decorative/non-text** (meets 3:1 non-text) |
+| `--color-text-disabled` #C0B4AC | canvas | 1.82:1 | n/a | ⊘ exempt (WCAG 1.4.3 — disabled/placeholder) |
+| `--color-sage-500` #3F7D64 | canvas | **4.36:1** | ≥4.5:1 non-text/large | ❌ fail doc target → **demoted to large-text/non-text accent; NOT CTA fill, NOT small text** (was wrongly "5.2:1") |
+| `--color-sage-600` #2E5E4A (CTA fill / focus ring) | canvas | **6.70:1** | ≥4.5:1 non-text/large | ✅ pass |
+| `--color-sage-600` #2E5E4A (focus ring on card) | surface-raised #FFFFFF | **7.46:1** | ≥4.5:1 non-text | ✅ pass |
+| `--color-text-on-primary` #FFFFFF (CTA label) | sage-600 #2E5E4A | **7.46:1** | ≥4.5:1 large/semibold | ✅ pass |
+| `--color-text-inverse` #FAF7F4 (alt CTA label) | sage-600 #2E5E4A | **6.99:1** | ≥4.5:1 | ✅ pass |
+| `--color-border-interactive` #6E6259 (inputs, controls, dropzone) | canvas | **5.30:1** | ≥3:1 (target ≥4.5:1) | ✅ pass |
+| `--color-border-interactive` #6E6259 | surface-raised #FFFFFF | **5.91:1** | ≥3:1 (target ≥4.5:1) | ✅ pass |
+| `--color-border-default` #D1C5BB | canvas | 1.52:1 | n/a (decorative) | ⊘ decorative divider only — never a control's sole affordance |
+| `--color-border-strong` #B5A89D | canvas | 2.08:1 | n/a (decorative) | ⊘ decorative divider only — never a control's sole affordance |
+| `--color-success-text` #215C38 | success-bg #EEF5F0 | **7.15:1** | ≥4.5:1 | ✅ pass |
+| `--color-error-text` #8C2E1A | error-bg #FDF0EC | **7.48:1** | ≥4.5:1 | ✅ pass |
+| `--color-warning-text` #6B4500 | warning-bg #FDF6E6 | **7.87:1** | ≥4.5:1 | ✅ pass |
+| `--color-info-text` #1C4565 | info-bg #EEF3F7 | **9.00:1** | ≥4.5:1 | ✅ pass |
+
+**Net of the red-team fixes:** focus ring + primary-CTA fill moved sage-500 (4.36:1) → **sage-600
+(6.70:1)**; all small text moved off tertiary (3.57:1) → **text-secondary (6.98:1)**; interactive
+control boundaries moved off the sub-3:1 divider tokens → **`--color-border-interactive` (5.30:1)**;
+on-CTA label specified as **`--color-text-on-primary` (7.46:1)**. No interactive foreground/background
+pair remains below its target. Status-chip/banner **outlines** (1.3–1.5:1) are intentionally decorative
+and exempt (WCAG 1.4.11): each pairs a tinted fill + a ≥7:1 text label + a labeled icon, so the outline
+is never the only affordance. Engineering re-asserts this table with an automated check in the visual
+self-check loop (R3).
 
 ---
 
@@ -699,7 +833,7 @@ done; a failure is a blocker, not a nit.
 |---|---|---|
 | **R1** | **Visual hierarchy** | The single most important thing on each screen is unmistakably dominant (size/weight/space); one primary action per screen; no competing CTAs. |
 | **R2** | **Spacing & rhythm** | Spacing uses only `--space-*`; cards have ≥`--space-6` padding; layout "breathes" — never crowded; consistent vertical rhythm. |
-| **R3** | **Contrast & legibility** | Body text ≥7:1 (large ≥4.5:1), non-text ≥4.5:1, **verified** against tokens; body ≥`--text-base`, default `--text-md`; no small sage-on-canvas. |
+| **R3** | **Contrast & legibility** | Body text ≥7:1 (large ≥4.5:1), non-text/interactive borders & focus ring ≥4.5:1, **verified against the §6.1 table** (no estimated figures); body ≥`--text-base`, default `--text-md`; **small text uses `--color-text-secondary`/`--color-text-primary`, never tertiary**; no small sage-on-canvas; CTA fill/focus = sage-600. |
 | **R4** | **Alignment & grid** | Elements align to a consistent grid; optical alignment honored; no off-grid one-offs; timeline columns even. |
 | **R5** | **Typographic scale** | Only `--text-*`/`--leading-*`/weight tokens; display = Lora, body = Inter; no arbitrary font sizes; heading levels nest correctly. |
 | **R6** | **Color-token usage** | Only palette tokens — **zero hardcoded hex** in components; 60-30-10 respected; clay not used for errors; semantic colors only for status. |
@@ -717,4 +851,4 @@ done; a failure is a blocker, not a nit.
 > whitespace, legible type, plain language, gentle pacing) and **`research/ux.md`** (tone §1, visual
 > direction & tokens §2, accessibility §3, onboarding/import patterns §4), with browse/timeline/search
 > patterns from **`research/catalog-pkg.md` §4**, and tied to **PRD** acceptance **AC-4, AC-6, AC-7,
-> AC-8, AC-12, AC-13, AC-14, AC-15**. **Status: proposed — awaiting independent red-team.**
+> AC-8, AC-12, AC-13, AC-14, AC-15**. **Status: proposed — revised per red-team round 1; awaiting re-review.**
