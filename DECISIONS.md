@@ -28,6 +28,48 @@
 
 ---
 
+### ADR-0009: Takeout `.mbox` streaming split + email-parser substitution (`mailparser` → `mbox-parser` + `postal-mime`)
+**Date**: 2026-06-23
+**Status**: Accepted
+**Tier**: auto-with-audit (dependency substitution + new internal parse tooling — this ADR is the audit
+note for the `mailparser` reference in MISSION §3 / AGENTS.md §Tech stack; MISSION §9).
+
+**Context**
+MISSION §3 / AGENTS.md name **`mailparser`** for "Takeout / email". Two problems surfaced in red-team:
+(1) **`mailparser` and `postal-mime` parse a *single* RFC-822 message** — neither can *split or stream*
+a multi-message Gmail **`.mbox`**, which in a real Takeout can be **multiple GB**; (2) **AC-11 requires
+streaming** parses that **do not load the whole `.mbox` into memory**. A single-message parser alone
+therefore cannot satisfy AC-11, regardless of which one we pick.
+
+**Decision**
+Split the `.mbox` with a **streaming splitter** — **`mbox-parser`** (async-paginated; reads
+message-by-message without buffering the file; an equivalent streaming `From `-delimited splitter is an
+acceptable substitute) — and parse **each** extracted message with **`postal-mime`** (modern, zero-dep,
+ESM, actively maintained) **instead of `mailparser`**. The importer's parse phase becomes
+*stream-split → per-message parse → normalize → emit* (ARCHITECTURE §3.2/§5). Both are **non-heavy**
+deps. This ADR is the required **auto-with-audit** note for substituting `mailparser`; the substitution
+changes only *which* email tooling is used — it **weakens no invariant** (still local-only, still
+streaming, still off-thread).
+
+**Alternatives considered**
+- *Keep `mailparser`.* It is older, heavier (callback/stream API), and **still single-message** — a
+  splitter would be required anyway. `postal-mime` chosen for ESM + active maintenance + smaller surface.
+- *Load the whole `.mbox` and split in memory.* **Rejected** — violates AC-11 streaming and OOMs on
+  multi-GB exports.
+- *Hand-roll a `From `-line splitter.* Viable as a fallback, but easy to get subtly wrong (quoting,
+  `>From` escaping); a maintained streaming splitter is preferred, with a hand-rolled splitter as the
+  documented escape hatch if the dep is ever unsuitable.
+
+**Consequences**
+- ✅ AC-11 streaming satisfied: constant-memory `.mbox` import at any size; messages fed one-by-one to
+  the per-message parser and emitted as found (first-memory payoff, SM-2).
+- ✅ The MISSION §3 / AGENTS.md `mailparser` reference is **superseded for v1** by `mbox-parser` +
+  `postal-mime`, audited here (auto-with-audit; the §3 stack list is illustrative — "e.g." tooling).
+- ⚠️ Two small deps instead of one; both pinned and Dependabot-tracked. Email parsing remains isolated
+  in the worker with `try/catch` + per-message caps (a malformed message is a **skip**, AC-15).
+
+---
+
 ### ADR-0008: Privacy, data location & the local-only / zero-egress invariant
 **Date**: 2026-06-23
 **Status**: **Proposed — HUMAN-REQUIRED sign-off (@pedrofuentes) before the data-layer / F3 code is written.**
@@ -56,23 +98,28 @@ invariant is enforced and tested.
    ```
    <library root>/
    ├── catalog.sqlite3 (+ -wal, -shm)   the SQLite catalog/index (better-sqlite3)
-   ├── originals/<source-id>/…          COPIES of archive-extracted originals only
+   ├── originals/<hash[0:2]>/<hash>[.ext]   archive-extracted originals, CONTENT-ADDRESSED, stored ONCE
    ├── derived/{thumbnails,posters,waveforms}/…   Kawsay-generated, rebuildable
    ├── extract/<source-id>/…            transient extraction scratch (deleted after each import)
    └── logs/
    ```
    - **Folder imports are referenced in place** — the user's photos/videos are **never copied or
-     moved**; the catalog stores their absolute path. (AC-14.)
-   - **Archive imports** (WhatsApp/Takeout/Facebook/LinkedIn `.zip`) are copied into
-     `originals/<source-id>/`; the **source `.zip` is never altered or deleted**.
+     moved**; the catalog records their absolute path on an `in_place` occurrence. (AC-14.)
+   - **Archive imports** (WhatsApp/Takeout/Facebook/LinkedIn `.zip`) copy each original **once,
+     content-addressed**, into `originals/<hash[0:2]>/<hash>[.ext]`; identical bytes from a second
+     source are **not** re-copied (no duplicate storage). The blob is **reference-counted by
+     occurrence** and deleted only when its last occurrence is undone (§4.4) — so undo never dangles a
+     deduped memory. The **source `.zip` is never altered or deleted**.
    - **App config** (window size, last-opened library path, accessibility prefs) lives separately in
      Electron `userData` — **never** user memory content.
 
 2. **What is stored.** In `catalog.sqlite3`: per-item media type, MIME, **SHA-256 content hash** (dedup
-   key), the on-disk path of the original, **capture date vs import date**, EXIF (incl. **GPS
-   coordinates — catalogued locally only; never sent to any online map/geocoder**), message/caption
-   text, and per-source **provenance** (`item_occurrences`). Generated thumbnails/posters live in
-   `derived/`. Nothing else; **no account, no identifiers, no telemetry**.
+   key), **capture date (canonical ISO-8601 UTC) vs import date**, EXIF (incl. **GPS coordinates —
+   catalogued locally only; never sent to any online map/geocoder**), message/caption text, and
+   per-source **provenance** (`item_occurrences`, including how each occurrence's original is retained).
+   A memory's **original is resolved through a surviving occurrence** (there is no single `stored_path`),
+   so dedup + undo stay consistent. Generated thumbnails/posters live in `derived/`. Nothing else; **no
+   account, no identifiers, no telemetry**.
 
 3. **The guarantee — no user memory data ever leaves the device.**
    - **No network client exists in v1** — no `fetch`, no telemetry SDK, no update check, no remote
@@ -94,10 +141,21 @@ invariant is enforced and tested.
    or escape its sandbox. A single bad file is a **skip** (AC-15), never a crash.
 
 5. **How the invariant is enforced + tested (AC-4).** Defense-in-depth at runtime (items 3 above) **and
-   proven automatically**: (a) **Vitest + `nock.disableNetConnect()` + a `net.createConnection` spy**
-   over every importer; (b) **Playwright `page.route`** over the full app (import + browse + search)
-   asserting **zero** outbound requests; (c) **CI OS-level firewall** during the e2e run to catch any
-   subprocess egress. Any PR touching the network guard, CSP, or AC-4 tests is **harness-integrity →
+   proven automatically by an authoritative OS layer plus defense-in-depth spies and positive controls**
+   (ARCHITECTURE §6.2):
+   - **(Authoritative, MANDATORY) An OS-level outbound-deny firewall** runs in the AC-4 e2e CI job —
+     denying all egress except loopback while the **packaged** app runs the full flow. It is the layer
+     that actually covers the **Node main + worker threads, the `ffmpeg`/`ffprobe` subprocess, and DNS
+     resolution**. The job **asserts the deny rule is active** before trusting a green run — if the
+     firewall is not in place the job **fails** (no silent no-op).
+   - **(Defense-in-depth) Node-side spies** over **`net`, `tls`, `http2`, `dgram` (UDP), and
+     `dns.lookup`/`dns.resolve`**, plus `nock.disableNetConnect()` for `http(s)`, across every importer
+     — assert **zero** attempts. (Spies cannot see the subprocess; the OS firewall is authoritative.)
+   - **(Defense-in-depth) Playwright `page.route`** over the renderer — asserts **zero** outbound.
+   - **Positive controls (anti-false-pass):** deliberate outbound attempts from **the main process, a
+     worker thread, and the `ffmpeg`-subprocess path** that the harness **must** catch — so a
+     misconfigured firewall fails the job instead of silently passing.
+   Any PR touching the network guard, CSP, the firewall step, or AC-4 tests is **harness-integrity →
    human-required** and may **never** weaken the promise.
 
 **Alternatives considered**
@@ -109,6 +167,12 @@ invariant is enforced and tested.
   "originals altered/duplicated" failure and doubles disk use; AC-14 requires folder originals stay
   byte-identical in place. Archives are copied only because their contents must be extracted out of the
   `.zip` to be catalogued.
+- *Copy archive originals per-source into `originals/<source-id>/…` with one `items.stored_path`.*
+  **Rejected** — it **double-stores** bytes that arrive from two sources, and on undo of the owning
+  source it **dangles** the original for a still-deduped item (the `stored_path` points at a deleted
+  copy) — violating AC-14's "undo without data loss". Replaced by **content-addressed storage stored
+  once** (`originals/<hash[0:2]>/<hash>[.ext]`), **reference-counted by occurrence**, with the original
+  resolved through a *surviving* occurrence (ADR-0003; ARCHITECTURE §4.4).
 - *Encrypt the catalog/originals at rest.* Deferred — v1 relies on OS-level disk encryption + the
   local-only guarantee; app-level encryption (key management for a non-technical, grieving user) is a
   future consideration, not a v1 requirement, and would add recovery-loss risk. Flagged for the
@@ -121,12 +185,21 @@ invariant is enforced and tested.
   once signed off.
 - ✅ The portable, user-chosen library is durable, inspectable, and family-handoff-ready (open formats,
   originals preserved).
-- ✅ The zero-egress promise is both designed-in and continuously tested, satisfying MISSION §5 and AC-4.
+- ✅ The zero-egress promise is both designed-in and continuously tested. The AC-4 proof is **airtight**:
+  a **mandatory, self-asserting** OS firewall covers the **subprocess + DNS**, broadened Node spies and
+  Playwright add defense-in-depth, and **positive controls** make a misconfigured green run impossible
+  (MISSION §5, AC-4).
+- ✅ Content-addressed, occurrence-refcounted originals make **undo lossless even for deduped memories**
+  (no dangling original; no double-stored bytes), satisfying AC-14.
 - ⚠️ Forbids, in v1, any feature needing the network (maps, geocoding, model downloads, sharing, update
   checks) — each is a separately-gated future milestone (ROADMAP M2/M4/M5/M6).
 - ⚠️ A user who moves/renames the library folder or in-place folder originals will see broken references
   until the library is re-pointed; the library-service must handle relocation gracefully (catalog is
   rebuildable from originals).
+- 🟡 **Two accepted deferrals (explicitly in-scope of this sign-off):** (1) **no at-rest encryption** in
+  v1 (rely on OS disk encryption + local-only; app-level key management deferred), and (2) **unsigned
+  v1** binaries (one-time Gatekeeper/SmartScreen prompt; signing/notarization deferred — ADR-0007).
+  Both are recorded here for the cofounder to accept with this ADR.
 - 🚧 **Blocks F3 data-layer work until @pedrofuentes approves.**
 
 ---
@@ -144,7 +217,7 @@ binaries — both complicate packaging. No backend, no app store (MISSION §2).
 
 **Decision**
 Use **`electron-builder`**. Targets: macOS **`.dmg` + `.zip`** (`arm64`+`x64`), Windows **NSIS `.exe`**
-(`x64`; `arm64` cross-compiled). Publish to **GitHub Releases** (`provider: github`, `--publish
+(**`x64` only in v1**). Publish to **GitHub Releases** (`provider: github`, `--publish
 always`, `GH_TOKEN`). Rebuild native modules for Electron's ABI (`npmRebuild: true`,
 `buildDependenciesFromSource: true`) and **`asarUnpack`** `better-sqlite3` + `ffmpeg-static` +
 `ffprobe-static` (a `.node`/binary can't load from inside asar). **CI matrix on per-arch native
@@ -154,17 +227,27 @@ ASAR integrity at package time. **Ship unsigned in v1** (`mac.identity: null`; N
 Gatekeeper/SmartScreen prompt; signing/notarization deferred (MISSION §2). The **first production
 publish of each release runs in a protected GitHub Environment with required reviewers** (@pedrofuentes).
 
+**`win-arm64` is dropped from v1.** AC-5 requires every published artifact to be **smoke-launched**, and
+there is **no hosted arm64 Windows CI runner** to do so; a cross-compiled-but-unsmoke-tested binary
+cannot satisfy AC-5. Windows-on-ARM runs x64 builds under emulation, so x64-only still serves those
+users. `win-arm64` is a post-v1 target, gated on a native arm64 Windows runner.
+
 **Alternatives considered**
 - *Electron Forge* — equally viable; `electron-builder` chosen for its first-class multi-target
   GitHub-Releases publish and the directly-applicable `octomux` reference (`better-sqlite3` + multi-arch).
 - *Universal macOS binary* — deferred; per-arch `.dmg`s are simpler to build on native runners.
+- *Ship `win-arm64` cross-compiled but unsmoke-tested* — **rejected**: it would publish an artifact no
+  CI job can launch, contradicting AC-5's "builds **and launches**". x64-only (emulated on WoA) chosen
+  for v1; native arm64 revisited when a hosted runner exists.
 - *`fluent-ffmpeg`* — rejected (deprecated/read-only 2024); call bundled binaries via `spawn` directly.
 
 **Consequences**
 - ✅ Reproducible installers for both OSes, published automatically on tag; satisfies AC-5.
 - ✅ Native module + ffmpeg binaries load correctly in the packaged app.
+- ✅ Every published artifact is on a **native runner that smoke-launches it** — no unverifiable arch.
 - ⚠️ Unsigned v1 means a one-time "unidentified developer" prompt — acceptable for a known-family v1.
-- ⚠️ Windows arm64 is cross-compiled (no hosted arm64 runner) and must be smoke-tested explicitly.
+- ⚠️ Windows-on-ARM users run the x64 build under emulation in v1; a native `win-arm64` build is a
+  post-v1 milestone gated on a hosted arm64 Windows runner.
 - 🔒 The human-required publish gate (protected Environment) is enforced outside CI logic, so an
   automated build can never publish a release unattended.
 
@@ -298,15 +381,45 @@ occurrence** — so dedup (by **SHA-256 `content_hash`**, UNIQUE; NULLs distinct
 bytes once while preserving provenance from **all** sources. Generated renditions live in
 **`item_assets`** (never the original). **FTS5** external-content virtual table (`items_fts`, kept in
 sync by triggers, `unicode61` tokenizer) powers search; targeted indexes power timeline browse.
-Originals: **folder imports referenced in place** (never copied/moved); **archive contents copied** into
-the library's `originals/`; the catalog + originals + derived live in a **user-chosen, portable library
-folder** (location specifics in ADR-0008). A **hand-written, forward-only, transactional migration
-runner** (recorded in a `migrations` table) is used over an ORM.
+Refinements (post red-team):
+
+- **Originals stored once, content-addressed + reference-counted.** Folder imports are **referenced in
+  place**; archive originals are copied **once** to `originals/<hash[0:2]>/<hash>[.ext]` and
+  **reference-counted by occurrence** (each occurrence's `original_kind` ∈ {`in_place`,
+  `content_addressed`,`none`}). There is **no single `items.stored_path`** — a memory's original is
+  resolved through a *surviving* occurrence, so undoing one source never dangles or double-stores a
+  deduped memory (AC-14; ARCHITECTURE §4.4).
+- **Stable source identity.** `sources.source_key` (archive SHA-256 / canonical folder real path),
+  `UNIQUE`, is the source's identity — **not** the per-run UUID. Re-importing the same source **reuses**
+  its row, so `UNIQUE(item_id, source_id, source_ref)` makes **re-import idempotent** while genuinely
+  new files still add occurrences.
+- **Race-free dedup.** The write path uses `INSERT … ON CONFLICT(content_hash) DO UPDATE … RETURNING id`
+  (and `ON CONFLICT(item_id,source_id,source_ref) DO NOTHING` for occurrences). Imports are **serialized
+  through a single ingestion worker** (single-writer); the upsert keeps it correct within a batch and if
+  concurrency is ever added.
+- **Canonical `capture_date`.** Every importer writes an **ISO-8601 UTC** instant (EXIF, with no tz, is
+  read as UTC), so the timeline's lexicographic DESC sort is chronological.
+- **Keyset timeline pagination.** A **composite `(capture_date DESC, id DESC)`** index + keyset cursor
+  (`id` the UNIQUE tiebreaker; `NULLS LAST` for undated rows) — never `OFFSET` — so equal-timestamp rows
+  are never skipped/duplicated and NULL-date items still appear (AC-6/AC-8).
+- **Cross-source search after dedup.** When a new occurrence joins a deduped item, its
+  sender/caption/filename tokens are merged (de-duplicated) into `items.search_meta` via `UPDATE`, so
+  the `items_fts_au` trigger re-syncs FTS (AC-7).
+
+A **hand-written, forward-only, transactional migration runner** (recorded in a `migrations` table) is
+used over an ORM.
 
 **Alternatives considered**
 - *`source_id` directly on `items` (the research's first-cut schema)* — **rejected**: it cannot
   represent dedup-with-provenance (one item, many origins). The `item_occurrences` join is the
   deliberate correction.
+- *Per-source original copies (`originals/<source-id>/…`) + one `items.stored_path`* — **rejected**:
+  double-stores cross-source duplicates and **dangles** the original on undo of the owning source
+  (ADR-0008). Replaced by content-addressed, occurrence-refcounted storage.
+- *Key occurrence identity on the per-run source UUID* — **rejected**: makes re-import create duplicate
+  occurrences. The stable `source_key` makes `UNIQUE(item_id,source_id,source_ref)` actually idempotent.
+- *`OFFSET`/`LIMIT` timeline paging* — rejected: skips/duplicates rows under concurrent inserts and at
+  equal timestamps; keyset cursor chosen.
 - *An ORM with auto-migrations (Drizzle/Prisma/TypeORM)* — rejected for a single-user local app; a tiny
   hand-written runner is simpler, fully inspectable, and avoids a heavy dep.
 - *Store EXIF/source metadata as opaque JSON only* — rejected for queryable fields (date, type, GPS);
@@ -317,12 +430,16 @@ runner** (recorded in a `migrations` table) is used over an ORM.
 **Consequences**
 - ✅ "Nothing is silently dropped" holds even under dedup; the `Sources` provenance view is faithful.
 - ✅ Fast browse/search at 10k–100k items; catalog is rebuildable from originals on disk.
-- ✅ Undo is data-level (remove a source's occurrences; drop items whose last occurrence is gone)
-  without touching in-place originals or source archives (AC-14).
+- ✅ Undo is data-level and **lossless even for deduped memories**: remove a source's occurrences, drop
+  items whose last occurrence is gone, and delete a content-addressed blob only when its **last**
+  occurrence is removed — never touching in-place originals or source archives (AC-14).
+- ✅ Re-import is idempotent (stable `source_key`); the timeline is stable under concurrent inserts
+  (keyset); cross-source search survives dedup (search_meta re-denormalization).
 - ⚠️ Forward-only migrations: schema rollback isn't supported in v1 (data-level undo is). Schema changes
   are HUMAN-REQUIRED and audited here.
 - ⚠️ Per-occurrence text differences are not separately full-text-indexed in v1 (FTS indexes item-level
-  `search_meta`); acceptable since media dedup is byte-identical and messages are 1:1 with items.
+  `search_meta`, now the de-duplicated union of all occurrences' tokens); acceptable since media dedup is
+  byte-identical and messages are 1:1 with items.
 
 ---
 
@@ -344,7 +461,8 @@ ingestion worker persists them (clean seam). Sources register in a `registry.ts`
 Dependencies (`fs`, guarded `extractArchive`, `readExif`, `probeMedia`, `hashFile`) are **injected via
 `ImporterDeps`** so importers are **unit-testable with fixture fs + fakes** — no real files or
 subprocess. Partial failures call `ctx.onSkip(...)` and continue (AC-15); provenance is carried on
-every record (`sourceRef`, `author`, `date`, `sourceMeta`) → persisted as `item_occurrences`.
+every record (`sourceRef`, `author`, `date`, `sourceMeta`) → persisted as `item_occurrences`. The
+**parse** phase streams large exports (the Gmail `.mbox` is split message-by-message — ADR-0009).
 
 **Alternatives considered**
 - *A bespoke function per source wired ad-hoc into the UI* — rejected; no shared contract, untestable,

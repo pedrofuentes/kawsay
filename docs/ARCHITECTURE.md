@@ -142,7 +142,7 @@ kawsay/
 | **AC-1** WhatsApp E2E | `importers/whatsapp/` + `features/import/whatsapp/` | integration + e2e |
 | **AC-2** Folder photos/videos + dates + thumbs | `importers/folder/` + `ingestion/metadata.ts` + `ingestion/thumbnail.ts` | integration |
 | **AC-3** Safe extraction (zip-slip) | `ingestion/safe-extract.ts` + `ingestion/errors.ts` | unit + integration |
-| **AC-4** Zero egress | `security/network-guard.ts` + `security/csp.ts` | `tests/ac4/*` (Vitest+nock, Playwright) |
+| **AC-4** Zero egress | `security/network-guard.ts` + `security/csp.ts` | `tests/ac4/*` (Node spies, Playwright, **mandatory** CI firewall + positive controls) |
 | **AC-5** Build/publish | `electron-builder.yml` + `.github/workflows/release.yml` + `main/index.ts` smoke | CI + e2e smoke |
 | **AC-6/7** Browse + search | `db/search.ts` + `features/timeline/` + `features/search/` | e2e + integration |
 | **AC-8** Virtualized timeline | `features/timeline/TimelineGrid.tsx` | e2e / perf |
@@ -310,15 +310,22 @@ protocol.registerSchemesAsPrivileged([{
 // electron/main/security/media-protocol.ts
 protocol.handle('kawsay-media', async (req) => {
   // kawsay-media://item/<uuid>?asset=thumbnail|original|poster|waveform
-  const path = await mediaResolver.resolve(req.url);   // DB lookup → absolute path
-  if (!path || !isInsideLibrary(path)) return new Response(null, { status: 403 });
-  return netResponseStream(path);                      // streamed; supports range for video
+  //  • thumbnail/poster/waveform → item_assets.path (under derived/)
+  //  • original                  → a SURVIVING item_occurrences row (§4.4):
+  //      in_place → the user's external file; content_addressed → originals/<hash[0:2]>/<hash><ext>
+  const resolved = await mediaResolver.resolve(req.url); // DB lookup → { path, kind }
+  if (!resolved || !isServablePath(resolved)) return new Response(null, { status: 403 });
+  return netResponseStream(resolved.path);               // streamed; supports range for video
 });
 ```
 
-`mediaResolver` maps an item/asset id → its stored path via the catalog, and `isInsideLibrary()`
-re-checks the resolved real path is under the library root (defense against traversal). The renderer
-never learns real filesystem paths; it only holds opaque `kawsay-media://item/<uuid>` URLs.
+`mediaResolver` maps an item/asset id → an absolute path **via the catalog** (renditions from
+`item_assets`; the **original** from a *surviving* `item_occurrences` row, never a single
+`items.stored_path` — §4.4). `isServablePath()` then enforces a strict allowlist on the **resolved real
+path** (symlinks resolved): it must be **either** under the library root (renditions + content-addressed
+originals) **or** byte-for-byte equal to a path the catalog itself recorded on an `in_place` occurrence
+(folder originals legitimately live *outside* the library). Nothing else is ever served; the renderer
+never learns real filesystem paths — it holds only opaque `kawsay-media://item/<uuid>` URLs.
 
 ### 2.5 Packaged-app hardening (at build time)
 
@@ -352,7 +359,10 @@ export type SourceType = 'folder' | 'whatsapp' | 'google_takeout' | 'facebook' |
 export interface CatalogRecord {
   sourceType: SourceType;
   mediaType: 'photo' | 'video' | 'audio' | 'document' | 'message';
-  /** Absolute path to the byte-identical original on disk; null for pure text messages/posts. */
+  /** Absolute path to the byte-identical original as it exists in THIS source (an in-place file for
+   *  folder imports; an extracted file under the import scratch for archives). null for pure text
+   *  messages/posts. The worker decides retention (§4.4): folder → referenced in place; archive →
+   *  copied ONCE into the content-addressed `originals/` store. */
   originalPath: string | null;
   mimeType: string | null;
   /** Best date the source provides, with provenance for capture_date_src. */
@@ -401,12 +411,16 @@ export interface ImportResult { recordCount: number; skipped: SkippedItem[]; }
 
 1. **Discover** — for archives: `deps.extractArchive(zip, ctx.workDir)` (guarded, §7) then walk; for
    folders: recursive `walkDir` in place (no extraction, no copy). Enumerate candidate entries.
-2. **Parse** — source-specific: `whatsapp-chat-parser` for `_chat.txt`; `postal-mime` (streaming) for
-   `.mbox`; JSON traversal + `latin1→utf8` mojibake fix for Facebook; `papaparse` for LinkedIn CSV;
-   `exifr` + `ffprobe` for media (research `formats.md` §1–§5).
+2. **Parse** — source-specific: `whatsapp-chat-parser` for `_chat.txt`; for the Gmail `.mbox`, a
+   **streaming splitter** (`mbox-parser`, async-paginated) yields one RFC-822 message at a time —
+   **never loading the multi-GB file into memory** — and each emitted message is parsed by `postal-mime`
+   (a single-message parser) (§5; ADR-0009); JSON traversal + `latin1→utf8` mojibake fix for Facebook;
+   `papaparse` for LinkedIn CSV; `exifr` + `ffprobe` for media (research `formats.md` §1–§5).
 3. **Normalize** — map raw fields → `CatalogRecord` (resolve dates with the documented fallback chain
-   EXIF→sidecar→filename→mtime; correlate WhatsApp media by filename; resolve Facebook relative media
-   URIs *inside the extract root only*).
+   EXIF→sidecar→filename→mtime→import; correlate WhatsApp media by filename; resolve Facebook relative
+   media URIs *inside the extract root only*). Every date is canonicalized to a single **ISO-8601 UTC**
+   instant (§4.2) so the timeline's lexicographic DESC sort is chronological; EXIF `DateTimeOriginal`
+   carries no timezone and is interpreted as **UTC** (a documented approximation).
 4. **Emit** — `yield` each record. The worker (not the importer) persists it via the catalog repo,
    applying dedup-with-provenance (§4.2). The importer is pure “produce records”; persistence is the
    worker's job — a clean testing seam.
@@ -415,11 +429,11 @@ export interface ImportResult { recordCount: number; skipped: SkippedItem[]; }
 
 | Importer | Input | Key parser(s) | Original storage | ACs |
 |----------|-------|---------------|------------------|-----|
-| `folder` | folder path | `exifr` + `ffprobe` + `file-type` (magic bytes) | **in place** (referenced, not copied) | AC-2, AC-9, AC-14, AC-15 |
-| `whatsapp` | `.zip` | `whatsapp-chat-parser`; media co-located | copied into `<library>/originals/<sourceId>/` | AC-1, AC-12, AC-15 |
-| `google_takeout` | `.zip`(s) | `postal-mime` (mbox, streamed) + sidecar `.json` + `exifr` | copied (mbox attachments + photos) | AC-11, AC-15 |
-| `facebook` | `.zip` | JSON traversal + mojibake fix (`Buffer.from(s,'latin1').toString('utf8')`) | copied | AC-16, AC-3, AC-10, AC-15 |
-| `linkedin` | `.zip` | `papaparse` (trim headers; multiline cells) | copied (rarely any media) | AC-16, AC-15 |
+| `folder` | folder path | `exifr` + `ffprobe` + `file-type` (magic bytes) | **in place** (referenced, never copied) | AC-2, AC-9, AC-14, AC-15 |
+| `whatsapp` | `.zip` | `whatsapp-chat-parser`; media co-located | copied **once, content-addressed** → `originals/<hash[0:2]>/<hash>[.ext]` | AC-1, AC-12, AC-15 |
+| `google_takeout` | `.zip`(s) | `mbox-parser` (streaming split) → `postal-mime` (per message) + sidecar `.json` + `exifr` | copied once, content-addressed | AC-11, AC-15 |
+| `facebook` | `.zip` | JSON traversal + mojibake fix (`Buffer.from(s,'latin1').toString('utf8')`) | copied once, content-addressed | AC-16, AC-3, AC-10, AC-15 |
+| `linkedin` | `.zip` | `papaparse` (trim headers; multiline cells) | copied once, content-addressed (rarely any media) | AC-16, AC-15 |
 
 ### 3.4 Plugging in a new connector
 
@@ -440,8 +454,9 @@ source-agnostic — they speak only `CatalogRecord` and the catalog schema.
   fatal, whole-archive condition (e.g. `ERR_ARCHIVE_*`, §7) aborts the run with a clear message.
 - **Provenance:** every emitted record carries `sourceRef`, `author`, `date`, and `sourceMeta`. The
   worker persists these as an **`item_occurrences`** row (§4.2). When the same photo arrives from two
-  sources, its bytes are stored **once** (dedup by content hash) but **both** occurrences are kept — so
-  nothing is silently dropped and the `Sources` provenance view stays faithful for Mateo.
+  sources, its bytes are stored **once** in the content-addressed `originals/` store (dedup by content
+  hash; **reference-counted by occurrence**, §4.4) but **both** occurrences are kept — so nothing is
+  silently dropped and the `Sources` provenance view stays faithful for Mateo.
 
 ---
 
@@ -479,15 +494,21 @@ CREATE TABLE IF NOT EXISTS migrations (
   applied_at TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- ── SOURCES: one row per import run ──────────────────────────────────────
+-- ── SOURCES: one row per logical source (STABLE across re-imports) ───────
 CREATE TABLE sources (
-  id            TEXT PRIMARY KEY,                          -- UUIDv4
+  id            TEXT PRIMARY KEY,                          -- UUIDv4 — STABLE: reused (not regenerated)
+                                                           --   on re-import when source_key matches
+  -- STABLE source identity (NOT a per-run id): SHA-256 of the archive file for archive sources;
+  -- the canonical absolute real path for folder sources. Re-importing the same source REUSES this
+  -- row, so UNIQUE(item_id, source_id, source_ref) makes re-import idempotent (no duplicate
+  -- occurrences) while genuinely-new files still add occurrences.
+  source_key    TEXT NOT NULL UNIQUE,
   type          TEXT NOT NULL CHECK (type IN
                   ('folder','whatsapp','google_takeout','facebook','linkedin')),
   label         TEXT NOT NULL,                             -- "Mum's WhatsApp backup"
   origin_path   TEXT,                                      -- the original .zip / chosen folder (untouched)
   root_path     TEXT,                                      -- folder root, or extracted-archive copy root
-  imported_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  imported_at   TEXT NOT NULL DEFAULT (datetime('now')),   -- updated on each re-import
   item_count    INTEGER NOT NULL DEFAULT 0,
   skipped_count INTEGER NOT NULL DEFAULT 0,
   status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN
@@ -506,18 +527,22 @@ CREATE TABLE items (
   -- rows with NULL hash coexist; only non-null hashes dedupe.
   content_hash     TEXT UNIQUE,
 
-  -- The single preserved original this item points at:
-  --  • folder import → the user's file IN PLACE (never copied/moved)
-  --  • archive import → the copy under <library>/originals/<sourceId>/...
-  --  • pure message   → NULL
-  stored_path      TEXT,
+  -- NOTE: there is deliberately NO single `stored_path` on items. A memory's original is resolved at
+  -- READ time through a SURVIVING `item_occurrences` row (§4.4) — so undoing one source can never
+  -- dangle a deduped item that still lives in another source. `original_ext` is the extension used to
+  -- build the content-addressed blob path for archive originals (folder originals are referenced in
+  -- place; pure messages have none).
+  original_ext     TEXT,                                   -- e.g. '.jpg'; NULL for pure messages
   file_size_bytes  INTEGER,
 
   -- Temporal: capture/taken date vs import date are distinct (PRD AC-2/AC-11).
-  capture_date     TEXT,                                   -- ISO-8601, best available
+  -- capture_date is a CANONICAL ISO-8601 UTC instant (e.g. '2019-06-14T13:45:30.000Z') written by
+  -- EVERY importer (EXIF, sidecar, filename, mtime, import) so lexicographic DESC == chronological
+  -- DESC (§3.2). EXIF has no timezone → read as UTC. NULL when no date is knowable.
+  capture_date     TEXT,                                   -- ISO-8601 UTC, best available; NULL if unknown
   capture_date_src TEXT CHECK (capture_date_src IN
                      ('exif','sidecar','filename','mtime','message','import')),
-  import_date      TEXT NOT NULL DEFAULT (datetime('now')),
+  import_date      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),  -- ISO-8601 UTC
 
   -- Geometry / media
   width INTEGER, height INTEGER, duration_sec REAL, orientation INTEGER,
@@ -547,13 +572,22 @@ CREATE TABLE item_occurrences (
   id            TEXT PRIMARY KEY,                          -- UUIDv4
   item_id       TEXT NOT NULL REFERENCES items(id)   ON DELETE CASCADE,
   source_id     TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-  source_ref    TEXT NOT NULL,                             -- path/index within that source
-  original_path TEXT,                                      -- byte-identical original as it existed in THIS source
+  source_ref    TEXT NOT NULL,                             -- path/index within that source (provenance)
+
+  -- How THIS occurrence's original bytes are retained — drives the content-addressed reference
+  -- count on undo (§4.4):
+  --   'in_place'          folder import: original_path is the user's file; NEVER copied
+  --   'content_addressed' archive import: bytes copied ONCE to originals/<hash[0:2]>/<hash>[.ext]
+  --   'none'              pure message/post (no file-backed original)
+  original_kind TEXT NOT NULL DEFAULT 'none' CHECK (original_kind IN
+                  ('in_place','content_addressed','none')),
+  original_path TEXT,                                      -- in_place: absolute external path; else NULL
+
   author        TEXT,                                      -- sender/poster per this source
-  occurred_at   TEXT,                                      -- timestamp per this source (chat/post time)
+  occurred_at   TEXT,                                      -- ISO-8601 UTC per this source (chat/post time)
   source_meta   TEXT,                                      -- JSON: raw per-occurrence fields
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (item_id, source_id, source_ref)                 -- idempotent re-import
+  UNIQUE (item_id, source_id, source_ref)                 -- idempotent re-import (stable source_id, §4.4)
 );
 
 -- ── ITEM_ASSETS: generated renditions (NEVER the original) ───────────────
@@ -614,7 +648,10 @@ CREATE TRIGGER items_fts_au AFTER UPDATE ON items BEGIN
 END;
 
 -- ── Indexes (timeline browse, dedup, queue drain, joins) ─────────────────
-CREATE INDEX idx_items_capture_date ON items(capture_date DESC);
+-- Timeline keyset pagination: composite (capture_date DESC, id DESC) — `id` is the UNIQUE tiebreaker
+-- so equal-timestamp rows are never skipped/duplicated across pages (AC-6/AC-8). NULL capture_date
+-- sorts LAST (undated items still appear, after all dated rows).
+CREATE INDEX idx_items_timeline     ON items(capture_date DESC, id DESC);
 CREATE INDEX idx_items_media_type   ON items(media_type);
 CREATE INDEX idx_items_thumb_queue  ON items(thumb_status) WHERE thumb_status = 'pending';
 CREATE INDEX idx_items_favourite    ON items(is_favourite) WHERE is_favourite = 1;
@@ -628,24 +665,72 @@ CREATE INDEX idx_item_tags_tag  ON item_tags(tag_id);
 -- (content_hash already has a UNIQUE index; NULLs are excluded from uniqueness in SQLite.)
 ```
 
-**Dedup-with-provenance write path (in the worker, per emitted record):**
+**Dedup-with-provenance write path (in the worker, per emitted record).** Imports are **serialized
+through a single ingestion worker** — one import runs at a time and concurrent `import:start` requests
+**queue** — so the catalog has a **single writer**. The dedup insert is nonetheless written race-free
+with `INSERT … ON CONFLICT(content_hash)` so it stays correct within a batch (and if worker concurrency
+is ever added):
 
 ```ts
-const tx = db.transaction((rec: CatalogRecord, hash: string | null) => {
+const writeRecord = db.transaction((rec: CatalogRecord, hash: string | null) => {
   let itemId: string;
-  const existing = hash ? repo.findItemByHash(hash) : null;   // dedup only for file-backed items
-  if (existing) {
-    itemId = existing.id;                                       // SAME bytes already stored → reuse
-    repo.mergeMetadata(itemId, rec);                            // fill any newly-available fields
+  if (hash) {
+    // File-backed: dedup by content hash. ON CONFLICT makes the insert idempotent + race-free;
+    // RETURNING yields the id whether we inserted a new row or matched an existing one.
+    itemId = upsertItemByHash.get({
+      ...rec, hash,
+      // search_meta tokens for THIS occurrence (filename, sender, subject/caption)
+      searchMeta: tokensFor(rec),
+    }).id;
   } else {
-    itemId = repo.insertItem(rec, hash);                        // new logical memory
+    itemId = repo.insertMessageItem(rec);        // NULL hash → always a NEW item (messages are 1:1)
   }
-  repo.insertOccurrence(itemId, ctx.sourceId, rec);            // ALWAYS record this origin (provenance)
+  // ALWAYS record this origin (provenance). original_kind drives the undo refcount (§4.4);
+  // ON CONFLICT(item_id, source_id, source_ref) DO NOTHING keeps re-import idempotent.
+  repo.upsertOccurrence(itemId, ctx.sourceId, rec);
 });
+
+// upsertItemByHash (prepared once):
+//   INSERT INTO items (id, content_hash, media_type, mime_type, original_ext, file_size_bytes,
+//                      capture_date, capture_date_src, /* …EXIF/geo… */ search_meta)
+//   VALUES (@id, @hash, @mediaType, @mime, @ext, @size, @captureDate, @captureSrc, /* … */ @searchMeta)
+//   ON CONFLICT(content_hash) DO UPDATE SET
+//     capture_date = COALESCE(items.capture_date, excluded.capture_date),   -- fill, never clobber
+//     mime_type    = COALESCE(items.mime_type,    excluded.mime_type),
+//     -- AC-7: a NEW source's sender/caption/filename tokens must become searchable on the SAME
+//     -- deduped item. mergeTokens() = de-duplicated union; the AFTER-UPDATE items trigger re-syncs FTS.
+//     search_meta  = mergeTokens(items.search_meta, excluded.search_meta)
+//   RETURNING id;
 ```
 
-The content-addressed **thumbnail is keyed by hash**, so a deduped item also reuses its single
-rendition — no duplicate work, no duplicate files.
+- **Search re-denormalization (AC-7).** `mergeTokens` (a registered SQLite function, or applied in app
+  code) keeps `items.search_meta` the **de-duplicated union** of every occurrence's tokens. Because it
+  is written via `UPDATE`, the existing `items_fts_au` trigger re-syncs `items_fts` — so cross-source
+  search keeps working after dedup (a photo found by its WhatsApp caption *and* its Takeout filename).
+- The content-addressed **original blob and thumbnail are both keyed by `content_hash`**, so a deduped
+  item reuses its single original and its single rendition — no duplicate bytes, no duplicate work.
+
+**Timeline keyset pagination (AC-6/AC-8).** `catalog:timeline` uses a **composite keyset cursor**, never
+`OFFSET` (which skips/duplicates rows under concurrent inserts). The cursor encodes the last row's
+`(capture_date, id)`; ordering is `ORDER BY capture_date DESC NULLS LAST, id DESC`, backed by
+`idx_items_timeline`. Two predicate cases ensure the NULL-date tail is reached exactly once and equal
+timestamps are neither skipped nor repeated:
+
+```sql
+-- cursor still in the DATED segment (capture_date NOT NULL): older dated rows, then the NULL tail
+WHERE :cd IS NOT NULL
+  AND ( capture_date < :cd
+     OR (capture_date = :cd AND id < :id)
+     OR  capture_date IS NULL )
+ORDER BY capture_date DESC NULLS LAST, id DESC LIMIT :limit;
+
+-- cursor in the NULL tail (capture_date NULL): remaining undated rows by id
+WHERE :cd IS NULL AND capture_date IS NULL AND id < :id
+ORDER BY id DESC LIMIT :limit;
+```
+
+`id` (a UNIQUE UUID) is the tiebreaker, so equal-`capture_date` rows are never skipped or repeated, and
+NULL-date items still appear — after all dated rows.
 
 ### 4.3 Migration runner
 
@@ -680,8 +765,8 @@ is self-contained and portable — catalog + originals + derived live together:
 ```
 <library root>/                         ← chosen by the user; ONE open at a time (switchable)
 ├── catalog.sqlite3   (+ -wal, -shm)     ← the SQLite catalog
-├── originals/                           ← archive-import copies ONLY (never folder imports)
-│   └── <source-id>/<preserved relative path>/…
+├── originals/                           ← archive-import originals, CONTENT-ADDRESSED, stored ONCE
+│   └── <hash[0:2]>/<hash>[.ext]         ←   (mirrors the thumbnail sharding; refcounted by occurrence)
 ├── derived/                             ← Kawsay-generated, rebuildable
 │   ├── thumbnails/<hash[0:2]>/<hash[2:4]>/<hash>.webp
 │   ├── posters/…  waveforms/…
@@ -690,17 +775,30 @@ is self-contained and portable — catalog + originals + derived live together:
 └── logs/
 ```
 
-- **Folder imports** are **referenced in place** — `items.stored_path` and
-  `item_occurrences.original_path` point at the user's file; **nothing is copied or moved**. (AC-14:
-  folder originals stay byte-identical in place.)
-- **Archive imports** are extracted to transient `extract/`, validated (§7), then the validated files
-  are **copied** into `originals/<source-id>/…`. The source `.zip` is never altered or deleted. After
+- **Folder imports** are **referenced in place** — the occurrence is `original_kind='in_place'` and its
+  `original_path` points at the user's file; **nothing is copied or moved**. (AC-14: folder originals
+  stay byte-identical in place.)
+- **Archive imports** are extracted to transient `extract/`, validated (§7), then each original is
+  copied **once, content-addressed**, to `originals/<hash[0:2]>/<hash>[.ext]` and the occurrence is
+  `original_kind='content_addressed'`. If a blob with that hash **already exists** (the same bytes from
+  an earlier occurrence or source), it is **not** re-copied — the new occurrence simply references the
+  existing blob (no double-storing of duplicates). The source `.zip` is never altered or deleted. After
   ingest, `extract/` is removed.
-- **Undo** (AC-14): mark the `sources` row `undone`, `DELETE` its rows (cascades remove occurrences;
-  items with no remaining occurrence are removed), delete Kawsay-made copies under
-  `originals/<source-id>/` and now-orphaned `derived/` renditions — **never** touching in-place folder
-  originals or any source archive. Because dedup keeps items shared across sources, an item is only
-  removed when its **last** occurrence is undone.
+- **Resolving a memory's original** never relies on a single `items.stored_path` (there is none). The
+  `kawsay-media://…?asset=original` resolver picks a **surviving occurrence** and serves either its
+  in-place file (`in_place`) or the content-addressed blob `originals/<hash[0:2]>/<hash><ext>`
+  (`content_addressed`, where `hash = items.content_hash` and `ext = items.original_ext`).
+- **Undo (AC-14)** marks the `sources` row `undone` and `DELETE`s its rows; the FK cascade removes that
+  source's occurrences. For each removed occurrence:
+  - `in_place` → the user's file is **never** touched.
+  - `content_addressed` → **reference-count by occurrence**: delete the blob
+    `originals/<hash[0:2]>/<hash><ext>` **only when the last `content_addressed` occurrence for that
+    `content_hash` is gone**. While *any* occurrence still references it, the blob stays and the
+    memory's original resolves through that surviving occurrence — so undoing one source can **never**
+    dangle a deduped memory that still lives in another source.
+  - An `items` row is removed only when its **last** occurrence (of any kind) is gone; its now-orphaned
+    `derived/` renditions are then deleted. Source archives and in-place folder originals are **never**
+    touched.
 - **App config** (window bounds, last-opened library path, accessibility prefs) lives in Electron
   `app.getPath('userData')`, **separate** from any library — so libraries stay portable and contain
   only the user's memories + catalog.
@@ -721,7 +819,7 @@ Renderer  ──IPC import:start──▶  Main: IngestionCoordinator
                          worker_threads: ingestion-worker
                                    │  selects Importer from registry
                                    │  ── discover ──▶ safeExtract() [archives] / walkDir() [folders]
-                                   │  ── parse ────▶ whatsapp-chat-parser / postal-mime(stream) / JSON / papaparse
+                                   │  ── parse ────▶ whatsapp-chat-parser / mbox-parser(stream)→postal-mime / JSON / papaparse
                                    │  ── normalize ▶ exifr (capture date/EXIF)        ┐ per file
                                    │                 hashFile() (streaming SHA-256)    │ off main thread
                                    │                 ffprobe (utilityProcess subproc)  ┘
@@ -737,9 +835,10 @@ Renderer  ──IPC import:start──▶  Main: IngestionCoordinator
   sandboxed), `spawn` with an **array argv (never a shell string)**, `timeout` + output caps. This
   isolates the highest-risk parser surface (research `security.md` Topic 2). Binaries are bundled via
   `ffmpeg-static`/`ffprobe-static` (`fluent-ffmpeg` is deprecated — we call the binaries directly).
-- **Streaming parses** for large exports — `postal-mime`/`mbox` paginated; the chat log read line-wise;
-  Facebook JSON traversed without buffering the whole file (research `formats.md` §1.8/§2.6). Never
-  load a multi-GB `.mbox` into memory.
+- **Streaming parses** for large exports — the Gmail `.mbox` is **split by a streaming `mbox-parser`
+  (async pagination)** that reads message-by-message and hands each RFC-822 message to `postal-mime`;
+  the chat log is read line-wise; Facebook JSON is traversed without buffering the whole file (research
+  `formats.md` §1.8/§2.6). **Never load a multi-GB `.mbox` (or any export) into memory** (AC-11).
 - **SHA-256** is computed via a streamed `createReadStream` → `crypto.createHash`, so even large files
   don't spike memory.
 - **Thumbnails:** **`sharp`** for still images (fast, fewer CVEs than ffmpeg), **`ffmpeg`** for video
@@ -785,8 +884,16 @@ achieved by emitting/persisting records as they're found rather than batching at
 // electron/main/security/network-guard.ts  (installed at startup, before window load)
 export function installNetworkGuard(session: Session) {
   const ALLOWED = new Set(['file:', 'kawsay-media:', 'blob:', 'data:', 'devtools:']);
+  // DEV-ONLY: permit the Vite dev server (http) + HMR websocket (ws) on loopback so `pnpm dev`
+  // works. This branch is impossible in the packaged app (app.isPackaged === true), so it can
+  // NEVER weaken the shipped guard — and the AC-4 e2e runs the PACKAGED app, exercising the real one.
+  const devLoopbackOk = (url: URL) =>
+    !app.isPackaged &&
+    (url.protocol === 'http:' || url.protocol === 'ws:') &&
+    (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]');
   session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, cb) => {
-    const ok = ALLOWED.has(new URL(details.url).protocol);
+    const url = new URL(details.url);
+    const ok = ALLOWED.has(url.protocol) || devLoopbackOk(url);
     if (!ok && !app.isPackaged) console.error('[NETWORK-GUARD] blocked', details.url);
     cb({ cancel: !ok });
   });
@@ -799,21 +906,36 @@ export function installNetworkGuard(session: Session) {
 
 ### 6.2 Proven by an automated test (the AC-4 harness)
 
-Three complementary harnesses; **all must record zero outbound connections** (research `security.md`
-Topic 4):
+The proof rests on an **authoritative OS-level layer plus two defense-in-depth spies**, and on
+**positive controls** that make a misconfigured (silently-passing) harness impossible. All layers must
+record **zero** outbound connections, and every positive control **must** be caught (research
+`security.md` Topic 4):
 
-- **Vitest (Node side)** — `nock.disableNetConnect()` makes any `http(s).ClientRequest` throw, **plus**
-  a `vi.spyOn(net, 'createConnection')` that throws (nock doesn't cover raw TCP). Run every importer
-  against fixtures; assert **0** attempts. (`tests/ac4/no-egress.node.test.ts`.)
-- **Playwright (Chromium side)** — launch the packaged app; `page.route(/^(https?|wss?):\/\//, r => {
-  record(r.url()); r.abort(); })`; run the full WhatsApp import + browse + search; assert the recorded
-  list is **empty**. (`tests/ac4/zero-egress.e2e.ts`.)
-- **CI OS-level (subprocess catch-all)** — the AC-4 job optionally drops outbound at the OS firewall
-  (except loopback) while running the e2e flow, catching any subprocess egress (e.g. ffmpeg). Belt-and-
-  suspenders for the gap `nock`/`page.route` can't see.
+- **(Authoritative) OS-level outbound-deny — MANDATORY in CI, not optional.** The AC-4 e2e job
+  configures an OS firewall that **denies all outbound traffic except loopback** (`pf`/`pfctl` on
+  macOS, the Windows Defender Firewall on the Windows runner), then runs the **packaged** app through
+  the full flow — every importer, browse, search — including the **`ffmpeg`/`ffprobe` subprocess** and
+  any **DNS** resolution. This is the only layer that actually covers Node main + worker threads **and**
+  the subprocess. The job **asserts the deny rule is active before trusting a green run**: if the
+  firewall/guard is not in place the job **fails** (no silent no-op). (`tests/ac4/os-firewall.*`.)
+- **(Defense-in-depth) Node-side spies** — broadened well beyond `net.createConnection`: spy/deny
+  `net.createConnection`+`net.connect`, `tls.connect`, `http2.connect`, `dgram` socket `send` (UDP), and
+  `dns.lookup`+`dns.resolve`, **plus** `nock.disableNetConnect()` for `http(s)`. Each throws and records
+  on use. Run every importer against fixtures; assert **0** attempts. (The Node spies cannot see the
+  subprocess — that is the firewall's job; they are defense-in-depth, the OS firewall is authoritative.)
+  (`tests/ac4/no-egress.node.test.ts`.)
+- **(Defense-in-depth) Chromium-side** — Playwright `page.route(/^(https?|wss?):\/\//, r => { record(r.url());
+  r.abort(); })` over the full app; assert the recorded list is **empty**. Covers only the renderer.
+  (`tests/ac4/zero-egress.e2e.ts`.)
+- **Positive controls (anti-false-pass).** The harness issues **deliberate** outbound attempts from
+  **(a) the main process, (b) a worker thread, and (c) the `ffmpeg`-subprocess path**, and asserts each
+  is **blocked/recorded**. A green AC-4 with a misconfigured firewall is therefore impossible: if the
+  deny rule were absent, the positive controls would escape uncaught and **fail** the job. (These
+  controls live only in the test harness, never in product code.)
 
 This is a **core, tested promise that may never be weakened** (MISSION §5, NEVER list; PRD AC-4). Any
-PR touching the network guard, the CSP, or the AC-4 tests is harness-integrity → HUMAN-REQUIRED.
+PR touching the network guard, the CSP, the firewall step, or the AC-4 tests is harness-integrity →
+HUMAN-REQUIRED.
 
 ---
 
@@ -882,8 +1004,9 @@ export class ArchiveError extends Error {
 > Decision: **ADR-0007**. (Research `catalog-pkg.md` §5, `security.md` Topic 5.)
 
 - **Tooling:** `electron-builder`. Targets: **macOS `.dmg` + `.zip`** (`arm64` + `x64`), **Windows NSIS
-  `.exe`** (`x64`; `arm64` cross-compiled). Publishes to **GitHub Releases** (`publish.provider:
-  github`, `--publish always`, `GH_TOKEN: secrets.GITHUB_TOKEN`).
+  `.exe`** (**`x64` only in v1**; `arm64` deferred — no hosted arm64 Windows runner can smoke-launch it
+  for AC-5, see ADR-0007). Publishes to **GitHub Releases** (`publish.provider: github`,
+  `--publish always`, `GH_TOKEN: secrets.GITHUB_TOKEN`).
 - **Native module (`better-sqlite3`)** is rebuilt for Electron's ABI (`npmRebuild: true`,
   `buildDependenciesFromSource: true`) and **`asarUnpack`**'d (a `.node` can't be `dlopen`'d from inside
   asar). Same `asarUnpack` for `ffmpeg-static`/`ffprobe-static` so the binaries are `spawn`-able.
@@ -910,7 +1033,7 @@ asarUnpack:
 npmRebuild: true
 buildDependenciesFromSource: true
 mac: { target: [{target: dmg, arch: [arm64, x64]}, {target: zip, arch: [arm64, x64]}], identity: null }
-win: { target: [{target: nsis, arch: [x64, arm64]}] }
+win: { target: [{target: nsis, arch: [x64]}] }    # v1: x64 only — win-arm64 deferred (ADR-0007)
 nsis: { oneClick: false, allowToChangeInstallationDirectory: true }
 publish: { provider: github, owner: pedrofuentes, repo: kawsay, releaseType: release }
 ```
@@ -962,7 +1085,7 @@ publish: { provider: github, owner: pedrofuentes, repo: kawsay, releaseType: rel
 | `electron/main/db/catalog-repo.ts` | Items / occurrences / sources; dedup write path |
 | `electron/main/library/library-service.ts` | Library open/create/switch + undo + on-disk layout (AC-14) |
 | `src/features/timeline/TimelineGrid.tsx` | Virtualized timeline (AC-8) |
-| `tests/ac4/` | The zero-egress harness (Vitest+nock, Playwright, CI firewall) |
+| `tests/ac4/` | The zero-egress harness (Node spies, Playwright, **mandatory** CI firewall + positive controls) |
 | `electron-builder.yml` | Packaging targets + native-module unpack + GitHub publish (AC-5) |
 
 ---
@@ -970,5 +1093,5 @@ publish: { provider: github, owner: pedrofuentes, repo: kawsay, releaseType: rel
 ### Cross-references
 
 MISSION §3 (stack), §5 (privacy), §7 (patterns), §9 (tiers) · PRD §3–§5 (features, AC-1…AC-16, NFRs) ·
-USER_FLOWS §3–§6 (IA, components, tokens, a11y) · DECISIONS.md ADR-0001…ADR-0008 · Research
+USER_FLOWS §3–§6 (IA, components, tokens, a11y) · DECISIONS.md ADR-0001…ADR-0009 · Research
 `security.md`, `catalog-pkg.md`, `formats.md`.
