@@ -2,9 +2,10 @@
 
 > **Phase-1 gate artifact.** This Product Requirements Document is **subordinate to
 > [`MISSION.md`](./MISSION.md)**, which is the binding spec. Where any wording here appears to
-> diverge from MISSION, MISSION wins. Acceptance criteria **AC-1 … AC-6 are reproduced verbatim
-> from MISSION §8** and are the canonical, stable test suite; finer-grained criteria are added as
-> **AC-7+** without renumbering the canonical set.
+> diverge from MISSION, MISSION wins. Acceptance criteria **AC-1 … AC-6 are restated / semantically
+> faithful — the MISSION §8 criteria elaborated into Given/When/Then, not renumbered or weakened** —
+> and are the canonical, stable test suite; finer-grained criteria are added as **AC-7+** without
+> renumbering the canonical set.
 >
 > **Authored by:** Product Manager sub-agent. **Status:** proposed — awaiting independent red-team
 > before the gate passes. **Synthesized from** the four discovery research reports (grief-tech UX,
@@ -100,19 +101,23 @@ video**, parsing the locale-dependent `_chat.txt` and correlating co-located med
 shown before the file picker (research: `ux.md` §4.2). → **AC-1, AC-12.**
 
 ### (c) Archive imports — Google Takeout, Facebook, LinkedIn — extracted **safely**
-- **Google Takeout:** Gmail `.mbox` (streaming parse), Google Photos (sidecar
-  `.supplemental-metadata.json` as authoritative date/GPS), and Drive contents (research:
-  `formats.md` §2). → **AC-11.**
+- **Google Takeout:** Gmail `.mbox` (streaming parse) and Google Photos (sidecar
+  `.supplemental-metadata.json` as authoritative date/GPS) → **AC-11**; **Drive-exported loose files**
+  (the photos, videos, and documents Takeout writes out as ordinary files) are catalogued by the
+  **generic folder importer** → **AC-2** (research: `formats.md` §2).
 - **Facebook "Download Your Information"** (JSON; apply the `latin1→utf8` mojibake fix; posts in
-  seconds, messages in ms) and **LinkedIn "Get a copy of your data"** (CSV, no media) (research:
-  `formats.md` §3–§4).
+  seconds, messages in ms) and **LinkedIn "Get a copy of your data"** (CSVs + any media) — their
+  posts, messages, photos, and connections are catalogued with **correct text, timestamps, and media
+  linkage** (research: `formats.md` §3–§4). → **AC-16.**
 - **All** extraction is **zip-slip / path-traversal guarded** and **decompression-bomb guarded**
   (research: `security.md` Topic 1). → **AC-3, AC-10.**
 
 ### (d) The one private local library
 **Originals preserved on disk** (folder imports referenced in place; archive contents copied, never
 moved or deleted) plus a **SQLite catalog** (`better-sqlite3`) recording source, date, type, media
-path, EXIF/GPS, and source-specific metadata, with **SHA-256 content-addressed deduplication** and a
+path, EXIF/GPS, and source-specific metadata, with **SHA-256 content-addressed deduplication** — which
+**records every source occurrence** of a deduplicated item (the same photo arriving from two sources is
+stored **once** but its provenance from **both** is preserved; nothing is silently dropped) — and a
 hand-written migration runner (research: `catalog-pkg.md` §2). → **AC-1, AC-2, AC-3, AC-11, AC-14.**
 
 ### (e) Browse / timeline + basic search
@@ -136,9 +141,9 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 > **Baseline Definition of Done (MISSION §8, generic):** tests green, coverage ≥ 80%, lint/typecheck
 > clean, Sentinel APPROVED/CONDITIONAL on every merge, README/LICENSE/CONTRIBUTING shipped, empty
 > board. **The criteria below are the project-specific, cumulative acceptance regression** — checked
-> on every PR and every milestone. **AC-1 … AC-6 are verbatim from MISSION §8** and must never be
-> renumbered or weakened (AGENTS.md NEVER §Integrity). Each is written as an executable, Given/When/
-> Then test with its test kind.
+> on every PR and every milestone. **AC-1 … AC-6 are restated / semantically faithful — the MISSION §8
+> criteria elaborated into Given/When/Then, not renumbered or weakened** (AGENTS.md NEVER §Integrity).
+> Each is written as an executable, Given/When/Then test with its test kind.
 
 ### Canonical suite (MISSION §8 — do not renumber)
 
@@ -164,7 +169,8 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   crafted with `../` path-traversal and absolute-path entries,
 - **When** Kawsay extracts it,
 - **Then** **no file is ever written outside** the designated extraction directory, and the malicious
-  archive is rejected with a clear, non-technical error.
+  archive is rejected with a **stable, assertable error code `ERR_ARCHIVE_UNSAFE_PATH`** (a message key
+  the test can observe) surfaced to the user as a **clear, non-technical** message.
 - **Test kind:** unit (extractor vs. adversarial fixtures) **+** integration.
 
 **AC-4 — Local-only proven (zero network egress).** *(MISSION §8 AC-4)*
@@ -183,6 +189,9 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 - **Then** it produces installable artifacts (`.dmg`/`.zip` for macOS, NSIS `.exe` for Windows)
   **published to GitHub Releases**, and a smoke test **launches** the packaged app to a ready window.
   *(v1 ships unsigned; code-signing/notarization is a later gated step — MISSION §2.)*
+- **Release gate:** CI **build/packaging is `auto`**, but the **first production publish of each
+  release is HUMAN-REQUIRED** — the publish job runs in a **protected GitHub Environment with required
+  reviewers**, blocking until @pedrofuentes approves (MISSION §9).
 - **Test kind:** CI build **+** e2e smoke launch.
 
 **AC-6 — Browse/timeline + basic search display memories correctly.** *(MISSION §8 AC-6)*
@@ -204,16 +213,19 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 **AC-8 — Virtualized timeline at scale (splits the *timeline* half of AC-6; performance).**
 - **Given** a library of **≥ 10,000** items,
 - **When** the timeline is displayed and scrolled,
-- **Then** only a **bounded window** of rows is mounted in the DOM (windowed/virtualized) and
-  scrolling stays responsive — the full set is never mounted at once.
+- **Then** the DOM holds only a **bounded/virtualized window** whose mounted-node count stays under a
+  fixed cap and **does not grow with item count** (assert the rendered-row count at 10,000 items equals
+  the count at 1,000 items, within the window + overscan), and scrolling sustains **≥ 55 fps with no
+  main-thread long-task > 50 ms** (assert via the Performance / long-task API in the perf harness).
 - **Test kind:** e2e / performance.
 
 **AC-9 — Heavy ingestion & thumbnails run off the UI thread (performance).**
 - **Given** an import of many media files,
 - **When** parsing, hashing, EXIF extraction, and thumbnail generation run,
-- **Then** they execute in **worker threads / an ffmpeg-ffprobe subprocess**, the renderer main
-  thread stays responsive (no UI-thread task exceeds the defined budget), and progress is streamed to
-  the UI.
+- **Then** that work executes **off the UI thread** (`worker_threads` / an `ffmpeg`-`ffprobe`
+  subprocess) — asserted by observing the work occurs **off-main-thread** — and **no main-thread task
+  exceeds 50 ms** for the duration of the import (asserted via long-task instrumentation), keeping the
+  renderer responsive while progress is streamed to the UI.
 - **Test kind:** integration / performance.
 
 **AC-10 — Decompression-bomb & malicious-archive rejection (security; beyond AC-3 zip-slip).**
@@ -221,7 +233,9 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   uncompressed size, or entry count) **or** contains **symlink** entries,
 - **When** Kawsay inspects it,
 - **Then** extraction is **aborted before exhausting resources**, no symlink is materialized, the
-  per-entry/total/ratio/count caps are enforced, and the user sees a clear, non-technical refusal.
+  per-entry/total/ratio/count caps are enforced, and the failure surfaces a **stable, assertable error
+  code `ERR_ARCHIVE_BOMB`** (a message key the test can observe) shown to the user as a **clear,
+  non-technical** refusal.
 - **Test kind:** unit **+** integration.
 
 **AC-11 — Google Takeout content import (Gmail `.mbox` + Google Photos).**
@@ -265,6 +279,16 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   shown a **count of skipped items** — items are never silently dropped.
 - **Test kind:** integration.
 
+**AC-16 — Facebook DYI + LinkedIn import (content correctness).**
+- **Given** a real-shaped Facebook **"Download Your Information"** export (JSON, **including the
+  `latin1→utf8` mojibake cases**) and a LinkedIn **"Get a copy of your data"** export (CSVs + any
+  media),
+- **When** the user imports each,
+- **Then** their **posts, messages, photos, and connections** appear in the catalog with **correct
+  text (no mojibake), correct timestamps, and correct media linkage** — asserting **specific item
+  counts and field values** against the fixtures (research: `formats.md` §3–§4).
+- **Test kind:** integration.
+
 ### 4.1 AC traceability table (AC-id → feature → test kind)
 
 | AC | Source | Feature / capability | Test kind |
@@ -284,10 +308,11 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 | **AC-13** | added | (f) Accessibility essentials (WCAG 2.1 AA) | e2e (axe) |
 | **AC-14** | added | (d) Originals preserved on disk + undo without data loss | integration |
 | **AC-15** | added | (a)/(b)/(c) Resilient partial import | integration |
+| **AC-16** | added | (c) Facebook DYI + LinkedIn content correctness — text/timestamps/media linkage | integration |
 
 **Coverage check — every MVP capability maps to ≥1 AC:** (a) → AC-2, AC-9, AC-14, AC-15; (b) → AC-1,
-AC-12, AC-15; (c) → AC-3, AC-10, AC-11, AC-15; (d) → AC-1/2/3/11 (catalog), AC-14; (e) → AC-6, AC-7,
-AC-8; (f) → AC-4, AC-12, AC-13.
+AC-12, AC-15; (c) → AC-3, AC-10, AC-11, AC-15, **AC-16** (Facebook/LinkedIn content correctness);
+(d) → AC-1/2/3/11/16 (catalog), AC-14; (e) → AC-6, AC-7, AC-8; (f) → AC-4, AC-12, AC-13.
 
 ---
 
@@ -296,9 +321,13 @@ AC-8; (f) → AC-4, AC-12, AC-13.
 ### 5.1 Local-only / zero network egress *(core invariant — AC-4)*
 - **No runtime network origins** — v1 is fully offline (MISSION §5 allowlist: **None**).
 - **No telemetry, no analytics on user content**, ever (MISSION §5, NEVER list).
+- **All fonts and assets are bundled with the app** — **no remote fonts, no CDNs, no Google Fonts**,
+  no remotely-loaded scripts/styles/images — so the renderer needs no network at runtime.
 - Enforced in-app (defense in depth, beyond the AC-4 test): block all non-`file:`/`app:`/`blob:`
-  requests via `session.webRequest.onBeforeRequest({cancel:true})`, and a strict CSP with
-  `connect-src 'none'` (research: `security.md` Topic 3–4).
+  requests via `session.webRequest.onBeforeRequest({cancel:true})`, and a **strict
+  Content-Security-Policy** that permits only same-origin/bundled resources and forbids all network
+  connections — `default-src 'none'; connect-src 'none'; img-src 'self' data:; style-src 'self';
+  font-src 'self'; script-src 'self'` (research: `security.md` Topic 3–4).
 - **Implication for product scope:** any feature needing the network (map tiles, geocoding, model
   downloads, sharing) is **out of v1** because it would break AC-4 (§7).
 
@@ -311,12 +340,14 @@ and correct ARIA roles/labels/live-regions (incl. import progress).
 
 ### 5.3 Performance *(AC-8, AC-9)*
 - **Heavy ingestion off the UI thread** — `worker_threads` for parse/hash/EXIF; `ffmpeg`/`ffprobe`
-  as a subprocess (ideally an Electron `utilityProcess`) (MISSION §7; research: `catalog-pkg.md`
-  §3.4, `security.md` Topic 2).
+  as a subprocess (ideally an Electron `utilityProcess`); the renderer main thread stays responsive
+  with **no main-thread task > 50 ms** during import (**AC-9**) (MISSION §7; research:
+  `catalog-pkg.md` §3.4, `security.md` Topic 2).
 - **Streaming parses** for large exports (a multi-GB `.mbox`, a 200k-line chat) — never buffer whole
   files into memory (research: `formats.md` §1.8, §2.6).
 - **Lazy-loaded media** via a local custom protocol; **virtualized** timeline (`@tanstack/react-
-  virtual`) for thousands of items (research: `catalog-pkg.md` §4.1).
+  virtual`) keeping a **bounded mounted-node window** that sustains **≥ 55 fps / no long-task > 50 ms**
+  at **≥ 10,000** items (**AC-8**) (research: `catalog-pkg.md` §4.1).
 - **SQLite tuned:** WAL journal, sensible pragmas, targeted indexes, FTS5 for search (research:
   `catalog-pkg.md` §2.2, §4.2).
 
@@ -343,7 +374,9 @@ later gated step (MISSION §2).
 
 ### 5.6 Data integrity & durability *(AC-14)*
 Originals are **never moved or deleted**; the catalog is rebuildable from originals on disk; imports
-are **undoable**; SHA-256 content addressing dedupes identical files across sources (research:
+are **undoable**; SHA-256 content addressing dedupes identical files across sources — storing the bytes
+**once** while **recording every source occurrence**, so deduplication **preserves provenance and never
+silently drops** an item (consistent with AC-14/AC-15 and Mateo's "nothing silently dropped") (research:
 `catalog-pkg.md` §2, §6).
 
 ---
@@ -352,14 +385,15 @@ are **undoable**; SHA-256 content addressing dedupes identical files across sour
 
 > **Measured offline only.** Because Kawsay ships **no telemetry/analytics** (MISSION §5, NEVER
 > list), every metric below is gathered via **moderated usability testing** and **CI benchmark
-> fixtures** — never via in-product data collection. Numeric thresholds are **proposed targets** for
-> the red-team to confirm.
+> fixtures** — never via in-product data collection. Thresholds that bind a per-PR AC (SM-2 → AC-8/AC-9)
+> are stated as **concrete, offline-measured numbers**; the qualitative usability targets remain
+> judgement-based by nature.
 
 | # | Metric (from MISSION §1 vision) | Proposed target | How measured (no telemetry) |
 |---|---|---|---|
 | SM-1 | **An afternoon to a usable archive** | A non-technical tester completes a first successful import **unaided in one sitting** | Moderated test with 5 bereaved, non-technical users aged 60+ (research: `ux.md` §"older user testing") |
-| SM-2 | **Time-to-first-memory-visible** | First memory rendered within a small, fixed budget after a valid export is dropped (excludes time the *source platform* takes to produce the export) | CI benchmark on representative fixtures + moderated test |
-| SM-3 | **Breadth of sources** | A user can bring memories from **≥ 3 of the 5** v1 sources into one library | Moderated test / acceptance run (AC-1, AC-2, AC-3, AC-11) |
+| SM-2 | **Time-to-first-memory-visible** | **First memory visible within ≤ 10 s** of starting an import of the **named standard test fixture** (excludes time the *source platform* takes to produce the export) | CI benchmark on the named standard fixture (offline) + moderated test |
+| SM-3 | **Breadth of sources** | A user can bring memories from **≥ 3 of the 5** v1 sources into one library | Moderated test / acceptance run (AC-1, AC-2, AC-11, AC-16) |
 | SM-4 | **Import fidelity** | **0** silently-dropped items; skipped items always surfaced with a count | AC-15 (automated) |
 | SM-5 | **Privacy guarantee** | **0** outbound network connections during import and use — always | AC-4 (automated, every PR) |
 | SM-6 | **Unaided task completion** | **≥ 4 of 5** non-technical 60+ testers complete a WhatsApp import without help | Moderated usability test |
@@ -388,13 +422,15 @@ Explicitly **not** in M1 (MISSION §4), to keep the gate honest:
 
 ## 8. Assumptions & open questions (for the red-team)
 
-- **Numeric thresholds** in §6 (SM-2 time budgets, the ≥10k-item bar in AC-8, UI-thread task budget in
-  AC-9) are proposed and need confirmation/quantification before they become hard gates.
+- **Numeric thresholds are now concrete** and binding: **SM-2 ≤ 10 s** to first memory on the named
+  standard fixture, **AC-8** ≥ 10,000 items with a capped mounted-node window at **≥ 55 fps / no
+  long-task > 50 ms**, and **AC-9 no main-thread task > 50 ms** during import. The red-team may tune the
+  exact numbers, but each is now observable and falsifiable as written.
 - **iOS WhatsApp** attachment naming and `.mbox` streaming at multi-GB scale need real-sample
   validation (research: `formats.md` Gaps; `security.md` Gaps).
 - **Connectors as separate increments:** each source (WhatsApp, folder, Takeout, Facebook, LinkedIn)
   is expected to ship as its own TDD increment behind the common importer interface; M1 is "done"
-  when AC-1 … AC-15 pass cumulatively.
+  when AC-1 … AC-16 pass cumulatively.
 
 ---
 

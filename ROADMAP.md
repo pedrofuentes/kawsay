@@ -8,8 +8,9 @@
 ## Current phase
 
 **Phase 1 — M1: Aggregate & Import Foundation (MVP).** Status: **in progress.** Acceptance is the
-stable suite **AC-1 … AC-15** defined in [`PRD.md`](./PRD.md) §4 (AC-1 … AC-6 verbatim from MISSION
-§8). The remaining milestones are a proposed, prioritized backlog.
+stable suite **AC-1 … AC-16** defined in [`PRD.md`](./PRD.md) §4 (AC-1 … AC-6 **restated /
+semantically faithful — the MISSION §8 criteria elaborated into Given/When/Then, not renumbered or
+weakened**). The remaining milestones are a proposed, prioritized backlog.
 
 ## How milestones are gated (MISSION §9)
 
@@ -29,12 +30,14 @@ stable suite **AC-1 … AC-15** defined in [`PRD.md`](./PRD.md) §4 (AC-1 … AC
 **exports/files** (no live logins) into one private local library — generic folder / cloud-download
 import, WhatsApp, Google Takeout, Facebook, LinkedIn — on an extensible connector architecture, with
 browse/timeline + basic search and a non-technical-first, fully-offline UX.
-**Acceptance:** **AC-1 … AC-15** (PRD §4) pass cumulatively — incl. WhatsApp end-to-end (AC-1),
+**Acceptance:** **AC-1 … AC-16** (PRD §4) pass cumulatively — incl. WhatsApp end-to-end (AC-1),
 folder photos/videos with dates + thumbnails (AC-2), safe archive extraction (AC-3, AC-10), **proven
 zero egress (AC-4)**, macOS + Windows build to GitHub Releases (AC-5), timeline + search (AC-6, AC-7,
-AC-8), off-thread ingestion (AC-9), accessibility (AC-13), originals preserved (AC-14).
-**Authorization:** in-flight (current milestone). v1 installers ship **unsigned** (signing deferred,
-MISSION §2).
+AC-8), off-thread ingestion (AC-9), **Facebook/LinkedIn content correctness (AC-16)**, accessibility
+(AC-13), originals preserved (AC-14).
+**Authorization:** in-flight (current milestone). CI **build/packaging is `auto`**, but the **first
+production publish of each release is HUMAN-REQUIRED** — gated by a **protected GitHub Environment with
+required reviewers** (MISSION §9). v1 installers ship **unsigned** (signing deferred, MISSION §2).
 
 ### M2 — Audio & video transcription · **P1 (top post-v1 candidate) · proposed**
 **Scope:** Transcribe WhatsApp voice notes and video/audio **on-device** so a user needn't listen to
@@ -43,7 +46,7 @@ or watch every recording — searchable, readable transcripts attached to each m
 **Acceptance direction:** transcripts generated **fully offline** (bundled/on-device model — **no
 cloud STT**, preserving **AC-4**); transcription runs **off the UI thread** (extends AC-9); transcript
 text is **searchable** via the existing FTS index (extends AC-6/AC-7); accuracy/coverage thresholds
-TBD. New ids **AC-16+**.
+TBD. New ids **AC-17+**.
 **Authorization:** time-boxed — **provided it stays on-device.** Any approach needing a network model
 download or cloud inference becomes **human-required** (egress).
 
