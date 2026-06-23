@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+
+# Local tool state
+.impeccable/
+.worktrees/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
