@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { normalize } from 'node:path';
+import { posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -55,6 +55,11 @@ export interface NavigationHardeningOptions {
   /** In development, the dev-server URL whose origin is also navigable. Absent
    *  in production. */
   readonly devServerUrl?: string | undefined;
+  /** Platform whose path semantics govern the `file://` comparison. Defaults to
+   *  the host platform (`process.platform`); injectable so the Windows path
+   *  identity is testable on POSIX hosts and on CI. On `win32` paths are
+   *  compared case-insensitively (the NTFS reality); on POSIX, case-sensitively. */
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 /**
@@ -91,7 +96,7 @@ function isAllowedNavigation(candidate: string, options: NavigationHardeningOpti
     return false;
   }
   if (target.protocol === 'file:') {
-    return isAppEntry(target, options.appEntryUrl);
+    return isAppEntry(target, options.appEntryUrl, options.platform ?? process.platform);
   }
   if (OPAQUE_NAVIGATION_SCHEMES.has(target.protocol)) {
     return false;
@@ -104,29 +109,46 @@ function isAllowedNavigation(candidate: string, options: NavigationHardeningOpti
 }
 
 /** True only when `target` is exactly the packaged renderer entry file. Its
- *  hash/query (e.g. SPA client routes) are ignored; any other path is denied. */
-function isAppEntry(target: URL, appEntryUrl: string): boolean {
+ *  hash/query (e.g. SPA client routes) are ignored; any other path is denied.
+ *  Both sides are reduced to canonical real paths under the active platform's
+ *  semantics, so `file:///C:/app/...` matches the `C:\app\...` entry on Windows
+ *  without ever allowing a distinct path. */
+function isAppEntry(target: URL, appEntryUrl: string, platform: NodeJS.Platform): boolean {
   const entry = tryParseUrl(appEntryUrl);
   if (entry === null || entry.protocol !== 'file:') {
     return false;
   }
-  return canonicalPath(target) === canonicalPath(entry);
+  return samePath(canonicalPath(target, platform), canonicalPath(entry, platform), platform);
 }
 
-/** Resolve a `file://` URL to a real path (symlinks/`..` collapsed) for an exact
- *  comparison; fall back to a lexical normalise when the path is not on disk. */
-function canonicalPath(url: URL): string {
+/** Resolve a `file://` URL to a canonical real path (symlinks/`..` collapsed)
+ *  for an exact comparison. `fileURLToPath` decodes percent-escapes and maps
+ *  `file:///C:/…` → `C:\…` on Windows; an unconvertible URL yields `null` so it
+ *  can never match (fail-closed). The realpath-failure fallback normalises
+ *  lexically in the platform's flavour, symmetrically for both candidates. */
+function canonicalPath(url: URL, platform: NodeJS.Platform): string | null {
   let filePath: string;
   try {
-    filePath = fileURLToPath(url);
+    filePath = fileURLToPath(url, { windows: platform === 'win32' });
   } catch {
-    return url.href;
+    return null;
   }
+  const platformPath = platform === 'win32' ? win32 : posix;
   try {
-    return realpathSync.native(filePath);
+    return platformPath.normalize(realpathSync.native(filePath));
   } catch {
-    return normalize(filePath);
+    return platformPath.normalize(filePath);
   }
+}
+
+/** Path identity under the active platform: case-insensitive on Windows (the
+ *  NTFS reality, drive letter included), case-sensitive on POSIX. A `null`
+ *  (unconvertible) path never matches. */
+function samePath(a: string | null, b: string | null, platform: NodeJS.Platform): boolean {
+  if (a === null || b === null) {
+    return false;
+  }
+  return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 function tryParseUrl(value: string): URL | null {
