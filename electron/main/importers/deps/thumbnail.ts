@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import ffmpegStatic from 'ffmpeg-static';
 import type { GeneratedAsset, ThumbnailGenerator, ThumbnailRequest } from '../ingest';
+import { assertLocalMediaPath } from './media-path';
 
 /** Longest edge (px) of generated WebP renditions (ARCHITECTURE §5.1). */
 const THUMBNAIL_MAX_EDGE = 480;
@@ -27,13 +28,19 @@ export function derivedRelPath(dir: DerivedDir, hash: string): string {
  * Pure, and crucially an ARRAY argv: the input and output are discrete elements,
  * never concatenated into a flag or a shell string, so an attacker-controlled
  * filename cannot inject flags or shell syntax (§7.2, AC-4). The output path is
- * always the final element.
+ * always the final element. `-protocol_whitelist file` precedes `-i` so it
+ * applies to the input demuxer, pinning ffmpeg to the file protocol — a crafted
+ * local container can never make it follow an embedded remote reference (egress,
+ * AC-4) — and `assertLocalMediaPath` refuses a URL-style input outright.
  */
 export function buildFrameArgs(inputPath: string, outputPath: string): string[] {
+  assertLocalMediaPath(inputPath);
   return [
     '-y',
     '-loglevel',
     'error',
+    '-protocol_whitelist',
+    'file',
     '-i',
     inputPath,
     '-frames:v',
