@@ -106,6 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Importing is now crash-proof. If the background worker that reads your files hits a fault that even
+  its own error handling cannot catch — a corrupt file that crashes a native decoder, an
+  out-of-memory condition, or an unexpected shutdown — the app no longer crashes and the import no
+  longer spins forever. That one import stops with a clear error, every other import keeps going, and
+  the worker is always cleaned up so nothing is left running in the background (AC-9).
 - WhatsApp importer no longer mistakes an ordinary message that happens to end in a parenthetical
   (for example "the price is 3.50 (each)" or "send report.pdf (draft)") for a missing attachment and
   silently drops it — a loved one's words are always kept. Attachments are now recognised only by
@@ -114,5 +119,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - WhatsApp importer now treats a corrupt, locked, or unreadable export — a `.zip` that cannot be
   extracted, or a discovered `_chat.txt` that cannot be read — as a reported skip and finishes with
   whatever it has already gathered, instead of throwing and aborting the whole import (AC-15).
+
+### Security
+
+- The bundled video tools (ffmpeg/ffprobe) are now locked to reading local files only. Even if a
+  crafted photo or video on disk embedded a hidden reference to a remote address, these tools can no
+  longer be tricked into reaching out over the network, preserving Kawsay's promise that your
+  memories never leave your device (AC-4). Any input that is not a local file is refused before the
+  tool is ever run.
 
 ### Removed
