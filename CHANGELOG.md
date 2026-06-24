@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Google Takeout importer (card C4, AC-11): the connector for a **Google Takeout** export — it brings your
   **Gmail mailbox** and **Google Photos** library into the catalogue. Point it at the export folder, the
   original **`.zip`** (unpacked through the zip-slip–guarded extractor, never a raw unzip), or a standalone
-  **`.mbox`**. The Gmail mailbox is read **a message at a time** so even a multi-gigabyte mailbox is never
-  loaded into memory at once: each email keeps its **date, sender, subject, and text** (so the words are
-  searchable), quoted lines that begin with "From" are restored correctly rather than splitting a message in
+  **`.mbox`**. The Gmail mailbox is streamed **a message at a time** — whether it comes from the **`.zip`**
+  (the format Google Takeout downloads in), an unpacked folder, or a standalone file — so even a
+  multi-gigabyte mailbox is never loaded into memory at once: each email keeps its **date, sender, subject,
+  and text** (so the words are searchable), quoted lines that begin with "From" are restored correctly
+  rather than splitting a message in
   two, and every **attachment becomes its own photo/video/file** saved alongside the rest. For Google Photos,
   each picture or clip is paired with the little **`.json` metadata file** Takeout writes next to it to
   recover the real **date taken, location, and description**, falling back to the file's own EXIF and then its

@@ -660,7 +660,7 @@ Dependencies (`fs`, guarded `extractArchive`, `readExif`, `probeMedia`, `hashFil
 `ImporterDeps`** so importers are **unit-testable with fixture fs + fakes** — no real files or
 subprocess. Partial failures call `ctx.onSkip(...)` and continue (AC-15); provenance is carried on
 every record (`sourceRef`, `author`, `date`, `sourceMeta`) → persisted as `item_occurrences`. The
-**parse** phase streams large exports (the Gmail `.mbox` is split message-by-message — ADR-0009).
+**parse** phase streams large exports (the Gmail `.mbox` is split message-by-message — ADR-0013).
 
 **Alternatives considered**
 - *A bespoke function per source wired ad-hoc into the UI* — rejected; no shared contract, untestable,
