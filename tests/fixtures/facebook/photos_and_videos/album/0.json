@@ -1,0 +1,14 @@
+{
+  "name": "Fam\u00c3\u00adlia",
+  "photos": [
+    {
+      "uri": "photos_and_videos/album/media/abuela.jpg",
+      "creation_timestamp": 1659000000,
+      "description": "Mi abuela \u00f0\u009f\u0091\u00b5"
+    },
+    {
+      "uri": "photos_and_videos/album/media/perro.jpg",
+      "creation_timestamp": 1659000100
+    }
+  ]
+}
