@@ -19,6 +19,14 @@ jobs:
     name: Gitleaks (secret scan)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Scope tokens to this job (least-privilege). On pull_request events the
+    # gitleaks-action GETs /repos/.../pulls/<n>/commits to enumerate the range
+    # to scan; that read needs pull-requests: read, otherwise the API returns
+    # 403 "Resource not accessible by integration". Stays read-only — comments
+    # are disabled below so pull-requests: write is never required.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout (full history)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -31,8 +39,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No license needed: this repo is owned by a personal account.
-          # Keep the default token least-privilege (contents: read) by not
-          # posting PR review comments; the failed check + SARIF summary alert.
+          # Comments stay off so the job never needs pull-requests: write; a
+          # real finding still fails the check and surfaces in the SARIF summary.
           GITLEAKS_ENABLE_COMMENTS: "false"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
 
