@@ -464,4 +464,96 @@ describe('whatsappImporter (card C3 — WhatsApp "Export Chat" importer, AC-1)',
       expect(emits.at(-1)?.processed).toBe(4);
     });
   });
+
+  // 🔴 blocker #1 (SENT-PR57-c13da1d-20260623): the attachment marker must be
+  // detected ONLY by WhatsApp's real sentinels — Android `FILENAME (file
+  // attached)` and iOS `<attached: FILENAME>`. An ordinary trailing
+  // parenthetical ("(each)", "(draft)") must leave the message as text, never be
+  // mis-read as a missing attachment and dropped (silent loss of a loved one's
+  // words — the worst failure for this app).
+  describe('attachment detection keys on the real marker, not any parenthetical (🔴 #1)', () => {
+    it('keeps a normal message that ends in a parenthetical as a text record — never dropped', async () => {
+      const chat =
+        '30/12/2023, 14:30 - John: the price is 3.50 (each)\n' +
+        '30/12/2023, 14:31 - Jane: send report.pdf (draft)\n' +
+        '30/12/2023, 14:32 - John: check site.com (mirror)\n';
+      const deps = makeZipDeps([{ entryPath: '_chat.txt', content: chat }]).deps;
+      const { records, byRef, result, skips } = await run('/drop/c.zip', deps);
+
+      expect(records).toHaveLength(3);
+      expect(result.recordCount).toBe(3);
+      expect(records.every((r) => r.mediaType === 'message')).toBe(true);
+      expect(records.every((r) => r.originalPath === null)).toBe(true);
+      expect(byRef.get('msg:0')?.body).toBe('the price is 3.50 (each)');
+      expect(byRef.get('msg:1')?.body).toBe('send report.pdf (draft)');
+      expect(byRef.get('msg:2')?.body).toBe('check site.com (mirror)');
+      // The whole point: not skipped as a phantom missing attachment.
+      expect(result.skipped).toHaveLength(0);
+      expect(skips).toHaveLength(0);
+    });
+
+    it('still detects a genuine Android "FILENAME (file attached)" marker as an attachment', async () => {
+      const chat = '30/12/2023, 14:33 - John: IMG-001.jpg (file attached)\n';
+      const deps = makeZipDeps([
+        { entryPath: '_chat.txt', content: chat },
+        { entryPath: 'IMG-001.jpg', content: 'jpeg-bytes' },
+      ]).deps;
+      const { byRef, result, skips } = await run('/drop/c.zip', deps);
+
+      expect(byRef.get('att:IMG-001.jpg')?.mediaType).toBe('photo');
+      expect(byRef.get('att:IMG-001.jpg')?.originalPath).toBe(join(WORK, 'IMG-001.jpg'));
+      expect(result.recordCount).toBe(1);
+      expect(skips).toHaveLength(0);
+    });
+
+    it('still detects a genuine iOS "<attached: FILENAME>" marker as an attachment', async () => {
+      const chat = '[30/12/2023, 14:34:00] Jane: <attached: IMG-002.jpg>\n';
+      const deps = makeZipDeps([
+        { entryPath: '_chat.txt', content: chat },
+        { entryPath: 'IMG-002.jpg', content: 'jpeg-bytes' },
+      ]).deps;
+      const { byRef, result, skips } = await run('/drop/c.zip', deps);
+
+      expect(byRef.get('att:IMG-002.jpg')?.mediaType).toBe('photo');
+      expect(byRef.get('att:IMG-002.jpg')?.originalPath).toBe(join(WORK, 'IMG-002.jpg'));
+      expect(result.recordCount).toBe(1);
+      expect(skips).toHaveLength(0);
+    });
+  });
+
+  // 🔴 blocker #2 (SENT-PR57-c13da1d-20260623): a skip is "reported, never
+  // thrown" (AC-15, types.ts:35,127). A corrupt/locked archive or an unreadable
+  // discovered `_chat.txt` must be reported via onSkip and the run must return
+  // its partial result — it must never throw out of the generator and abort.
+  describe('bad input is reported, never thrown (AC-15 — 🔴 #2)', () => {
+    it('reports E_EXTRACT and completes when extractArchive throws (corrupt/locked archive)', async () => {
+      const { deps } = makeZipDeps([]);
+      deps.extractArchive = () => Promise.reject(new Error('EBUSY: archive is locked'));
+
+      // `run` rejects if the generator throws — so reaching the assertions proves
+      // the run completed instead of aborting.
+      const { records, result, skips } = await run('/drop/corrupt.zip', deps);
+
+      expect(records).toEqual([]);
+      expect(result.recordCount).toBe(0);
+      expect(result.skipped.some((s) => s.code === 'E_EXTRACT')).toBe(true);
+      expect(skips.some((s) => s.code === 'E_EXTRACT')).toBe(true);
+    });
+
+    it('reports E_READ_CHAT and completes when the discovered _chat.txt cannot be read', async () => {
+      const { deps } = makeZipDeps([{ entryPath: '_chat.txt', content: ANDROID_CHAT }]);
+      const realReadFile = deps.fs.readFile;
+      deps.fs.readFile = (path: string) =>
+        basename(path) === '_chat.txt'
+          ? Promise.reject(new Error('EACCES: permission denied'))
+          : realReadFile(path);
+
+      const { records, result, skips } = await run('/drop/c.zip', deps);
+
+      expect(records).toEqual([]);
+      expect(result.recordCount).toBe(0);
+      expect(result.skipped.some((s) => s.code === 'E_READ_CHAT')).toBe(true);
+      expect(skips.some((s) => s.code === 'E_READ_CHAT')).toBe(true);
+    });
+  });
 });
