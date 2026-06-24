@@ -265,6 +265,21 @@ describe('ffprobe (MediaProber wrapper, subprocess seam)', () => {
       mimeType: null,
     });
   });
+
+  it('bounds a runner that hangs and degrades to all-null (timeout/kill)', async () => {
+    // A crafted/truncated media file can make ffprobe hang indefinitely. The
+    // prober must enforce an upper bound; a runner that never settles still
+    // resolves to all-null rather than stalling the whole import.
+    const prober = createMediaProber(() => new Promise<ProbeDataLike>(() => undefined), {
+      timeoutMs: 50,
+    });
+    expect(await prober('/media/hang.mp4')).toEqual({
+      durationSec: null,
+      width: null,
+      height: null,
+      mimeType: null,
+    });
+  }, 2000);
 });
 
 describe('thumbnail (ffmpeg generator, ARCHITECTURE §5.1/§7.2)', () => {
