@@ -1,12 +1,67 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { OriginalKind } from '@shared/catalog';
 import type { CatalogDatabase } from '../db/connection';
 
-/** Normalize an extension to a leading-dot suffix (`jpg` → `.jpg`, null → ``). */
+/**
+ * Stable error tag thrown when a hash, extension, or stored asset path — any of
+ * which can derive from an UNTRUSTED archive filename — would escape the library
+ * root or is malformed. The originals store is the AC-14 / ADR-0008 safety
+ * boundary: every path that drives a copy or delete is validated and confined to
+ * the root before any filesystem mutation.
+ */
+export const ERR_ORIGINAL_PATH_ESCAPE = 'ERR_ORIGINAL_PATH_ESCAPE';
+
+/** A content address is exactly 64 lowercase hex characters (SHA-256). */
+const HASH_RE = /^[0-9a-f]{64}$/;
+/** A safe extension is a single dot followed by alphanumerics — no separators, no `..`. */
+const EXT_RE = /^\.[A-Za-z0-9]+$/;
+/** Generous ceiling; the longest real-world media extension is well under this. */
+const MAX_EXT_LEN = 16;
+
+function rejectPath(detail: string): never {
+  throw new Error(`${ERR_ORIGINAL_PATH_ESCAPE}: ${detail}`);
+}
+
+/** Reject a content hash that is not a canonical lowercase SHA-256 hex string. */
+function assertSafeHash(hash: string): string {
+  if (typeof hash !== 'string' || !HASH_RE.test(hash)) rejectPath('invalid content hash');
+  return hash;
+}
+
+/**
+ * Reject a stored rendition path that is absolute, NUL-tainted, or walks out of
+ * the library via a `..` segment. Interior separators are legitimate — derived
+ * assets live at `derived/<kind>/<shard>/<hash>.<ext>`.
+ */
+function assertSafeAssetRelPath(p: string): string {
+  if (typeof p !== 'string' || p === '' || p.includes('\0')) rejectPath('invalid asset path');
+  if (isAbsolute(p)) rejectPath('absolute asset path');
+  if (p.split(/[\\/]/).includes('..')) rejectPath('asset path traversal');
+  return p;
+}
+
+/** Assert an absolute path resolves to a location strictly inside `root`. */
+function assertWithinRoot(root: string, absPath: string): string {
+  const resolvedRoot = resolve(root);
+  const resolved = resolve(absPath);
+  if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + sep)) {
+    rejectPath('path escapes library root');
+  }
+  return absPath;
+}
+
+/**
+ * Normalize an extension to a leading-dot suffix (`jpg` → `.jpg`, null → ``) and
+ * reject anything that is not a plain dotted alphanumeric extension. A separator,
+ * `..`, NUL, or over-long value could escape the shard directory, so it throws.
+ */
 function normalizeExt(ext?: string | null): string {
-  if (!ext) return '';
-  return ext.startsWith('.') ? ext : `.${ext}`;
+  if (ext === null || ext === undefined || ext === '') return '';
+  if (typeof ext !== 'string' || ext.includes('\0')) rejectPath('invalid extension');
+  const dotted = ext.startsWith('.') ? ext : `.${ext}`;
+  if (dotted.length > MAX_EXT_LEN || !EXT_RE.test(dotted)) rejectPath('invalid extension');
+  return dotted;
 }
 
 /**
@@ -45,8 +100,10 @@ export interface PutOriginalResult {
  * re-copied — the caller's new occurrence simply references it (§4.4).
  */
 export function putOriginal(input: PutOriginalInput): PutOriginalResult {
+  assertSafeHash(input.hash);
   const relPath = blobRelPath(input.hash, input.ext);
   const absPath = join(input.root, relPath);
+  assertWithinRoot(input.root, absPath);
   if (existsSync(absPath)) return { relPath, absPath, copied: false };
   mkdirSync(dirname(absPath), { recursive: true });
   copyFileSync(input.sourcePath, absPath);
@@ -84,7 +141,10 @@ export function resolveOriginal(
     .get<OriginalRef>({ itemId });
   if (!row) return null;
   if (row.kind === 'in_place') return row.path;
-  if (row.kind === 'content_addressed' && row.hash) return blobAbsPath(root, row.hash, row.ext);
+  if (row.kind === 'content_addressed' && row.hash) {
+    assertSafeHash(row.hash);
+    return assertWithinRoot(root, blobAbsPath(root, row.hash, row.ext));
+  }
   return null;
 }
 
@@ -144,7 +204,10 @@ export function removeOccurrence(
           )
           .get<{ n: number }>({ hash: occ.hash })?.n ?? 0,
       );
-      if (remaining === 0) blobToDelete = blobAbsPath(root, occ.hash, occ.ext);
+      if (remaining === 0) {
+        assertSafeHash(occ.hash);
+        blobToDelete = assertWithinRoot(root, blobAbsPath(root, occ.hash, occ.ext));
+      }
     }
 
     const derivedToDelete: string[] = [];
@@ -158,7 +221,10 @@ export function removeOccurrence(
       const assets = db
         .prepare('SELECT path FROM item_assets WHERE item_id = @itemId')
         .all<{ path: string }>({ itemId: occ.itemId });
-      for (const asset of assets) derivedToDelete.push(join(root, asset.path));
+      for (const asset of assets) {
+        assertSafeAssetRelPath(asset.path);
+        derivedToDelete.push(assertWithinRoot(root, join(root, asset.path)));
+      }
       db.prepare('DELETE FROM items WHERE id = @itemId').run({ itemId: occ.itemId });
       itemRemoved = true;
     }
