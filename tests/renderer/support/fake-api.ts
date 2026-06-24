@@ -5,12 +5,33 @@ import { vi } from 'vitest';
 import type {
   ImportProgressEvent,
   ImportSummaryDTO,
+  ItemCardDTO,
   KawsayAPI,
   LibrarySummaryDTO,
 } from '@shared/kawsay-api';
 
 /** A stable, valid-looking job id used across import tests. */
 export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+/** A stable, valid-looking item id, mutated per-index by {@link makeItemCard}. */
+const ITEM_ID_BASE = '11111111-2222-4333-8444-555555550000';
+
+/** Build a single timeline tile, overriding only the fields a test cares about. */
+export function makeItemCard(over: Partial<ItemCardDTO> = {}): ItemCardDTO {
+  return {
+    id: ITEM_ID_BASE,
+    mediaType: 'photo',
+    mimeType: 'image/jpeg',
+    captureDate: '2019-06-12T10:00:00.000Z',
+    durationSec: null,
+    title: 'A quiet afternoon',
+    description: null,
+    isFavourite: false,
+    width: 1200,
+    height: 800,
+    ...over,
+  };
+}
 
 export function makeLibrarySummary(over: Partial<LibrarySummaryDTO> = {}): LibrarySummaryDTO {
   return {
@@ -60,6 +81,8 @@ export interface FakeApiOptions {
   jobId?: string;
   createLibrary?: KawsayAPI['createLibrary'];
   openLibrary?: KawsayAPI['openLibrary'];
+  getTimeline?: KawsayAPI['getTimeline'];
+  searchCatalog?: KawsayAPI['searchCatalog'];
   startImport?: KawsayAPI['startImport'];
   cancelImport?: KawsayAPI['cancelImport'];
 }
@@ -81,8 +104,8 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       vi.fn((input: { path: string }) =>
         Promise.resolve(makeLibrarySummary({ root: input.path })),
       ),
-    getTimeline: vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
-    searchCatalog: vi.fn(() => Promise.resolve({ items: [], total: 0 })),
+    getTimeline: opts.getTimeline ?? vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
+    searchCatalog: opts.searchCatalog ?? vi.fn(() => Promise.resolve({ items: [], total: 0 })),
     startImport: opts.startImport ?? vi.fn(() => Promise.resolve({ jobId })),
     cancelImport: opts.cancelImport ?? vi.fn(() => Promise.resolve({ cancelled: true })),
     onImportProgress: (listener) => {
