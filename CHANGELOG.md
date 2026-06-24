@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   unreadable archives surface as `ERR_ARCHIVE_CORRUPT`. Each failure is a typed `ArchiveError` carrying
   a stable code and a non-technical message key. Entries are streamed one at a time (the whole archive
   is never buffered). Implements the `SafeExtractFn` importer seam (ARCHITECTURE §7.1, ADR-0006).
+- Folder importer (card C1, AC-2): the first concrete connector — imports photos, videos, voice
+  notes, and documents from **any folder**, including the local mirrors that iCloud / OneDrive /
+  Dropbox / Google-Drive clients download. It walks the directory recursively, classifies each file
+  by type, and catalogues it **in place** (the user's own files are referenced, never copied). Each
+  memory's date prefers the photo's embedded EXIF capture date and falls back to the file's modified
+  time (recording which was used), with GPS location and camera make/model carried through when
+  present and audio/video durations read from the media itself. Unreadable files or folders are
+  skipped and reported rather than aborting the whole import, and a running import can be cancelled.
 - Local library core (card F3): the main-process catalog over **`better-sqlite3`**. A versioned,
   transactional, idempotent migration runner (`user_version`-gated) applies the ARCHITECTURE §4 schema —
   `items` (SHA-256 `content_hash` dedup key), `item_occurrences` (provenance), `item_assets`, `sources`,
