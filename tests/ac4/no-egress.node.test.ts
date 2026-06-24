@@ -77,7 +77,7 @@ describe('AC-4 positive controls — worker thread & subprocess egress is caught
 
 function createFakeSession(): {
   session: NetworkGuardSessionLike;
-  fire: (url: string) => void;
+  fire: (url: string) => boolean;
 } {
   let listener: OnBeforeRequestListener | undefined;
   const session: NetworkGuardSessionLike = {
@@ -87,8 +87,12 @@ function createFakeSession(): {
       },
     },
   };
-  const fire = (url: string): void => {
-    listener?.({ url }, () => undefined);
+  const fire = (url: string): boolean => {
+    let cancelled = false;
+    listener?.({ url }, (response) => {
+      cancelled = response.cancel;
+    });
+    return cancelled;
   };
   return { session, fire };
 }
@@ -122,6 +126,28 @@ describe('AC-4 representative use flow records ZERO egress', () => {
 
       spies.assertNoEgress();
       expect(spies.attempts).toHaveLength(0);
+    } finally {
+      spies.restore();
+    }
+  });
+});
+
+describe('AC-4 file:// UNC authority is cancelled by the guard (X1/#16)', () => {
+  it('cancels a remote-authority file URL (no SMB/UNC egress) while host-less file:/// proceeds', () => {
+    const spies = installEgressSpies();
+    try {
+      const { session, fire } = createFakeSession();
+      installNetworkGuard(session, { isPackaged: true });
+
+      // `file://host/share` is a Windows UNC path → outbound SMB (TCP 445) + NTLM
+      // credential leak: the egress guard MUST cancel it.
+      expect(fire('file://remote.example/share/x')).toBe(true);
+      expect(fire('file://192.168.1.50/c$/secret.txt')).toBe(true);
+
+      // A genuinely local, host-less file URL is still served.
+      expect(fire('file:///app/index.html')).toBe(false);
+
+      spies.assertNoEgress();
     } finally {
       spies.restore();
     }

@@ -38,6 +38,17 @@ const NON_DEV_URLS = [
   'http://localhost.evil.example/',
 ];
 
+// X1/#16 — a `file:` URL that carries an authority targets a REMOTE host, not a
+// local file. On Windows `file://host/share` is a UNC path → outbound SMB
+// (TCP 445) + NTLM credential leak. Only the host-less `file:///…` form is local.
+const REMOTE_AUTHORITY_FILE_URLS = [
+  'file://remote.example/x',
+  'file://192.168.1.50/c$/secret.txt',
+  'file://attacker.example/share/x',
+];
+
+const LOCAL_FILE_URLS = ['file:///app/index.html', 'file:///Users/me/local.txt'];
+
 describe('isLocalOnlyRequest — deny-by-default (ARCHITECTURE §6.1 / AC-4)', () => {
   describe('packaged build: local schemes only, NO network at all', () => {
     it.each(LOCAL_URLS)('allows the local scheme %s', (url) => {
@@ -66,6 +77,26 @@ describe('isLocalOnlyRequest — deny-by-default (ARCHITECTURE §6.1 / AC-4)', (
     it.each(NON_DEV_URLS)('still cancels non-loopback / non-dev URL %s', (url) => {
       expect(isLocalOnlyRequest(url, { isPackaged: false })).toBe(false);
     });
+  });
+});
+
+describe('isLocalOnlyRequest — a file: URL carrying a remote authority is denied (X1/#16)', () => {
+  it.each(REMOTE_AUTHORITY_FILE_URLS)(
+    'cancels remote-authority file URL %s in a packaged build (UNC → SMB egress)',
+    (url) => {
+      expect(isLocalOnlyRequest(url, { isPackaged: true })).toBe(false);
+    },
+  );
+
+  it.each(REMOTE_AUTHORITY_FILE_URLS)(
+    'cancels remote-authority file URL %s in a dev build too',
+    (url) => {
+      expect(isLocalOnlyRequest(url, { isPackaged: false })).toBe(false);
+    },
+  );
+
+  it.each(LOCAL_FILE_URLS)('still allows the host-less local file URL %s', (url) => {
+    expect(isLocalOnlyRequest(url, { isPackaged: true })).toBe(true);
   });
 });
 
@@ -125,5 +156,14 @@ describe('installNetworkGuard — webRequest.onBeforeRequest kill-switch', () =>
     expect(await fire('http://localhost:5173/')).toEqual({ cancel: false });
     expect(await fire('ws://localhost:5173/')).toEqual({ cancel: false });
     expect(await fire('https://example.com/x')).toEqual({ cancel: true });
+  });
+
+  it('cancels a file:// request that carries a remote authority (UNC → SMB, X1/#16)', async () => {
+    const { session, fire } = createFakeSession();
+    installNetworkGuard(session, { isPackaged: true });
+    expect(await fire('file://remote.example/share/x')).toEqual({ cancel: true });
+    expect(await fire('file://192.168.1.50/c$/secret.txt')).toEqual({ cancel: true });
+    // A host-less local file URL is genuinely local and still proceeds.
+    expect(await fire('file:///Users/me/local.txt')).toEqual({ cancel: false });
   });
 });
