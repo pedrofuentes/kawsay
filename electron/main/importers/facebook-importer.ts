@@ -165,14 +165,29 @@ function classify(uriOrName: string): MediaKind {
   return EXT_INFO.get(extname(uriOrName).toLowerCase()) ?? FALLBACK_KIND;
 }
 
+/**
+ * Build a `message`-sourced date, **nulling an out-of-range / Invalid Date**.
+ * `asFiniteNumber` only rejects NaN/Infinity, so a finite-but-absurd timestamp
+ * (a corrupt value in an untrusted export) still yields a JS `Invalid Date`.
+ * Emitting that across the importer boundary is data-loss-class: the downstream
+ * ingest consumer renders every date via `toIsoUtc` → `Date.toISOString()`,
+ * which throws `RangeError: Invalid time value` with no per-record catch and
+ * aborts the whole import (the WhatsApp failure AC-15 exists to prevent). A bad
+ * timestamp instead leaves the record undated (`null`) — kept, never dropped.
+ */
+function messageDate(ms: number | null): RecordDate {
+  if (ms === null) return null;
+  const value = new Date(ms);
+  return Number.isFinite(value.getTime()) ? { value, source: 'message' } : null;
+}
+
 function secondsDate(value: unknown): RecordDate {
   const sec = asFiniteNumber(value);
-  return sec === null ? null : { value: new Date(sec * 1000), source: 'message' };
+  return messageDate(sec === null ? null : sec * 1000);
 }
 
 function msDate(value: unknown): RecordDate {
-  const ms = asFiniteNumber(value);
-  return ms === null ? null : { value: new Date(ms), source: 'message' };
+  return messageDate(asFiniteNumber(value));
 }
 
 function recordSkip(
