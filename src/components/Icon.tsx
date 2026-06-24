@@ -17,7 +17,8 @@ export type IconName =
   | 'heart'
   | 'arrow-right'
   | 'check'
-  | 'sparkle';
+  | 'sparkle'
+  | 'search';
 
 const PATHS: Record<IconName, ReactElement> = {
   lock: (
@@ -102,6 +103,12 @@ const PATHS: Record<IconName, ReactElement> = {
     <>
       <path d="M12 4c.6 3.6 1.8 4.8 5.4 5.4-3.6.6-4.8 1.8-5.4 5.4-.6-3.6-1.8-4.8-5.4-5.4C10.2 8.8 11.4 7.6 12 4Z" />
       <path d="M18.5 14.5c.3 1.7.9 2.3 2.6 2.6-1.7.3-2.3.9-2.6 2.6-.3-1.7-.9-2.3-2.6-2.6 1.7-.3 2.3-.9 2.6-2.6Z" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6" />
+      <path d="m20 20-3.4-3.4" />
     </>
   ),
 };

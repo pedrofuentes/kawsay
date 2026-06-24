@@ -1,6 +1,6 @@
 // The main application shell after onboarding. It owns the sidebar + status bar and
-// routes the primary sections. The timeline is the real virtualized screen (U1); the
-// search body is still a light placeholder until U2 replaces it, reading the open
+// routes the primary sections. The timeline (U1) and search (U2) are the real screens;
+// add-memories and settings stay light placeholders for now, all reading the open
 // library from LibraryContext and moving between sections via useNavigation.
 import type { ReactElement } from 'react';
 import { AppShell } from '@renderer/components/AppShell';
@@ -9,6 +9,7 @@ import { EmptyState } from '@renderer/components/EmptyState';
 import { Icon } from '@renderer/components/Icon';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
+import { Search } from '@renderer/views/Search';
 import { Timeline } from '@renderer/views/Timeline';
 import { Sidebar } from './Sidebar';
 
@@ -30,16 +31,7 @@ export function MainApp(): ReactElement {
   function renderSection(): ReactElement | null {
     switch (view.name) {
       case 'search':
-        return (
-          <section className="flex flex-col gap-6">
-            <h1 className="font-display text-3xl font-semibold text-text-primary">Search</h1>
-            <EmptyState
-              icon={<Icon name="messages" className="h-8 w-8" />}
-              title="Search is on its way"
-              description="Soon you'll be able to find a name, a place, or a few words from anywhere in the library."
-            />
-          </section>
-        );
+        return <Search />;
       case 'add-memories':
         return (
           <section className="flex flex-col gap-6">

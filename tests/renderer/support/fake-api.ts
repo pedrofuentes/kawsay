@@ -8,29 +8,40 @@ import type {
   ItemCardDTO,
   KawsayAPI,
   LibrarySummaryDTO,
+  SearchResultDTO,
 } from '@shared/kawsay-api';
 
 /** A stable, valid-looking job id used across import tests. */
 export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
-/** A stable, valid-looking item id, mutated per-index by {@link makeItemCard}. */
-const ITEM_ID_BASE = '11111111-2222-4333-8444-555555550000';
+let itemCardSeq = 0;
 
-/** Build a single timeline tile, overriding only the fields a test cares about. */
+/**
+ * Build a renderer-shaped timeline/search tile. The id is unique per call so
+ * list-key and dedup tests get visibly distinct rows; pass `over` (e.g. `{ id }`)
+ * to pin any field — including a deterministic id — when a test asserts on it.
+ */
 export function makeItemCard(over: Partial<ItemCardDTO> = {}): ItemCardDTO {
+  itemCardSeq += 1;
   return {
-    id: ITEM_ID_BASE,
+    id: `00000000-0000-4000-8000-${String(itemCardSeq).padStart(12, '0')}`,
     mediaType: 'photo',
     mimeType: 'image/jpeg',
-    captureDate: '2019-06-12T10:00:00.000Z',
+    captureDate: '2019-06-15T10:00:00.000Z',
     durationSec: null,
     title: 'A quiet afternoon',
     description: null,
     isFavourite: false,
-    width: 1200,
-    height: 800,
+    width: 1600,
+    height: 1200,
     ...over,
   };
+}
+
+/** Build a search-result page; `total` defaults to the number of items given. */
+export function makeSearchResult(over: Partial<SearchResultDTO> = {}): SearchResultDTO {
+  const items = over.items ?? [];
+  return { items, total: over.total ?? items.length };
 }
 
 export function makeLibrarySummary(over: Partial<LibrarySummaryDTO> = {}): LibrarySummaryDTO {

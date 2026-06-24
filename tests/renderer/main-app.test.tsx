@@ -20,10 +20,13 @@ describe('MainApp routing', () => {
     expect(screen.getByRole('region', { name: /memories/i })).toBeInTheDocument();
   });
 
-  it('leaves the search section placeholder untouched (owned by U2)', () => {
+  it('mounts the real Search view (not a placeholder) for the search view', () => {
     const api = makeFakeApi();
     render(wrapInProviders(<MainApp />, api, { name: 'search' }));
+    // The placeholder never rendered a search landmark or box — the live Search view does.
     expect(screen.getByRole('heading', { level: 1, name: 'Search' })).toBeInTheDocument();
-    expect(screen.getByText(/search is on its way/i)).toBeInTheDocument();
+    expect(screen.getByRole('search')).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: /search/i })).toBeInTheDocument();
+    expect(screen.queryByText(/search is on its way/i)).not.toBeInTheDocument();
   });
 });
