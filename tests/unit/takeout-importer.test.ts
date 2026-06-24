@@ -136,6 +136,10 @@ function buildFs(files: Record<string, FileSpec>, options: FsOptions = {}): Fake
     openReadStream(path: string): Readable {
       streamReads.push(path);
       if (streamErrors.has(path)) throw new Error(`EACCES openReadStream ${path}`);
+      // A scratch file the importer materialized (a zip-extracted mbox or an
+      // attachment) streams back from the write log, mirroring the real fs where
+      // openReadStream (createReadStream) streams ANY on-disk file (AC-11).
+      if (writes.has(path)) return Readable.from(writes.get(path) as Buffer);
       const spec = fileMap.get(path);
       if (!spec) throw new Error(`ENOENT openReadStream ${path}`);
       return Readable.from(bytesOf(spec));
@@ -631,7 +635,11 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
   });
 
   describe('zip Takeout (extracted via the injected guarded extractor)', () => {
-    function zipDeps(entries: Record<string, string>): { deps: ImporterDeps; extractCalls: string[] } {
+    function zipDeps(entries: Record<string, string>): {
+      deps: ImporterDeps;
+      extractCalls: string[];
+      f: FakeFs;
+    } {
       const f = buildFs({});
       const extractCalls: string[] = [];
       const deps = makeDeps(f, {
@@ -648,8 +656,26 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
           });
         },
       });
-      return { deps, extractCalls };
+      return { deps, extractCalls, f };
     }
+
+    it('streams a zip-extracted mbox via openReadStream — never a whole-file readFile (AC-11 regression)', async () => {
+      // Google Takeout ships as a .zip, so the extracted mailbox is the PRIMARY,
+      // tested import path. The extracted file is a real on-disk scratch file and
+      // MUST stream like the user's own standalone .mbox: a whole-file readFile
+      // throws ERR_FS_FILE_TOO_LARGE on a >2 GiB mailbox (and blows the heap) →
+      // one E_READ_MBOX → every email in that mailbox is silently dropped (AC-11).
+      const { deps, f } = zipDeps({ 'Takeout/Mail/All mail.mbox': mbox(EMAIL_0) });
+      const mboxAbs = join(WORK, 'Takeout', 'Mail', 'All mail.mbox');
+
+      const { records } = await run('/drop/takeout.zip', deps);
+
+      // Read through the streaming seam, not buffered whole-file into memory.
+      expect(f.streamReads).toContain(mboxAbs);
+      expect(f.readFileReads).not.toContain(mboxAbs);
+      // …and the email survived (no bulk loss on the primary .zip path).
+      expect(records.some((r) => r.sourceMeta.subject === 'Hello there')).toBe(true);
+    });
 
     it('imports an mbox email and a photo+sidecar from a Takeout .zip', async () => {
       const { deps, extractCalls } = zipDeps({
