@@ -22,9 +22,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
-    "dist": "pnpm rebuild:native && electron-vite build && electron-builder",
-    "dist:mac": "pnpm rebuild:native && electron-vite build && electron-builder --mac dmg",
-    "dist:win": "pnpm rebuild:native && electron-vite build && electron-builder --win nsis"
+    "dist": "pnpm rebuild:native && electron-vite build && electron-builder --publish never",
+    "dist:mac": "pnpm rebuild:native && electron-vite build && electron-builder --mac dmg zip --publish never",
+    "dist:win": "pnpm rebuild:native && electron-vite build && electron-builder --win nsis --publish never"
   },
   "dependencies": {
     "better-sqlite3": "12.9.0",
