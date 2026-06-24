@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 import { hashFile } from '../../electron/main/importers/deps/hash';
 import { nodeFs } from '../../electron/main/importers/deps/node-fs';
+import { folderImporter } from '../../electron/main/importers/folder-importer';
+import type { ImportContext } from '../../electron/main/importers/types';
 import { normalizeExif, asUtcInstant, readExif } from '../../electron/main/importers/deps/exif';
 import {
   parseFfprobe,
@@ -65,6 +67,97 @@ describe('nodeFs (the real FsLike)', () => {
     expect(await nodeFs.readDir(dir)).toContain('x.txt');
     expect((await nodeFs.readFile(file)).toString()).toBe('abc');
   });
+});
+
+describe('nodeFs symlink handling (lstat semantics — issue #51)', () => {
+  // fsp.stat follows symlinks, so a symlinked DIRECTORY would report
+  // isDirectory()===true and the folder walker would descend it — enabling a
+  // symlink cycle (unbounded recursion) or an escape outside the selected root
+  // (e.g. into ~/.ssh). The concrete stat must use lstat semantics so a symlink
+  // reports as NEITHER file nor directory and the walker simply ignores it.
+  it('reports a symlinked directory as neither file nor directory', async () => {
+    const dir = tmp('symdir');
+    const realDir = join(dir, 'real-dir');
+    mkdirSync(realDir);
+    const link = join(dir, 'link-to-dir');
+    symlinkSync(realDir, link, 'dir');
+
+    const stat = await nodeFs.stat(link);
+
+    expect(stat.isDirectory()).toBe(false);
+    expect(stat.isFile()).toBe(false);
+  });
+
+  it('reports a symlinked file as neither file nor directory', async () => {
+    const dir = tmp('symfile');
+    const realFile = join(dir, 'real.txt');
+    writeFileSync(realFile, 'bytes');
+    const link = join(dir, 'link-to-file');
+    symlinkSync(realFile, link, 'file');
+
+    const stat = await nodeFs.stat(link);
+
+    expect(stat.isFile()).toBe(false);
+    expect(stat.isDirectory()).toBe(false);
+  });
+
+  it('still reports real files and directories correctly (behavior intact)', async () => {
+    const dir = tmp('symreal');
+    const file = join(dir, 'a.txt');
+    writeFileSync(file, 'abc');
+
+    const fileStat = await nodeFs.stat(file);
+    expect(fileStat.isFile()).toBe(true);
+    expect(fileStat.isDirectory()).toBe(false);
+    expect(fileStat.size).toBe(3);
+
+    const dirStat = await nodeFs.stat(dir);
+    expect(dirStat.isDirectory()).toBe(true);
+    expect(dirStat.isFile()).toBe(false);
+  });
+});
+
+describe('folder walker ignores directory symlinks (defense-in-depth — issue #51)', () => {
+  it('does not recurse into a directory symlink that points to an ancestor (no cycle)', async () => {
+    const root = tmp('symwalk');
+    writeFileSync(join(root, 'real.txt'), 'hello');
+    // A directory symlink pointing back to its own ancestor: if the walker
+    // followed it, real.txt would be re-discovered at every depth and the walk
+    // would never terminate.
+    symlinkSync(root, join(root, 'loop'), 'dir');
+
+    const deps = createImporterDeps({ extractArchive: unavailableExtractArchive });
+    const ctx: ImportContext = {
+      sourceId: 'src',
+      workDir: join(root, '.work'),
+      signal: new AbortController().signal,
+      deps,
+      onSkip: () => undefined,
+      onProgress: () => undefined,
+    };
+
+    // Drive the importer with both a hard pull cap (catches infinite re-yielding,
+    // whatever order readDir returns the entries in) and an overall timeout
+    // (catches a no-yield infinite recursion) so a buggy, symlink-following
+    // walker fails fast instead of hanging the suite.
+    const drain = (async (): Promise<string[]> => {
+      const refs: string[] = [];
+      const gen = folderImporter.import(root, ctx);
+      for (let i = 0; i < 500; i++) {
+        const next = await gen.next();
+        if (next.done) return refs;
+        refs.push(next.value.sourceRef);
+      }
+      throw new Error('walker exceeded the record cap — it descended into the symlink');
+    })();
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('walker did not terminate — it followed the symlink')), 3000);
+    });
+
+    const refs = await Promise.race([drain, timeout]);
+
+    expect(refs).toEqual(['real.txt']);
+  }, 10_000);
 });
 
 describe('exif (exifr wrapper, ARCHITECTURE §3.2/§7.2)', () => {
