@@ -13,6 +13,8 @@ export interface PathFieldProps {
   helper?: string;
   placeholder?: string;
   labelHidden?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
 }
 
 export function PathField({
@@ -23,10 +25,18 @@ export function PathField({
   helper,
   placeholder,
   labelHidden = false,
+  invalid = false,
+  describedBy,
 }: PathFieldProps): ReactElement {
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const helperId = helper !== undefined ? `${inputId}-helper` : undefined;
+  // Associate the input with both its static helper copy and any active error
+  // message (LibraryLocationStep passes the ErrorBanner id when status is error),
+  // so screen readers announce the failure when focus lands on the field.
+  const describedByIds = [helperId, describedBy]
+    .filter((token): token is string => token !== undefined && token !== '')
+    .join(' ');
 
   return (
     <div className="flex flex-col gap-2">
@@ -48,9 +58,10 @@ export function PathField({
         type="text"
         value={value}
         placeholder={placeholder}
-        aria-describedby={helperId}
+        aria-describedby={describedByIds === '' ? undefined : describedByIds}
+        aria-invalid={invalid ? true : undefined}
         onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
-        className="min-h-12 rounded-lg border border-border-interactive bg-surface-raised px-4 font-body text-base text-text-primary placeholder:text-text-tertiary"
+        className="min-h-12 rounded-lg border border-border-interactive bg-surface-raised px-4 font-body text-base text-text-primary placeholder:text-text-secondary"
       />
     </div>
   );

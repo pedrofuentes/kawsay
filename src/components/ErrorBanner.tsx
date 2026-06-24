@@ -5,6 +5,7 @@ import type { ReactElement } from 'react';
 import { Button } from './Button';
 
 export interface ErrorBannerProps {
+  id?: string;
   title?: string;
   message: string;
   onRetry?: () => void;
@@ -12,6 +13,7 @@ export interface ErrorBannerProps {
 }
 
 export function ErrorBanner({
+  id,
   title,
   message,
   onRetry,
@@ -19,6 +21,7 @@ export function ErrorBanner({
 }: ErrorBannerProps): ReactElement {
   return (
     <div
+      id={id}
       role="alert"
       className="flex flex-col gap-3 rounded-lg border border-error-border bg-error-bg p-5 text-error-text"
     >
