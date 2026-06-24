@@ -119,6 +119,31 @@ describe('nodeFs symlink handling (lstat semantics — issue #51)', () => {
   });
 });
 
+describe('nodeFs streaming read + scratch write (Takeout seam — AC-11)', () => {
+  it('openReadStream yields the file bytes without a whole-file readFile', async () => {
+    const dir = tmp('stream');
+    const file = join(dir, 'big.mbox');
+    writeFileSync(file, 'From a@b\r\nSubject: hi\r\n\r\nbody\r\n');
+
+    const stream = nodeFs.openReadStream?.(file);
+    expect(stream).toBeDefined();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as NodeJS.ReadableStream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks).toString('utf8')).toBe('From a@b\r\nSubject: hi\r\n\r\nbody\r\n');
+  });
+
+  it('writeFile persists bytes into a nested scratch path (creating parents)', async () => {
+    const dir = tmp('scratchwrite');
+    const target = join(dir, 'nested', 'deep', 'att.bin');
+
+    await nodeFs.writeFile?.(target, Buffer.from('attachment-bytes'));
+
+    expect((await nodeFs.readFile(target)).toString('utf8')).toBe('attachment-bytes');
+  });
+});
+
 describe('folder walker ignores directory symlinks (defense-in-depth — issue #51)', () => {
   it('does not recurse into a directory symlink that points to an ancestor (no cycle)', async () => {
     const root = tmp('symwalk');

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Google Takeout importer (card C4, AC-11): the connector for a **Google Takeout** export — it brings your
+  **Gmail mailbox** and **Google Photos** library into the catalogue. Point it at the export folder, the
+  original **`.zip`** (unpacked through the zip-slip–guarded extractor, never a raw unzip), or a standalone
+  **`.mbox`**. The Gmail mailbox is streamed **a message at a time** — whether it comes from the **`.zip`**
+  (the format Google Takeout downloads in), an unpacked folder, or a standalone file — so even a
+  multi-gigabyte mailbox is never loaded into memory at once: each email keeps its **date, sender, subject,
+  and text** (so the words are searchable), quoted lines that begin with "From" are restored correctly
+  rather than splitting a message in
+  two, and every **attachment becomes its own photo/video/file** saved alongside the rest. For Google Photos,
+  each picture or clip is paired with the little **`.json` metadata file** Takeout writes next to it to
+  recover the real **date taken, location, and description**, falling back to the file's own EXIF and then its
+  timestamp when that metadata is missing — and the pairing tolerates the ways Takeout mangles long or
+  duplicated filenames (`name(1).jpg` ↔ `name.jpg(1).json`, truncated names), so a photo is never dropped or
+  matched to the wrong sidecar. A garbled email, a corrupt metadata file, an unreadable file, or a damaged
+  archive is skipped and reported rather than aborting the import, which can also be cancelled while it runs.
 - IPC surface and off-thread ingestion harness (card F3c, AC-9): the renderer-facing bridge over the
   F3b engine and the worker that runs it off the UI thread. Seven channels are exposed through the F1
   `contextBridge` as a **typed `window.kawsayAPI`** — `library:create`, `library:open`,
@@ -29,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`selectImporter` picks the first connector whose `canHandle` matches — folder, then WhatsApp) and the
   TS types the renderer cards (U1–U3) import. No new dependencies; the F1 security model
   (contextIsolation, nodeIntegration off, CSP, navigation guards, AC-4 zero-egress) is unchanged.
+- WhatsApp "Export Chat" importer (card C3, AC-1): the flagship messaging connector — brings a
   conversation's **text messages, photos, voice notes, audio, video, and documents** into the
   catalogue end-to-end. Point it at the exported **`.zip`** (unpacked through the zip-slip–guarded
   extractor, never a raw unzip) or a folder you already extracted. It reads the `_chat.txt` log
