@@ -19,7 +19,10 @@ import type {
 // Realistic export logs live as reviewable fixtures; the mock deps feed their
 // text through the importer exactly as the guarded extractor / fs would in prod.
 function fixture(name: string): string {
-  return readFileSync(fileURLToPath(new URL(`../fixtures/whatsapp/${name}`, import.meta.url)), 'utf8');
+  return readFileSync(
+    fileURLToPath(new URL(`../fixtures/whatsapp/${name}`, import.meta.url)),
+    'utf8',
+  );
 }
 const IOS_CHAT = fixture('ios_chat.txt');
 const ANDROID_CHAT = fixture('android_chat.txt');
@@ -93,10 +96,7 @@ function makeZipDeps(
 }
 
 // A flat in-memory folder (a WhatsApp export extracted in place by the user).
-function makeFolderDeps(
-  root: string,
-  files: Record<string, string>,
-): ImporterDeps {
+function makeFolderDeps(root: string, files: Record<string, string>): ImporterDeps {
   const fileMap = new Map<string, string>();
   for (const [name, content] of Object.entries(files)) {
     fileMap.set(join(root, name), content);
@@ -164,7 +164,13 @@ async function run(
   const c = makeContext(deps, signal);
   const records: CatalogRecord[] = [];
   const result = await drainImporter(whatsappImporter, inputPath, c.ctx, (r) => records.push(r));
-  return { records, byRef: new Map(records.map((r) => [r.sourceRef, r])), result, skips: c.skips, progress: c.progress };
+  return {
+    records,
+    byRef: new Map(records.map((r) => [r.sourceRef, r])),
+    result,
+    skips: c.skips,
+    progress: c.progress,
+  };
 }
 
 function utc(y: number, mo: number, d: number, h: number, mi: number, s = 0): number {
@@ -252,7 +258,11 @@ describe('whatsappImporter (card C3 — WhatsApp "Export Chat" importer, AC-1)',
       expect(text?.mimeType).toBeNull();
       expect(text?.date?.source).toBe('message');
       expect(text?.date?.value.getTime()).toBe(utc(2023, 11, 30, 14, 30, 0));
-      expect(text?.sourceMeta).toMatchObject({ chatName: 'Family', platform: 'ios', system: false });
+      expect(text?.sourceMeta).toMatchObject({
+        chatName: 'Family',
+        platform: 'ios',
+        system: false,
+      });
       expect(text?.sourceMeta.rawTimestamp).toBeTypeOf('string');
     });
 

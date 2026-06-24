@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- WhatsApp "Export Chat" importer (card C3, AC-1): the flagship messaging connector — brings a
+  conversation's **text messages, photos, voice notes, audio, video, and documents** into the
+  catalogue end-to-end. Point it at the exported **`.zip`** (unpacked through the zip-slip–guarded
+  extractor, never a raw unzip) or a folder you already extracted. It reads the `_chat.txt` log
+  across both the **iOS** (`[30/12/2023, 14:30:00] Sender:`) and **Android**
+  (`30/12/2023, 14:30 - Sender:`) layouts, 12- and 24-hour clocks, and the day/month/year order of
+  different regions, stitching multi-line messages back together. Each attachment is matched to its
+  media file and classified — a `.opus`/`.m4a` **voice note becomes audio** with its duration read
+  from the file — while every message keeps its sender, timestamp, and text (so the words are
+  searchable). System notices (the end-to-end-encryption banner, group events) are preserved and
+  flagged, "media omitted" placeholders are kept as notes, and a missing attachment or an
+  unparseable line is skipped and reported rather than aborting the import, which can also be
+  cancelled while it runs.
 - Folder importer (card C1, AC-2): the first concrete connector — imports photos, videos, voice
   notes, and documents from **any folder**, including the local mirrors that iCloud / OneDrive /
   Dropbox / Google-Drive clients download. It walks the directory recursively, classifies each file
