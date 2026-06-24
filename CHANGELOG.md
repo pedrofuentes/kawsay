@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- First-run onboarding & the shared renderer foundation (card U3, AC-12): the renderer is no longer a
+  placeholder. A grieving, non-technical person is now walked — one calm screen at a time — from a warm
+  **welcome**, through naming the person they are honoring, choosing where the **library** lives on this
+  computer (**create** a new one or **open** an existing one via `createLibrary` / `openLibrary`), picking
+  a **source** (WhatsApp · a folder of photos · Google Takeout · Facebook · LinkedIn), a gentle
+  **"how to export"** walkthrough for that source, locating the saved file, and a live **import** with a
+  percent-done bar, a running tally ("84 of 200 so far"), plain-language activity text, and a
+  **Stop for now** affordance (`startImport` / `onImportProgress` / `cancelImport`) — ending on a reverent
+  completion screen ("They're here — 347 memories are now in [Name]'s library") that routes into the main
+  app. Every step reassures that **memories never leave this computer**; partial failures are surfaced
+  gently ("We couldn't read 1 item — every other memory came through, and nothing was lost", AC-15) and the
+  cancelled and error paths are handled without ever showing a raw error code. Focus moves to each step's
+  heading, the flow is fully keyboard-operable with a visible **3px** focus ring, and all motion collapses
+  under `prefers-reduced-motion`. Untrusted export text (a loved one's names and messages) is rendered as
+  escaped data, never markup. This card also establishes the **shared renderer foundation** that the
+  timeline (U1) and search (U2) cards build on: a dependency-free typed **view-state router**
+  (`NavigationProvider` / `useNavigation`), typed **IPC hooks** over `window.kawsayAPI` that tolerate its
+  absence in a browser preview (`KawsayApiProvider` / `useKawsayApi`, `useLibrary`, `useImport`), a
+  **`LibraryProvider`** holding the open library plus create/open actions, an **`AppShell`** + sidebar /
+  status-bar shell, and a small **token-only component set** (Button, SourceCard, StepIndicator,
+  ProgressBar, EmptyState, ErrorBanner, PrivacyBadge, PathField, …). The renderer talks **only** through
+  `window.kawsayAPI` — no network — preserving zero-egress (AC-4) and the F1 security posture.
 - Importer registry wiring (card W1): the **Google Takeout**, **Facebook**, and **LinkedIn** connectors
   are now registered, so an import started from the app (`import:start`) actually **reaches** them — both
   by auto-detection (the registry returns the first connector whose cheap `canHandle` accepts the dropped

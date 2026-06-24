@@ -28,6 +28,78 @@
 
 ---
 
+### ADR-0016: jsdom + Testing Library (dev-only) to drive the renderer test-first
+**Date**: 2026-06-24
+**Status**: Accepted
+**Tier**: auto-with-audit. Every addition is a **devDependency** — it ships in no production bundle, opens
+no network or external origin, and leaves the local-only runtime (ADR-0008, AC-4) untouched; this ADR is
+the required audit note.
+
+**Context**
+SENTINEL/AGENTS mandate test-first. Before card U3 the suite was Node-only (importers, IPC, security)
+under Vitest; there was no way to render a React component or assert on the DOM, so the onboarding flow
+and the shared renderer foundation could not be built test-first. A renderer test environment was needed.
+
+**Decision**
+Add dev-only `jsdom` and `@testing-library/{react,jest-dom,user-event}`, and split `vitest.config.ts`
+into two projects: the existing **node** project and a new **renderer** project (jsdom environment,
+`tests/renderer/setup.ts`). Renderer specs use Testing Library role/label queries and `user-event` —
+mirroring how a non-technical user actually operates the UI — and the suite stays a single `pnpm test`.
+
+**Alternatives considered**
+- **happy-dom** instead of jsdom: lighter, but jsdom is the most widely-exercised, best-compatible DOM for
+  Vitest + Testing Library; chosen for reliability over a marginal speed gain.
+- **Playwright component / e2e testing only**: heavier, slower, Electron-oriented here, and unsuitable as a
+  fast TDD inner loop. Playwright is still used out-of-band for the visual/screenshot pass.
+- **No renderer tests** (manual checking only): violates the test-first mandate; rejected.
+
+**Consequences**
+- The renderer is now TDD-able (55 renderer specs landed with U3) and CI runs them in the same `pnpm test`.
+- Three small, well-known test-only packages enter the lockfile; none reach production or the network.
+- U1/U2 inherit the harness and the `tests/renderer/support` helpers (a fake `window.kawsayAPI`, a render
+  wrapper) and write their screens test-first with no further setup.
+
+---
+
+### ADR-0015: Dependency-free typed view router for the renderer (no `react-router-dom`)
+**Date**: 2026-06-24
+**Status**: Accepted
+**Tier**: auto-with-audit (card U3 pre-authorized adding `react-router-dom` as auto-with-audit; this ADR is
+the required audit note for choosing instead to add **no** dependency). Adds no network egress, backend, or
+external origin, so the local-only invariant (ADR-0008, AC-4) is untouched.
+
+**Context**
+Card U3 builds the first real renderer: onboarding (welcome → name → library location → source →
+walkthrough → locate → import) plus a main app shell with a handful of sections (Timeline, Search, Add
+memories, Settings). The renderer needs a way to move between these views, and U1/U2 need a way to add
+their own screens. Kawsay is a single-window, fully-offline Electron app with no URLs, no deep-linking, no
+server-side routing, and a deliberately small, finite set of screens.
+
+**Decision**
+Use a hand-rolled, **fully-typed view-state router** built on React context: a `View` discriminated union
+(`{ name: 'onboarding' | 'timeline' | 'search' | 'add-memories' | 'settings' }`), a `NavigationProvider`
+holding the current view, and a `useNavigation()` hook exposing `{ view, navigate }`. Onboarding's internal
+step machine (`welcome → … → import`) is local state within `OnboardingFlow`. No routing library is added.
+
+**Alternatives considered**
+- **`react-router-dom`** (pre-authorized): mature and familiar, but built around URLs / history / deep-
+  linking that a single-window offline desktop app does not have. It would add a dependency (and its
+  transitive surface) to express what a ~20-line typed union already expresses, invite URL-shaped patterns
+  that do not map to this app, and grow the bundle for no user-visible benefit.
+- **A state-machine library (XState, etc.)**: far more than a few-screen calm app needs; rejected on the
+  same zero-dep, low-complexity grounds.
+
+**Consequences**
+- Zero new runtime dependencies; nothing to audit for egress; smaller bundle; the navigation surface is
+  exhaustively typed (adding a screen is a compile error until every `switch` handles it).
+- U1 (timeline) and U2 (search) extend navigation by adding a member to the `View` union and a `case` in
+  the renderer — no router config, loaders, or path strings.
+- No URL / deep-link / back-forward history semantics. If a future card needs genuine deep-linking or many
+  dozens of screens, this ADR can be superseded; for the current and foreseeable scope the typed union is
+  simpler and safer.
+
+---
+
 ### ADR-0014: Hand-rolled RFC 4180 CSV reader for the LinkedIn importer (no `csv-parse`/`papaparse` dependency)
 **Date**: 2026-06-24
 **Status**: Accepted
