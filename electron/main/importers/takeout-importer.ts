@@ -140,12 +140,6 @@ interface DiscoveredFile {
   sourceRef: string;
   /** From the folder walk; null for zip entries (statted lazily, only if needed). */
   stat: FileStat | null;
-  /**
-   * True for a file the guarded extractor already wrote to scratch from a `.zip`.
-   * Such a file is read back through the fs seam; a user's own (possibly multi-GB)
-   * folder mbox is instead streamed via {@link FsLike.openReadStream} (AC-11).
-   */
-  fromArchive: boolean;
 }
 
 interface Discovery {
@@ -374,7 +368,7 @@ async function* walkFolder(
     if (stat.isDirectory()) {
       yield* walkFolder(child, root, ctx, skipped);
     } else if (stat.isFile()) {
-      yield { absPath: child, sourceRef: toSourceRef(root, child), stat, fromArchive: false };
+      yield { absPath: child, sourceRef: toSourceRef(root, child), stat };
     }
   }
 }
@@ -406,7 +400,6 @@ async function discover(
       absPath: entry.absPath,
       sourceRef: toPosix(entry.entryPath),
       stat: null,
-      fromArchive: true,
     }));
     return { files, failed: false };
   }
@@ -421,7 +414,7 @@ async function discover(
 
   if (stat.isFile()) {
     return {
-      files: [{ absPath: inputPath, sourceRef: basename(inputPath), stat, fromArchive: false }],
+      files: [{ absPath: inputPath, sourceRef: basename(inputPath), stat }],
       failed: false,
     };
   }
@@ -697,8 +690,12 @@ async function* streamMboxRecords(
 ): AsyncGenerator<CatalogRecord> {
   let stream: Readable | undefined;
   const opener = ctx.deps.fs.openReadStream;
-  if (!file.fromArchive && opener) {
-    // The user's own mbox: stream it so a multi-GB mailbox is never buffered (AC-11).
+  if (opener) {
+    // Stream EVERY real on-disk mbox — the user's own standalone file AND a
+    // zip-extracted one (the guarded extractor already materialized it to a
+    // scratch file, which openReadStream streams just the same) — so even a
+    // multi-GB mailbox is never buffered whole into memory (AC-11). Google
+    // Takeout ships as a `.zip`, so this is the primary import path.
     try {
       stream = opener(file.absPath);
     } catch (error) {
@@ -706,8 +703,7 @@ async function* streamMboxRecords(
       return;
     }
   } else {
-    // A zip-extracted mbox (already materialized to scratch by the guarded
-    // extractor) or a seam without streaming support: read the bytes back.
+    // No streaming seam available: fall back to a one-shot read of the bytes.
     try {
       stream = Readable.from(await ctx.deps.fs.readFile(file.absPath));
     } catch (error) {
