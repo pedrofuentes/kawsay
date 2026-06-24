@@ -289,6 +289,51 @@ describe('runIngestion (the off-thread ingestion orchestrator, ARCHITECTURE §5)
     expect(count(db, 'SELECT COUNT(*) AS n FROM items')).toBe(1); // the good one still landed
   });
 
+  it('skips a record whose putOriginal throws and still completes the run (AC-15)', async () => {
+    const bad = write('bad.mp4', 'BAD-BYTES');
+    const good = write('good.mp4', 'GOOD-BYTES');
+    const goodHash = createHash('sha256').update('GOOD-BYTES').digest('hex');
+    // Two ARCHIVE-sourced records (sourceType !== 'folder') so both take the
+    // content-addressed putOriginal retention path. The first record's hash is
+    // one the originals store rejects, forcing putOriginal to throw mid-run; an
+    // unguarded retention step would abort the whole import (bypassing AC-15).
+    const importer = makeImporter([
+      record({
+        sourceType: 'whatsapp',
+        mediaType: 'video',
+        mimeType: 'video/mp4',
+        originalPath: bad,
+        sourceRef: 'media/bad.mp4',
+      }),
+      record({
+        sourceType: 'whatsapp',
+        mediaType: 'video',
+        mimeType: 'video/mp4',
+        originalPath: good,
+        sourceRef: 'media/good.mp4',
+      }),
+    ]);
+    const deps = makeDeps({
+      hashFile: async (p) =>
+        p.endsWith('bad.mp4')
+          ? 'not-a-valid-content-hash'
+          : createHash('sha256').update(readFileSync(p)).digest('hex'),
+    });
+
+    const summary = await run(importer, { deps }).promise;
+
+    // The run completed (it did NOT throw): the bad record is reported skipped…
+    expect(summary.skipped).toContainEqual({
+      ref: 'media/bad.mp4',
+      reason: expect.any(String),
+      code: 'E_ORIGINAL_STORE',
+    });
+    // …and the following record still persisted.
+    expect(count(db, 'SELECT COUNT(*) AS n FROM items')).toBe(1);
+    const item = db.prepare('SELECT content_hash FROM items').get() as { content_hash: string };
+    expect(item.content_hash).toBe(goodHash);
+  });
+
   it('a thumbnail failure does not fail the item (counted as thumbnailFailures)', async () => {
     const file = write('photo.jpg', 'THUMBFAIL');
     const importer = makeImporter([
