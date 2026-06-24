@@ -44,7 +44,9 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy });
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
-    await expect(listener?.({ senderFrame: { url: 'https://evil.example' } }, {})).rejects.toThrow();
+    await expect(
+      listener?.({ senderFrame: { url: 'https://evil.example' } }, {}),
+    ).rejects.toThrow();
     expect(spy).not.toHaveBeenCalled();
   });
 

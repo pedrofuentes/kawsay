@@ -3,7 +3,9 @@ import { isTrustedSenderUrl } from '../../electron/main/ipc/sender';
 
 describe('isTrustedSenderUrl (IPC sender-origin guard, ARCHITECTURE §2.3)', () => {
   it('trusts the packaged renderer served from file://', () => {
-    expect(isTrustedSenderUrl('file:///Applications/Kawsay.app/out/renderer/index.html')).toBe(true);
+    expect(isTrustedSenderUrl('file:///Applications/Kawsay.app/out/renderer/index.html')).toBe(
+      true,
+    );
   });
 
   it('rejects any remote origin', () => {
