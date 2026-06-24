@@ -22,7 +22,8 @@ export interface MessagePortLike {
 
 /** The slice of a worker_threads `Worker` we depend on (a port plus terminate). */
 export interface WorkerLike extends MessagePortLike {
-  terminate(): Promise<unknown> | unknown;
+  /** Fire-and-forget teardown (the return — sync or a Promise — is ignored). */
+  terminate(): unknown;
 }
 
 /** Host-side handle over a worker_threads `Worker`. */

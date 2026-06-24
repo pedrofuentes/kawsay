@@ -64,7 +64,8 @@ export interface WorkerPort {
 export interface IngestionWorkerHandle {
   post(message: HostToWorkerMessage): void;
   onMessage(handler: (message: WorkerToHostMessage) => void): void;
-  terminate(): void | Promise<unknown>;
+  /** Fire-and-forget teardown (the return — sync or a Promise — is ignored). */
+  terminate(): unknown;
 }
 
 /** Spawns a fresh worker handle for one job (injected so the coordinator is
