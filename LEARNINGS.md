@@ -19,6 +19,25 @@
 
 <!-- Add new learnings below this line, most recent first -->
 
+### [2026-06-24] axe-core in jsdom cannot judge colour-contrast — assert tokens, not pixels
+**Context**: Card X2 — adding `axe-core` to ratchet WCAG 2.1 A/AA across every renderer screen, and trying
+to make the suite catch the sub-AA placeholder colour (issue #104).
+**Learning**:
+- **`color-contrast` is reported as `incomplete`, never `violation`, under jsdom.** axe needs real layout
+  and a canvas to sample rendered pixels; jsdom has neither (you'll see `HTMLCanvasElement.getContext()
+  not implemented` on every run). So an `axe(container)` sweep — even with the contrast rule enabled — will
+  pass on a screen whose text is below AA. It is a genuine regression net for **structural/semantic** rules
+  (roles, names, labels, landmarks, `aria-*`), not for contrast.
+- **Therefore assert contrast at the token/class level, not via axe.** Issue #104 is locked in by asserting
+  the input's `className` carries `placeholder:text-text-secondary` (7.77:1) and **not**
+  `placeholder:text-text-tertiary` (3.98:1). The actual ratios live in `USER_FLOWS.md` §6.1 and are the
+  ground truth; the test guards the binding, the doc guards the number.
+- **Keep the helper scoped to violations only.** `runOnly: { type: 'tag', values: ['wcag2a','wcag2aa',
+  'wcag21a','wcag21aa'] }` + `resultTypes: ['violations']` maps precisely to "WCAG 2.1 AA" and keeps the
+  noisy `incomplete` bucket (including contrast) out of the assertion.
+**Impact**: Future a11y work should pair axe sweeps (structure/semantics) with explicit token assertions or
+a real-browser check (Playwright) for any contrast claim. Don't trust a green axe run as proof of contrast.
+
 ### [2026-06-23] better-sqlite3 in an Electron+Vitest repo: dual ABI, local typings, `?raw` DDL
 **Context**: Building the local library core (card F3) — wiring `better-sqlite3` so it works both under
 Electron (runtime) and under Vitest (Node) without adding dependencies beyond the two the card allows.
