@@ -14,7 +14,11 @@ export type IconName =
   | 'heart'
   | 'arrow-right'
   | 'check'
-  | 'sparkle';
+  | 'sparkle'
+  | 'search'
+  | 'video'
+  | 'audio'
+  | 'document';
 
 const PATHS: Record<IconName, ReactElement> = {
   lock: (
@@ -76,6 +80,32 @@ const PATHS: Record<IconName, ReactElement> = {
     <>
       <path d="M12 4c.6 3.6 1.8 4.8 5.4 5.4-3.6.6-4.8 1.8-5.4 5.4-.6-3.6-1.8-4.8-5.4-5.4C10.2 8.8 11.4 7.6 12 4Z" />
       <path d="M18.5 14.5c.3 1.7.9 2.3 2.6 2.6-1.7.3-2.3.9-2.6 2.6-.3-1.7-.9-2.3-2.6-2.6 1.7-.3 2.3-.9 2.6-2.6Z" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6" />
+      <path d="m20 20-3.4-3.4" />
+    </>
+  ),
+  video: (
+    <>
+      <rect x="3" y="6" width="18" height="12" rx="2.5" />
+      <path d="m10 9.5 5 2.5-5 2.5Z" />
+    </>
+  ),
+  audio: (
+    <>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3" />
+    </>
+  ),
+  document: (
+    <>
+      <path d="M7 3.5h6.5L18 8v12.5H7Z" />
+      <path d="M13 3.5V8h5" />
+      <path d="M9.5 12.5h5M9.5 15.5h5" />
     </>
   ),
 };

@@ -44,10 +44,17 @@ describe('Search — the search box and querying', () => {
       const api = makeFakeApi({
         searchCatalog: vi.fn(() => Promise.resolve(makeSearchResult())),
       });
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime, delay: null });
       render(wrapInProviders(<Search />, api, { name: 'search' }));
 
-      await user.type(screen.getByRole('searchbox'), 'mama');
+      // Several keystrokes land inside one debounce window. fireEvent (not
+      // userEvent) is used deliberately: userEvent's keyboard loop deadlocks
+      // against vi's fake timers, and all we need to prove here is that rapid
+      // edits coalesce into a single, final-query search.
+      const input = screen.getByRole('searchbox');
+      fireEvent.change(input, { target: { value: 'm' } });
+      fireEvent.change(input, { target: { value: 'ma' } });
+      fireEvent.change(input, { target: { value: 'mam' } });
+      fireEvent.change(input, { target: { value: 'mama' } });
       // Still within the debounce window: no thrashing of the catalog per keystroke.
       expect(api.searchCatalog).not.toHaveBeenCalled();
 
@@ -84,7 +91,7 @@ describe('Search — the search box and querying', () => {
 
     expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
     expect(screen.getByText(/2019/)).toBeInTheDocument();
-    expect(screen.getByText(/photo/i)).toBeInTheDocument();
+    expect(screen.getByText(/^photo$/i)).toBeInTheDocument();
   });
 
   it('falls back to the description as the caption when an item has no title', async () => {

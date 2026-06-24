@@ -9,6 +9,7 @@ import { EmptyState } from '@renderer/components/EmptyState';
 import { Icon } from '@renderer/components/Icon';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
+import { Search } from '@renderer/views/Search';
 import { Sidebar } from './Sidebar';
 
 export function MainApp(): ReactElement {
@@ -25,16 +26,7 @@ export function MainApp(): ReactElement {
   function renderSection(): ReactElement {
     switch (view.name) {
       case 'search':
-        return (
-          <section className="flex flex-col gap-6">
-            <h1 className="font-display text-3xl font-semibold text-text-primary">Search</h1>
-            <EmptyState
-              icon={<Icon name="messages" className="h-8 w-8" />}
-              title="Search is on its way"
-              description="Soon you'll be able to find a name, a place, or a few words from anywhere in the library."
-            />
-          </section>
-        );
+        return <Search />;
       case 'add-memories':
         return (
           <section className="flex flex-col gap-6">
