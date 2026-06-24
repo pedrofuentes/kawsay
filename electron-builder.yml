@@ -17,9 +17,14 @@ files:
   - out/**
   - package.json
 
-# Native modules (better-sqlite3, ffmpeg/ffprobe binaries) are added with their
-# asarUnpack rules in their respective feature cards.
+# Native modules (ffmpeg/ffprobe binaries) add their asarUnpack rules in their
+# respective feature cards. better-sqlite3 (the catalog engine, card F3) must be
+# unpacked from the asar so its compiled `.node` binary is loadable at runtime;
+# the Electron-ABI rebuild itself is wired via `pnpm rebuild:native` (P1 finalizes
+# afterPack rebuild + fuses).
 asar: true
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
 
 mac:
   category: public.app-category.lifestyle
