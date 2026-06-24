@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Search across the library (card U2, AC-6 · AC-7): a calm way to find one memory by a few plain words.
+  The renderer's `search` section is now a working **Search** view — a labelled search box whose query is
+  **debounced** before it reaches `searchCatalog` (so the catalogue is queried once for the final words, not
+  on every keystroke), with **filters** to narrow the matches by **media type** (photos · videos · voice
+  notes · documents · messages) and a **date range** (the IPC search contract exposes no server-side filters
+  and its result tiles carry `mediaType` + `captureDate` but no source, so type and date are what we narrow
+  on, in memory). Results show a caption (title, falling back to the description), a readable date, and a
+  type label, with the matched words gently **highlighted**. Every state is handled without a cold or
+  alarming screen: a warm **starting prompt** before any query, a reassuring **nothing-found** state that
+  names the term, a **no-match-for-these-filters** state that points back to the filters, an unobtrusive
+  **searching** status that keeps the previous results on screen, and a gentle **error** with a single
+  **Try again** (never a raw `SQLITE`/`fts5` code). Everything the catalogue returns is untrusted data (a
+  loved one's words, captions, filenames) and is rendered as **escaped React text** — the highlight is built
+  from plain string slices wrapped in `<mark>`, never `dangerouslySetInnerHTML` — so a caption like
+  `<script>…` can never become a live element, preserving the F1 / zero-egress (AC-4) posture. The view is
+  **WCAG 2.1 AA**: a `search` landmark, a labelled search box, the filters grouped under accessible labels
+  with `aria-pressed` chips, a polite **status live region** announcing the result count, focus moved to the
+  heading on entry, visible focus, and AA contrast. No new dependencies (the debounce is a few lines); the
+  renderer talks **only** through `window.kawsayAPI` and tolerates its absence in a browser preview.
 - First-run onboarding & the shared renderer foundation (card U3, AC-12): the renderer is no longer a
   placeholder. A grieving, non-technical person is now walked — one calm screen at a time — from a warm
   **welcome**, through naming the person they are honoring, choosing where the **library** lives on this
