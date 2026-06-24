@@ -187,15 +187,27 @@ export async function runIngestion(input: IngestionInput): Promise<IngestionSumm
         occurrenceOriginalPath = record.originalPath;
         renderSourcePath = record.originalPath;
       } else {
-        // §4.4: archive originals are copied ONCE into the content-addressed store.
-        const put = putOriginal({
-          root: libraryRoot,
-          hash: contentHash,
-          ext: originalExt,
-          sourcePath: record.originalPath,
-        });
-        originalKind = 'content_addressed';
-        renderSourcePath = put.absPath;
+        // §4.4: archive originals are copied ONCE into the content-addressed
+        // store. A retention failure (copy I/O error, an ext/hash the store
+        // rejects, disk full) must skip just THIS record — never abort the run
+        // (AC-15), mirroring the hashFile guard above.
+        try {
+          const put = putOriginal({
+            root: libraryRoot,
+            hash: contentHash,
+            ext: originalExt,
+            sourcePath: record.originalPath,
+          });
+          originalKind = 'content_addressed';
+          renderSourcePath = put.absPath;
+        } catch {
+          skipped.push({
+            ref: record.sourceRef,
+            reason: 'could not store original',
+            code: 'E_ORIGINAL_STORE',
+          });
+          return;
+        }
       }
     }
 
