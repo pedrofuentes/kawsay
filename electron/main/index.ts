@@ -4,15 +4,23 @@ import { app, BrowserWindow, ipcMain, session } from 'electron';
 import { APP_GET_VERSION } from '@shared/ipc/contract';
 import { handleGetVersion } from './ipc/handlers/app';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
+import type { TrustedSenderOptions } from './ipc/sender';
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
 import { applyNavigationHardening, buildSecureWebPreferences } from './security/window-hardening';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
+// The packaged renderer entry: the ONLY file:// document trusted as an IPC
+// sender (ARCHITECTURE §2.3), and the file the production window loads.
+const rendererEntryPath = join(moduleDir, '../renderer/index.html');
+
 // electron-vite serves the renderer over http and sets this only in `dev`.
 const rendererDevUrl = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL'];
-const securityOptions: CspOptions =
-  rendererDevUrl === undefined ? {} : { devServerUrl: rendererDevUrl };
+const cspOptions: CspOptions = rendererDevUrl === undefined ? {} : { devServerUrl: rendererDevUrl };
+const senderOptions: TrustedSenderOptions =
+  rendererDevUrl === undefined
+    ? { rendererEntryPath }
+    : { rendererEntryPath, devServerUrl: rendererDevUrl };
 
 // The single source of truth for the renderer's capabilities. Each handler is a
 // pure, separately-tested function; the registrar adds the sender + zod guards.
@@ -38,7 +46,7 @@ function createMainWindow(): void {
   });
 
   if (rendererDevUrl === undefined) {
-    void window.loadFile(join(moduleDir, '../renderer/index.html'));
+    void window.loadFile(rendererEntryPath);
   } else {
     void window.loadURL(rendererDevUrl);
   }
@@ -48,8 +56,8 @@ async function bootstrap(): Promise<void> {
   await app.whenReady();
 
   // Security guards are installed BEFORE any window loads content (ARCHITECTURE §10).
-  installContentSecurityPolicy(session.defaultSession, securityOptions);
-  registerIpcHandlers(ipcMain, ipcHandlers, securityOptions);
+  installContentSecurityPolicy(session.defaultSession, cspOptions);
+  registerIpcHandlers(ipcMain, ipcHandlers, senderOptions);
 
   createMainWindow();
 
