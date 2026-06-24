@@ -139,6 +139,20 @@ interface AttachmentMatch {
   caption: string;
 }
 
+// WhatsApp's Android attachment sentinel: the parenthetical it appends after the
+// filename (`IMG-001.jpg (file attached)`). Matched as a COMPLETE phrase — the
+// literal English marker plus the official localized equivalents WhatsApp ships
+// — so an ordinary trailing parenthetical (`(each)`, `(draft)`, `(mirror)`) is
+// NEVER mistaken for an attachment and the message is kept as text (🔴 #1).
+// A lazy `(.+?)` filename lets a document name with its own spaces/parentheses
+// (`My (final) report.pdf (file attached)`) still resolve to the real marker.
+// Each entry is a specific multi-word phrase, so a false match on ordinary text
+// is implausible; an unlisted locale degrades safely (kept as a text message,
+// never dropped). Written as a static literal (no dynamic `new RegExp`) per this
+// module's style.
+const ANDROID_ATTACHMENT_RE =
+  /^(.+?)\s\(\u200E?(?:file attached|archivo adjunto|arquivo anexado|ficheiro anexado|fichier joint|datei angehängt|file allegato|bestand bijgevoegd)\u200E?\)/iu;
+
 function isZip(inputPath: string): boolean {
   return inputPath.toLowerCase().endsWith('.zip');
 }
@@ -194,8 +208,9 @@ function matchAttachment(body: string): AttachmentMatch | null {
   if (match) {
     return { filename: match[1].trim(), caption: body.slice(match[0].length).trim() };
   }
-  // Android: "filename.ext (file attached)" / "filename.ext <…>".
-  match = /^(.+?\.[A-Za-z0-9]{2,8})\s+[(<][^)>]*[)>]/.exec(body);
+  // Android: "filename.ext (file attached)" — keyed on the real localized
+  // sentinel only, so an ordinary "(...)" parenthetical is left as text (🔴 #1).
+  match = ANDROID_ATTACHMENT_RE.exec(body);
   if (match) {
     return { filename: match[1].trim(), caption: body.slice(match[0].length).trim() };
   }
@@ -329,6 +344,12 @@ function recordSkip(
 interface ChatSource {
   chatAbsPath: string | null;
   attachments: Map<string, string>;
+  /**
+   * A hard discovery failure (e.g. a corrupt / locked / unreadable archive)
+   * that has already been reported via {@link ImportContext.onSkip}. The caller
+   * returns its partial result instead of re-reporting it as a missing chat.
+   */
+  discoveryFailed: boolean;
 }
 
 /** Locate `_chat.txt` and map every co-located media file by its (normalized) name. */
@@ -341,11 +362,24 @@ async function gather(
   let chatAbsPath: string | null = null;
 
   if (isZip(inputPath)) {
-    const entries = await ctx.deps.extractArchive(inputPath, ctx.workDir);
-    for (const entry of entries) {
-      const name = basename(entry.entryPath);
-      if (name === CHAT_FILENAME) chatAbsPath = entry.absPath;
-      else attachments.set(normalizeName(name), entry.absPath);
+    try {
+      const entries = await ctx.deps.extractArchive(inputPath, ctx.workDir);
+      for (const entry of entries) {
+        const name = basename(entry.entryPath);
+        if (name === CHAT_FILENAME) chatAbsPath = entry.absPath;
+        else attachments.set(normalizeName(name), entry.absPath);
+      }
+    } catch (error) {
+      // AC-15: a corrupt / locked / unreadable archive is reported and the run
+      // returns its partial result — it never throws out to abort the import.
+      recordSkip(
+        ctx,
+        skipped,
+        inputPath,
+        `could not extract the WhatsApp archive: ${errorMessage(error)}`,
+        'E_EXTRACT',
+      );
+      return { chatAbsPath: null, attachments, discoveryFailed: true };
     }
   } else {
     for await (const absPath of walkFolder(inputPath, ctx, skipped)) {
@@ -354,7 +388,7 @@ async function gather(
       else attachments.set(normalizeName(name), absPath);
     }
   }
-  return { chatAbsPath, attachments };
+  return { chatAbsPath, attachments, discoveryFailed: false };
 }
 
 interface MessageOutput {
@@ -473,13 +507,31 @@ export const whatsappImporter: Importer = {
       return { recordCount, skipped };
     }
 
-    const { chatAbsPath, attachments } = await gather(inputPath, ctx, skipped);
+    const { chatAbsPath, attachments, discoveryFailed } = await gather(inputPath, ctx, skipped);
+    if (discoveryFailed) {
+      // The archive could not be opened; the skip is already recorded (AC-15).
+      return { recordCount, skipped };
+    }
     if (!chatAbsPath) {
       recordSkip(ctx, skipped, CHAT_FILENAME, 'no _chat.txt found in WhatsApp export', 'E_NO_CHAT');
       return { recordCount, skipped };
     }
 
-    const text = stripBom((await ctx.deps.fs.readFile(chatAbsPath)).toString('utf8'));
+    let text: string;
+    try {
+      text = stripBom((await ctx.deps.fs.readFile(chatAbsPath)).toString('utf8'));
+    } catch (error) {
+      // AC-15: an unreadable _chat.txt is reported, not thrown — the run returns
+      // its partial result (any records emitted so far are preserved).
+      recordSkip(
+        ctx,
+        skipped,
+        chatAbsPath,
+        `could not read ${CHAT_FILENAME}: ${errorMessage(error)}`,
+        'E_READ_CHAT',
+      );
+      return { recordCount, skipped };
+    }
     ctx.onProgress({ phase: 'parse', processed: 0, total: null, message: null });
 
     const lines = text.split('\n');

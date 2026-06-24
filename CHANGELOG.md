@@ -58,4 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- WhatsApp importer no longer mistakes an ordinary message that happens to end in a parenthetical
+  (for example "the price is 3.50 (each)" or "send report.pdf (draft)") for a missing attachment and
+  silently drops it — a loved one's words are always kept. Attachments are now recognised only by
+  WhatsApp's real markers: the Android `FILENAME (file attached)` sentinel (and its common localised
+  equivalents) and the iOS `<attached: FILENAME>` form.
+- WhatsApp importer now treats a corrupt, locked, or unreadable export — a `.zip` that cannot be
+  extracted, or a discovered `_chat.txt` that cannot be read — as a reported skip and finishes with
+  whatever it has already gathered, instead of throwing and aborting the whole import (AC-15).
+
 ### Removed
