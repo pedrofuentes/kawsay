@@ -6,6 +6,7 @@ import { handleGetVersion } from './ipc/handlers/app';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import type { TrustedSenderOptions } from './ipc/sender';
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
+import { installNetworkGuard } from './security/network-guard';
 import {
   applyNavigationHardening,
   buildSecureWebPreferences,
@@ -67,6 +68,8 @@ async function bootstrap(): Promise<void> {
 
   // Security guards are installed BEFORE any window loads content (ARCHITECTURE §10).
   installContentSecurityPolicy(session.defaultSession, cspOptions);
+  // The runtime zero-egress kill-switch (AC-4): cancel every non-local request.
+  installNetworkGuard(session.defaultSession, { isPackaged: app.isPackaged });
   registerIpcHandlers(ipcMain, ipcHandlers, senderOptions);
 
   createMainWindow();
