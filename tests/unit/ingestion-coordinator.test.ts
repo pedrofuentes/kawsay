@@ -34,15 +34,24 @@ const summary: IngestionSummary = {
   cancelled: false,
 };
 
-/** A programmable worker double: the test pushes worker→host events via emit(). */
+/** A programmable worker double: the test pushes worker→host events via emit(),
+ *  and a worker_threads-level fault via emitError()/emitExit(). */
 function fakeHandle() {
   let onMsg: ((m: WorkerToHostMessage) => void) | undefined;
+  let onErr: ((error: Error) => void) | undefined;
+  let onExit: ((code: number) => void) | undefined;
   const posted: HostToWorkerMessage[] = [];
   let terminations = 0;
   const handle: IngestionWorkerHandle = {
     post: (m) => posted.push(m),
     onMessage: (h) => {
       onMsg = h;
+    },
+    onError: (h) => {
+      onErr = h;
+    },
+    onExit: (h) => {
+      onExit = h;
     },
     terminate: () => {
       terminations += 1;
@@ -52,6 +61,8 @@ function fakeHandle() {
     handle,
     posted,
     emit: (m: WorkerToHostMessage) => onMsg?.(m),
+    emitError: (error: Error) => onErr?.(error),
+    emitExit: (code: number) => onExit?.(code),
     get terminations() {
       return terminations;
     },
@@ -164,6 +175,97 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
     coordinator.disposeAll();
     expect(workers[0].terminations).toBe(1);
     expect(workers[1].terminations).toBe(1);
+    expect(coordinator.active()).toEqual([]);
+  });
+
+  // Regression — Sentinel 🔴 (report sentinel-pr66-a0c06ac-f3c, finding #1): a worker
+  // that faults OUTSIDE its job try/catch (module-load failure, native crash in
+  // better-sqlite3/exifr/ffmpeg, OOM, process.exit) emits a worker_threads
+  // `error`/`exit` EVENT, not a protocol `error`/`done` MESSAGE. The coordinator
+  // must observe those events and settle the import (terminal error + teardown),
+  // or the import hangs forever and the worker handle leaks.
+  it('settles the import with a terminal error and tears down when the worker emits an error event', () => {
+    const worker = fakeHandle();
+    const events: ImportProgressEvent[] = [];
+    const coordinator = createIngestionCoordinator({
+      spawn: () => worker.handle,
+      emitProgress: (e) => events.push(e),
+    });
+
+    coordinator.start(job());
+    worker.emit({ type: 'ready' });
+    // The worker faults before it can post a terminal `done`/`error` message.
+    worker.emitError(new Error('native crash in better-sqlite3'));
+
+    const terminal = events.at(-1);
+    expect(terminal).toMatchObject({ jobId: UUID, phase: 'done', summary: null });
+    expect(terminal?.error).toEqual(expect.stringContaining('native crash in better-sqlite3'));
+    expect(terminal?.error).not.toBeNull();
+    expect(importProgressEventSchema.safeParse(terminal).success).toBe(true);
+    expect(worker.terminations).toBe(1); // handle torn down — no orphan
+    expect(coordinator.active()).toEqual([]);
+  });
+
+  it('settles the import with a terminal error and tears down when the worker exits abnormally mid-import', () => {
+    const worker = fakeHandle();
+    const events: ImportProgressEvent[] = [];
+    const coordinator = createIngestionCoordinator({
+      spawn: () => worker.handle,
+      emitProgress: (e) => events.push(e),
+    });
+
+    coordinator.start(job());
+    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'progress', progress: { phase: 'emit', processed: 1, total: 5, message: null } });
+    // An abnormal exit (OOM kill / process.exit) with no terminal message.
+    worker.emitExit(1);
+
+    const terminal = events.at(-1);
+    expect(terminal).toMatchObject({ jobId: UUID, phase: 'done', summary: null });
+    expect(terminal?.error).not.toBeNull();
+    expect(importProgressEventSchema.safeParse(terminal).success).toBe(true);
+    expect(worker.terminations).toBe(1);
+    expect(coordinator.active()).toEqual([]);
+  });
+
+  it('does NOT mis-report the exit that follows a graceful done as a failure', () => {
+    const worker = fakeHandle();
+    const events: ImportProgressEvent[] = [];
+    const coordinator = createIngestionCoordinator({
+      spawn: () => worker.handle,
+      emitProgress: (e) => events.push(e),
+    });
+
+    coordinator.start(job());
+    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'done', summary });
+    // terminate() on a live worker makes Node emit `exit` (with a non-zero code)
+    // AFTER the graceful done — it must not be turned into a spurious error event.
+    worker.emitExit(1);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ jobId: UUID, phase: 'done', summary, error: null });
+    expect(worker.terminations).toBe(1); // exactly one teardown, from the done
+    expect(coordinator.active()).toEqual([]);
+  });
+
+  it('emits exactly one terminal error when a worker both errors and exits', () => {
+    const worker = fakeHandle();
+    const events: ImportProgressEvent[] = [];
+    const coordinator = createIngestionCoordinator({
+      spawn: () => worker.handle,
+      emitProgress: (e) => events.push(e),
+    });
+
+    coordinator.start(job());
+    worker.emit({ type: 'ready' });
+    worker.emitError(new Error('boom'));
+    worker.emitExit(1); // the exit that follows the crash must not double-report
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ jobId: UUID, phase: 'done', summary: null });
+    expect(events[0]?.error).not.toBeNull();
+    expect(worker.terminations).toBe(1);
     expect(coordinator.active()).toEqual([]);
   });
 });
