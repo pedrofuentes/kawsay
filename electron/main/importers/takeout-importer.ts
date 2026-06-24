@@ -299,22 +299,30 @@ function sidecarDescription(sidecar: TakeoutSidecar | null): string | null {
  *  3. a truncation fallback — the longest sidecar stem that prefixes the media
  *     name (Takeout clips very long names). Returns null on no match so the
  *     caller falls back to EXIF/mtime instead of dropping or mis-pairing.
+ *
+ * Takes the directory's existing JSON-name → abs-path `Map` and probes it
+ * directly: the canonical and duplicate-counter hits are O(1) `Map.has`, and
+ * only the truncation fallback makes a single lazy `Map.keys()` pass. Reusing
+ * the caller's Map (instead of spreading its keys into an array and rebuilding a
+ * `Set` per media file) keeps album matching linear in the directory size.
+ * Exported for unit testing of the matching strategy in isolation.
  */
-function findSidecarName(mediaName: string, jsonNames: readonly string[]): string | null {
-  const set = new Set(jsonNames);
-
+export function findSidecarName(
+  mediaName: string,
+  jsonNames: ReadonlyMap<string, string>,
+): string | null {
   const direct = `${mediaName}.json`;
-  if (set.has(direct)) return direct;
+  if (jsonNames.has(direct)) return direct;
 
   const dup = /^(.*)\((\d+)\)(\.[^.]+)$/.exec(mediaName);
   if (dup) {
     const candidate = `${dup[1]}${dup[3]}(${dup[2]}).json`;
-    if (set.has(candidate)) return candidate;
+    if (jsonNames.has(candidate)) return candidate;
   }
 
   let best: string | null = null;
   let bestLen = -1;
-  for (const json of jsonNames) {
+  for (const json of jsonNames.keys()) {
     if (!json.toLowerCase().endsWith('.json')) continue;
     const stem = json.slice(0, json.length - '.json'.length);
     if (stem.length >= 4 && mediaName.startsWith(stem) && stem.length > bestLen) {
@@ -823,7 +831,7 @@ export const takeoutImporter: Importer = {
         let sidecar: TakeoutSidecar | null = null;
         const dirJsons = jsonIndex.get(dirname(file.absPath));
         if (dirJsons && dirJsons.size > 0) {
-          const match = findSidecarName(basename(file.absPath), [...dirJsons.keys()]);
+          const match = findSidecarName(basename(file.absPath), dirJsons);
           const jsonAbsPath = match ? dirJsons.get(match) : undefined;
           if (jsonAbsPath) {
             sidecar = await loadSidecar(jsonAbsPath, file.sourceRef, ctx, skipped);
