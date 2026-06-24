@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { path as ffprobeStaticPath } from 'ffprobe-static';
 import type { MediaInfo, MediaProber } from '../types';
+import { assertLocalMediaPath } from './media-path';
 
 /**
  * The structural subset of an ffprobe result we read — decoupled from ffprobe's
@@ -101,20 +102,43 @@ export function createMediaProber(
 }
 
 /**
+ * Build the ffprobe argv for a single LOCAL path. `-protocol_whitelist file`
+ * pins ffprobe to the file protocol so a crafted local container with an
+ * embedded external reference can never make it open a remote URL (egress,
+ * AC-4); `assertLocalMediaPath` additionally refuses a URL-style top-level
+ * input before we ever spawn. The path is a discrete final element — never
+ * interpolated into a flag or a shell string.
+ */
+export function buildFfprobeArgs(path: string): string[] {
+  assertLocalMediaPath(path);
+  return [
+    '-v',
+    'quiet',
+    '-protocol_whitelist',
+    'file',
+    '-print_format',
+    'json',
+    '-show_format',
+    '-show_streams',
+    path,
+  ];
+}
+
+/**
  * Spawn the bundled ffprobe (subprocess) for a single LOCAL path — never a URL,
  * so ffprobe cannot be coerced into network I/O (§6.1/§7.2, AC-4). Mirrors
  * thumbnail.ts's bounded approach: a discrete array argv (the path is never
- * interpolated into a shell string) and a hard `{ timeout }` that kills a
- * ffprobe stuck on a crafted/truncated file, so the promise rejects (and the
- * prober degrades to all-null) instead of hanging forever.
+ * interpolated into a shell string), `-protocol_whitelist file` to block
+ * embedded remote references, and a hard `{ timeout }` that kills a ffprobe
+ * stuck on a crafted/truncated file, so the promise rejects (and the prober
+ * degrades to all-null) instead of hanging forever.
  */
 const ffprobeStaticRunner: FfprobeRunner = (path) =>
   new Promise<ProbeDataLike>((resolve, reject) => {
-    const child = spawn(
-      ffprobeStaticPath,
-      ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', path],
-      { timeout: FFPROBE_TIMEOUT_MS, windowsHide: true },
-    );
+    const child = spawn(ffprobeStaticPath, buildFfprobeArgs(path), {
+      timeout: FFPROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (chunk: Buffer) => {

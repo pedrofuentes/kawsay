@@ -11,6 +11,7 @@ import { normalizeExif, asUtcInstant, readExif } from '../../electron/main/impor
 import {
   parseFfprobe,
   createMediaProber,
+  buildFfprobeArgs,
   type ProbeDataLike,
 } from '../../electron/main/importers/deps/ffprobe';
 import {
@@ -19,6 +20,7 @@ import {
   createThumbnailGenerator,
   type RunFfmpeg,
 } from '../../electron/main/importers/deps/thumbnail';
+import { assertLocalMediaPath } from '../../electron/main/importers/deps/media-path';
 import {
   createImporterDeps,
   unavailableExtractArchive,
@@ -305,6 +307,21 @@ describe('ffprobe (MediaProber wrapper, subprocess seam)', () => {
       mimeType: null,
     });
   }, 2000);
+
+  it('restricts ffprobe to the local file protocol so a crafted container cannot reach a remote URL (AC-4)', () => {
+    // Without -protocol_whitelist, a crafted local container with an embedded
+    // external reference can make ffprobe open a remote URL (egress). Pin it to
+    // the file protocol so only local input is ever touched.
+    const args = buildFfprobeArgs('/media/clip.mp4');
+    const idx = args.indexOf('-protocol_whitelist');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('file');
+    expect(args.at(-1)).toBe('/media/clip.mp4'); // the input stays the final element
+  });
+
+  it('refuses a remote-style probe path before building the argv (no spawn)', () => {
+    expect(() => buildFfprobeArgs('https://evil.example/x.mp4')).toThrow(/local file/i);
+  });
 });
 
 describe('thumbnail (ffmpeg generator, ARCHITECTURE §5.1/§7.2)', () => {
@@ -388,6 +405,58 @@ describe('thumbnail (ffmpeg generator, ARCHITECTURE §5.1/§7.2)', () => {
         mimeType: 'image/jpeg',
       }),
     ).rejects.toThrow('ffmpeg exited 1');
+  });
+
+  it('restricts ffmpeg to the local file protocol before the input (no embedded remote refs — AC-4)', () => {
+    // -protocol_whitelist must precede -i to apply to the input demuxer, so a
+    // crafted local container cannot make ffmpeg follow an embedded remote ref.
+    const args = buildFrameArgs('/in/a.jpg', '/out/a.webp');
+    const idx = args.indexOf('-protocol_whitelist');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('file');
+    expect(idx).toBeLessThan(args.indexOf('-i'));
+  });
+
+  it('refuses a remote-style source path before invoking ffmpeg', async () => {
+    let ran = false;
+    const generate = createThumbnailGenerator({
+      ffmpegPath: '/bin/ffmpeg',
+      run: async () => {
+        ran = true;
+      },
+    });
+    await expect(
+      generate({
+        libraryRoot: tmp('thumb'),
+        itemId: 'i4',
+        contentHash: 'ab'.repeat(32),
+        mediaType: 'photo',
+        sourcePath: 'https://evil.example/a.jpg',
+        mimeType: 'image/jpeg',
+      }),
+    ).rejects.toThrow(/local file/i);
+    expect(ran).toBe(false); // ffmpeg is never spawned on a non-local input
+  });
+});
+
+describe('assertLocalMediaPath (subprocess input must be a local file — AC-4, ARCHITECTURE §7.2)', () => {
+  it('accepts local POSIX, Windows, and relative paths', () => {
+    expect(() => assertLocalMediaPath('/media/clip.mp4')).not.toThrow();
+    expect(() => assertLocalMediaPath('C:\\media\\clip.mp4')).not.toThrow();
+    expect(() => assertLocalMediaPath('C:/media/clip.mp4')).not.toThrow();
+    expect(() => assertLocalMediaPath('./relative/clip.mp4')).not.toThrow();
+  });
+
+  it('refuses URL-style inputs that could steer ffmpeg/ffprobe onto a remote protocol', () => {
+    for (const p of [
+      'http://evil.example/x.mp4',
+      'https://evil.example/x.mp4',
+      'ftp://evil.example/x',
+      'rtmp://evil.example/x',
+      'file:///etc/passwd',
+    ]) {
+      expect(() => assertLocalMediaPath(p)).toThrow(/local file/i);
+    }
   });
 });
 
