@@ -3,7 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { useTimeline } from '@renderer/lib/use-timeline';
-import type { TimelinePageDTO } from '@shared/kawsay-api';
+import type { KawsayAPI, TimelinePageDTO } from '@shared/kawsay-api';
 import { makeFakeApi, makeItemCard } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
 
@@ -20,7 +20,9 @@ function page(over: Partial<TimelinePageDTO> = {}): TimelinePageDTO {
 describe('useTimeline', () => {
   it('loads the first page through the typed bridge on mount', async () => {
     const items = [makeItemCard({ id: '11111111-2222-4333-8444-555555550001' })];
-    const getTimeline = vi.fn(() => Promise.resolve(page({ items, nextCursor: null })));
+    const getTimeline = vi.fn<KawsayAPI['getTimeline']>(() =>
+      Promise.resolve(page({ items, nextCursor: null })),
+    );
     const api = makeFakeApi({ getTimeline });
     const { result } = renderHook(() => useTimeline(), { wrapper: wrapper(api) });
 
