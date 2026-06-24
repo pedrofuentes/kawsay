@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FUSE_CONFIG } from '../../electron/build/fuses';
+import { FUSE_CONFIG } from '../../electron/fuses/fuses';
 
 // The fuses are physically flipped during packaging (card P1, via @electron/fuses);
 // here we pin the intended states from ARCHITECTURE §2.5 so the security posture is
