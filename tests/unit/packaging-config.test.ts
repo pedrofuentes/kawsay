@@ -1,0 +1,115 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { FUSE_CONFIG } from '../../electron/fuses/fuses';
+
+// The electron-builder packaging contract for AC-5 (ADR-0007, ARCHITECTURE §8).
+// These assertions pin the load-bearing packaging invariants — the native-module
+// unpack rules (without which the packaged app crashes on first DB open), the
+// macOS/Windows targets, the unsigned-v1 posture, the security-fuse flip, and the
+// zero-egress / human-required-publish boundary — so they cannot silently regress.
+const repoRoot = (rel: string): string => fileURLToPath(new URL(`../../${rel}`, import.meta.url));
+const builderYml = readFileSync(repoRoot('electron-builder.yml'), 'utf8');
+// The config with comments removed, for assertions about actual configuration
+// (not the explanatory prose, which legitimately names what we deliberately omit).
+const builderConfig = builderYml
+  .split('\n')
+  .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
+  .join('\n');
+const packageJson = JSON.parse(readFileSync(repoRoot('package.json'), 'utf8')) as {
+  scripts: Record<string, string>;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+
+/** Return the indented body lines that belong to a top-level YAML key. */
+function topLevelBlock(name: string): string {
+  const lines = builderYml.split('\n');
+  const start = lines.findIndex((l) => l.startsWith(`${name}:`));
+  if (start === -1) return '';
+  const body: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '' || line.startsWith('#')) continue;
+    if (/^\S/.test(line)) break; // next top-level key
+    body.push(line);
+  }
+  return body.join('\n');
+}
+
+/** Parse a flat `key: true|false` map from a top-level YAML block. */
+function parseFlatBooleanBlock(name: string): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const line of topLevelBlock(name).split('\n')) {
+    const m = /^\s*([A-Za-z0-9_]+):\s*(true|false)\s*$/.exec(line);
+    if (m) out[m[1]] = m[2] === 'true';
+  }
+  return out;
+}
+
+describe('electron-builder packaging contract (AC-5, ADR-0007)', () => {
+  it('declares the app identity and product metadata', () => {
+    expect(builderYml).toMatch(/^appId:\s*es\.pedrofuent\.kawsay\s*$/m);
+    expect(builderYml).toMatch(/^productName:\s*Kawsay\s*$/m);
+    expect(builderYml).toMatch(/^copyright:/m);
+  });
+
+  it('unpacks the native catalog engine and media binaries from the asar', () => {
+    // A compiled `.node` cannot be dlopen'd, and ffmpeg/ffprobe cannot be spawned,
+    // from inside an asar — they must live in app.asar.unpacked (ADR-0007).
+    const unpack = topLevelBlock('asarUnpack');
+    expect(unpack).toMatch(/node_modules\/better-sqlite3\//);
+    expect(unpack).toMatch(/node_modules\/ffmpeg-static\//);
+    expect(unpack).toMatch(/node_modules\/ffprobe-static\//);
+  });
+
+  it('rebuilds native modules against the Electron ABI from source', () => {
+    expect(builderYml).toMatch(/^npmRebuild:\s*true\s*$/m);
+    expect(builderYml).toMatch(/^buildDependenciesFromSource:\s*true\s*$/m);
+  });
+
+  it('targets macOS .dmg + .zip (arm64 + x64) and ships unsigned in v1', () => {
+    const mac = topLevelBlock('mac');
+    expect(mac).toMatch(/target:\s*dmg/);
+    expect(mac).toMatch(/target:\s*zip/);
+    expect(mac).toMatch(/arm64/);
+    expect(mac).toMatch(/x64/);
+    expect(mac).toMatch(/identity:\s*null/); // unsigned v1 (signing deferred)
+  });
+
+  it('targets Windows NSIS .exe (x64 only in v1)', () => {
+    const win = topLevelBlock('win');
+    expect(win).toMatch(/target:\s*nsis/);
+    expect(win).toMatch(/x64/);
+    expect(win).not.toMatch(/arm64/); // win-arm64 deferred (ADR-0007)
+  });
+
+  it('flips every declared security fuse to match FUSE_CONFIG', () => {
+    // Drift guard: the packaged posture (electron-builder electronFuses) must match
+    // the reviewed declaration in electron/fuses/fuses.ts exactly (ARCHITECTURE §2.5).
+    const flipped = parseFlatBooleanBlock('electronFuses');
+    for (const [key, value] of Object.entries(FUSE_CONFIG)) {
+      expect(flipped[key]).toBe(value);
+    }
+  });
+
+  it('re-applies the ad-hoc macOS signature after flipping fuses', () => {
+    // Without this, flipping fuses invalidates the signature and the UNSIGNED v1
+    // build will not launch on Apple Silicon (arm64 requires a valid signature).
+    expect(parseFlatBooleanBlock('electronFuses').resetAdHocDarwinSignature).toBe(true);
+  });
+});
+
+describe('packaging preserves zero-egress + the human-required publish gate (AC-4/AC-5)', () => {
+  it('never publishes from the automated `pnpm dist` build', () => {
+    // Publishing to GitHub Releases is HUMAN-REQUIRED (protected Environment). The
+    // automated/local build must never upload a release, so `dist` forces --publish never.
+    expect(packageJson.scripts.dist).toMatch(/--publish\s+never/);
+  });
+
+  it('bundles no auto-updater / update feed (local-only, AC-4)', () => {
+    const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+    expect(Object.keys(deps)).not.toContain('electron-updater');
+    expect(builderConfig).not.toMatch(/autoUpdater/);
+  });
+});
