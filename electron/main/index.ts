@@ -1,18 +1,24 @@
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app, BrowserWindow, ipcMain, session } from 'electron';
 import { APP_GET_VERSION } from '@shared/ipc/contract';
 import { handleGetVersion } from './ipc/handlers/app';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import type { TrustedSenderOptions } from './ipc/sender';
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
-import { applyNavigationHardening, buildSecureWebPreferences } from './security/window-hardening';
+import {
+  applyNavigationHardening,
+  buildSecureWebPreferences,
+  type NavigationHardeningOptions,
+} from './security/window-hardening';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 // The packaged renderer entry: the ONLY file:// document trusted as an IPC
-// sender (ARCHITECTURE §2.3), and the file the production window loads.
+// sender and the only legitimate in-app navigation target (ARCHITECTURE
+// §2.1/§2.3), plus the file the production window loads.
 const rendererEntryPath = join(moduleDir, '../renderer/index.html');
+const rendererEntryUrl = pathToFileURL(rendererEntryPath).href;
 
 // electron-vite serves the renderer over http and sets this only in `dev`.
 const rendererDevUrl = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL'];
@@ -21,6 +27,10 @@ const senderOptions: TrustedSenderOptions =
   rendererDevUrl === undefined
     ? { rendererEntryPath }
     : { rendererEntryPath, devServerUrl: rendererDevUrl };
+const navigationOptions: NavigationHardeningOptions =
+  rendererDevUrl === undefined
+    ? { appEntryUrl: rendererEntryUrl }
+    : { appEntryUrl: rendererEntryUrl, devServerUrl: rendererDevUrl };
 
 // The single source of truth for the renderer's capabilities. Each handler is a
 // pure, separately-tested function; the registrar adds the sender + zod guards.
@@ -40,7 +50,7 @@ function createMainWindow(): void {
     webPreferences: buildSecureWebPreferences(preloadPath, { devTools: !app.isPackaged }),
   });
 
-  applyNavigationHardening(window.webContents);
+  applyNavigationHardening(window.webContents, navigationOptions);
   window.once('ready-to-show', () => {
     window.show();
   });
