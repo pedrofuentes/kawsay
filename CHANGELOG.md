@@ -9,7 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- WhatsApp "Export Chat" importer (card C3, AC-1): the flagship messaging connector — brings a
+- IPC surface and off-thread ingestion harness (card F3c, AC-9): the renderer-facing bridge over the
+  F3b engine and the worker that runs it off the UI thread. Seven channels are exposed through the F1
+  `contextBridge` as a **typed `window.kawsayAPI`** — `library:create`, `library:open`,
+  `catalog:timeline`, `catalog:search`, `import:start`, `import:cancel`, and a one-way
+  `import:progress` event stream — never raw `ipcRenderer`. Every payload is **zod-validated on both
+  sides** of the boundary (`z.strictObject`, so unknown keys are rejected): the preload re-validates
+  each request before it leaves the renderer and each event on receipt, and the main process
+  re-validates every request and **drops** any malformed event before it can reach React, so a bug or a
+  hostile payload can never push an unexpected shape across the bridge. The renderer only ever receives
+  **DTOs** — a `LibrarySummary` without the on-disk catalog path, item cards without content hashes or
+  filesystem paths — and the timeline cursor is an opaque token decoded and validated in main. Heavy
+  imports run in a **`worker_threads` worker** (the thread-agnostic F3b orchestrator, unchanged): a
+  coordinator forks one worker per job, **streams progress** (phase, counts, current item) back over
+  `import:progress`, and supports **cooperative cancel** — `import:cancel` aborts the worker's
+  `AbortSignal`, the orchestrator stops at the next record boundary and returns a **partial summary**
+  with `cancelled: true` (no throw, honouring AC-15). Workers are torn down on completion, on cancel,
+  and on window-close/quit, so none is ever orphaned. Adds an ordered **importer registry**
+  (`selectImporter` picks the first connector whose `canHandle` matches — folder, then WhatsApp) and the
+  TS types the renderer cards (U1–U3) import. No new dependencies; the F1 security model
+  (contextIsolation, nodeIntegration off, CSP, navigation guards, AC-4 zero-egress) is unchanged.
   conversation's **text messages, photos, voice notes, audio, video, and documents** into the
   catalogue end-to-end. Point it at the exported **`.zip`** (unpacked through the zip-slip–guarded
   extractor, never a raw unzip) or a folder you already extracted. It reads the `_chat.txt` log
