@@ -374,6 +374,11 @@ Unix mode bits. Failures throw a typed `ArchiveError` with a **stable code** and
 - ⚠️ The numeric caps are policy defaults; if a legitimate huge export trips a cap, the cap is tuned in
   one place (documented), never by disabling the guard.
 
+**Audit (2026-06-23, card C2 #9)**: implemented as `electron/main/importers/safe-extract.ts`; added
+`yauzl@^3.4.0` (dependency, one transitive dep `pend`) + `@types/yauzl@^3.4.0` (devDependency). `pnpm
+audit --prod` → no known vulnerabilities; no network/shell access in the module. Codes refined to a
+dedicated `ERR_ARCHIVE_SYMLINK` as flagged above.
+
 ---
 
 ### ADR-0005: Electron security hardening + minimal contextBridge IPC surface

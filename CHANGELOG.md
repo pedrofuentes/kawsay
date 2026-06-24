@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Guarded archive extraction (card C2): a single zip-slip-safe `yauzl` extractor
+  (`electron/main/importers/safe-extract.ts`) that is the **only** sanctioned way to open an untrusted
+  export `.zip` (WhatsApp, Google Takeout, Facebook, LinkedIn) — never a raw unzip. It is
+  deny-by-default on every entry before any byte is written: path-traversal / absolute / drive-letter /
+  backslash / NUL names and resolved-path escapes are rejected (`ERR_ARCHIVE_UNSAFE_PATH`), symlink
+  entries are refused and never materialized (`ERR_ARCHIVE_SYMLINK`), and decompression bombs are
+  capped by per-entry size, total size, compression ratio, and entry count (`ERR_ARCHIVE_BOMB`);
+  unreadable archives surface as `ERR_ARCHIVE_CORRUPT`. Each failure is a typed `ArchiveError` carrying
+  a stable code and a non-technical message key. Entries are streamed one at a time (the whole archive
+  is never buffered). Implements the `SafeExtractFn` importer seam (ARCHITECTURE §7.1, ADR-0006).
 - Local library core (card F3): the main-process catalog over **`better-sqlite3`**. A versioned,
   transactional, idempotent migration runner (`user_version`-gated) applies the ARCHITECTURE §4 schema —
   `items` (SHA-256 `content_hash` dedup key), `item_occurrences` (provenance), `item_assets`, `sources`,
