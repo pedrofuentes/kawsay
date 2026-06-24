@@ -79,33 +79,27 @@ function makeZipDeps(entries: readonly ArchiveEntry[]): {
   return { deps, extractCalls, contentByAbs };
 }
 
-// A nested in-memory folder (a LinkedIn export the user already extracted).
+// A nested in-memory folder (a LinkedIn export the user already extracted). The
+// tree is built along the exact join(root, ...segments) chain the importer's
+// walkFolder rebuilds, so the double is consistent on POSIX and Windows alike.
 function makeFolderDeps(root: string, files: Record<string, string>): ImporterDeps {
   const fileMap = new Map<string, string>();
-  const dirs = new Set<string>([root]);
+  const childrenByDir = new Map<string, Set<string>>();
+  const addChild = (dir: string, name: string): void => {
+    const existing = childrenByDir.get(dir);
+    if (existing) existing.add(name);
+    else childrenByDir.set(dir, new Set([name]));
+  };
   for (const [rel, content] of Object.entries(files)) {
-    const abs = join(root, rel);
-    fileMap.set(abs, content);
-    let dir = abs;
-    for (;;) {
-      const parent = dir.slice(0, dir.lastIndexOf('/'));
-      if (!parent || parent.length < root.length) break;
-      dirs.add(parent);
-      dir = parent;
-      if (parent === root) break;
+    const segments = rel.split('/');
+    let cur = root;
+    for (let i = 0; i < segments.length; i++) {
+      addChild(cur, segments[i]);
+      cur = join(cur, segments[i]);
+      if (i === segments.length - 1) fileMap.set(cur, content);
     }
   }
-  const childrenOf = (path: string): string[] => {
-    const prefix = path === '/' ? '/' : `${path}/`;
-    const names = new Set<string>();
-    for (const abs of [...fileMap.keys(), ...dirs]) {
-      if (abs === path || !abs.startsWith(prefix)) continue;
-      const rest = abs.slice(prefix.length);
-      const name = rest.includes('/') ? rest.slice(0, rest.indexOf('/')) : rest;
-      if (name) names.add(name);
-    }
-    return [...names];
-  };
+  const isDir = (path: string): boolean => path === root || childrenByDir.has(path);
   const fs: FsLike = {
     async readFile(path: string): Promise<Buffer> {
       const text = fileMap.get(path);
@@ -113,17 +107,18 @@ function makeFolderDeps(root: string, files: Record<string, string>): ImporterDe
       return Buffer.from(text, 'utf8');
     },
     async readDir(path: string): Promise<readonly string[]> {
-      if (!dirs.has(path)) throw new Error(`ENOTDIR ${path}`);
-      return childrenOf(path);
+      const children = childrenByDir.get(path);
+      if (children === undefined && path !== root) throw new Error(`ENOTDIR ${path}`);
+      return [...(children ?? [])];
     },
     async stat(path: string): Promise<FileStat> {
-      const isDir = dirs.has(path);
-      const isFile = fileMap.has(path);
-      if (!isDir && !isFile) throw new Error(`ENOENT stat ${path}`);
-      return { size: 0, mtimeMs: 0, isFile: () => isFile, isDirectory: () => isDir };
+      const file = fileMap.has(path);
+      const dir = isDir(path);
+      if (!file && !dir) throw new Error(`ENOENT stat ${path}`);
+      return { size: 0, mtimeMs: 0, isFile: () => file, isDirectory: () => dir };
     },
     async exists(path: string): Promise<boolean> {
-      return dirs.has(path) || fileMap.has(path);
+      return isDir(path) || fileMap.has(path);
     },
   };
   return {

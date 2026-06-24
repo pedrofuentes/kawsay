@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drainImporter } from '../../electron/main/importers/drain';
 import {
@@ -33,6 +33,12 @@ const MESSAGE_1 = fbFixture('messages/inbox/jose_abc/message_1.json');
 const ALBUM_0 = fbFixture('photos_and_videos/album/0.json');
 
 const WORK = '/work/facebook';
+
+// originalPath is a real, OS-native absolute path (back-slashed on Windows). The
+// fixtures use POSIX uris, so compare separator-agnostically: a no-op on POSIX.
+function ps(p: string | null | undefined): string {
+  return (p ?? '').split(sep).join('/');
+}
 
 // The real, correct text the mojibake fixtures must decode back to.
 const POST0_TEXT = 'Feliz Año Nuevo 🎉 — con José y Жанна';
@@ -90,33 +96,27 @@ function makeZipDeps(entries: readonly ArchiveEntry[]): {
   return { deps, extractCalls, contentByAbs };
 }
 
-// A nested in-memory folder (a Facebook export the user already extracted).
+// A nested in-memory folder (a Facebook export the user already extracted). The
+// tree is built along the exact join(root, ...segments) chain the importer's
+// walkFolder rebuilds, so the double is consistent on POSIX and Windows alike.
 function makeFolderDeps(root: string, files: Record<string, string>): ImporterDeps {
   const fileMap = new Map<string, string>();
-  const dirs = new Set<string>([root]);
+  const childrenByDir = new Map<string, Set<string>>();
+  const addChild = (dir: string, name: string): void => {
+    const existing = childrenByDir.get(dir);
+    if (existing) existing.add(name);
+    else childrenByDir.set(dir, new Set([name]));
+  };
   for (const [rel, content] of Object.entries(files)) {
-    const abs = join(root, rel);
-    fileMap.set(abs, content);
-    let dir = abs;
-    for (;;) {
-      const parent = dir.slice(0, dir.lastIndexOf('/'));
-      if (!parent || parent.length < root.length) break;
-      dirs.add(parent);
-      dir = parent;
-      if (parent === root) break;
+    const segments = rel.split('/');
+    let cur = root;
+    for (let i = 0; i < segments.length; i++) {
+      addChild(cur, segments[i]);
+      cur = join(cur, segments[i]);
+      if (i === segments.length - 1) fileMap.set(cur, content);
     }
   }
-  const childrenOf = (path: string): string[] => {
-    const prefix = path === '/' ? '/' : `${path}/`;
-    const names = new Set<string>();
-    for (const abs of [...fileMap.keys(), ...dirs]) {
-      if (abs === path || !abs.startsWith(prefix)) continue;
-      const rest = abs.slice(prefix.length);
-      const name = rest.includes('/') ? rest.slice(0, rest.indexOf('/')) : rest;
-      if (name) names.add(name);
-    }
-    return [...names];
-  };
+  const isDir = (path: string): boolean => path === root || childrenByDir.has(path);
   const fs: FsLike = {
     async readFile(path: string): Promise<Buffer> {
       const text = fileMap.get(path);
@@ -124,17 +124,18 @@ function makeFolderDeps(root: string, files: Record<string, string>): ImporterDe
       return Buffer.from(text, 'utf8');
     },
     async readDir(path: string): Promise<readonly string[]> {
-      if (!dirs.has(path)) throw new Error(`ENOTDIR ${path}`);
-      return childrenOf(path);
+      const children = childrenByDir.get(path);
+      if (children === undefined && path !== root) throw new Error(`ENOTDIR ${path}`);
+      return [...(children ?? [])];
     },
     async stat(path: string): Promise<FileStat> {
-      const isDir = dirs.has(path);
-      const isFile = fileMap.has(path);
-      if (!isDir && !isFile) throw new Error(`ENOENT stat ${path}`);
-      return { size: 0, mtimeMs: 0, isFile: () => isFile, isDirectory: () => isDir };
+      const file = fileMap.has(path);
+      const dir = isDir(path);
+      if (!file && !dir) throw new Error(`ENOENT stat ${path}`);
+      return { size: 0, mtimeMs: 0, isFile: () => file, isDirectory: () => dir };
     },
     async exists(path: string): Promise<boolean> {
-      return dirs.has(path) || fileMap.has(path);
+      return isDir(path) || fileMap.has(path);
     },
   };
   return {
@@ -288,7 +289,7 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
 
     it('links a post photo attachment to its extracted file with its own caption + creation time', async () => {
       const { records } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
-      const photo = records.find((r) => r.originalPath?.endsWith('posts/media/playa.jpg'));
+      const photo = records.find((r) => ps(r.originalPath).endsWith('posts/media/playa.jpg'));
 
       expect(photo?.mediaType).toBe('photo');
       expect(photo?.mimeType).toBe('image/jpeg');
@@ -301,7 +302,7 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
     it('keeps a text post and its separate photo as two records (no text or media lost)', async () => {
       const { records } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
       const text = records.find((r) => r.body === POST1_TEXT);
-      const photo = records.find((r) => r.originalPath?.endsWith('posts/media/playa.jpg'));
+      const photo = records.find((r) => ps(r.originalPath).endsWith('posts/media/playa.jpg'));
 
       expect(text?.mediaType).toBe('message');
       expect(text?.date?.value.getTime()).toBe(1659315600 * 1000);
@@ -310,7 +311,7 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
 
     it('links a photo-only post (no body) to its media file', async () => {
       const { records } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
-      const photo = records.find((r) => r.originalPath?.endsWith('posts/media/familia.png'));
+      const photo = records.find((r) => ps(r.originalPath).endsWith('posts/media/familia.png'));
 
       expect(photo?.mediaType).toBe('photo');
       expect(photo?.mimeType).toBe('image/png');
@@ -331,7 +332,7 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
       const { records } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
       const text = records.find((r) => r.body === MSG1_TEXT);
       const photo = records.find((r) =>
-        r.originalPath?.endsWith('messages/inbox/jose_abc/photos/pic.jpg'),
+        ps(r.originalPath).endsWith('messages/inbox/jose_abc/photos/pic.jpg'),
       );
 
       expect(text?.author).toBe('Me');
@@ -353,8 +354,8 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
 
     it('catalogs standalone album photos with their captions + capture seconds', async () => {
       const { records } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
-      const abuela = records.find((r) => r.originalPath?.endsWith('album/media/abuela.jpg'));
-      const perro = records.find((r) => r.originalPath?.endsWith('album/media/perro.jpg'));
+      const abuela = records.find((r) => ps(r.originalPath).endsWith('album/media/abuela.jpg'));
+      const perro = records.find((r) => ps(r.originalPath).endsWith('album/media/perro.jpg'));
 
       expect(abuela?.mediaType).toBe('photo');
       expect(abuela?.body).toBe('Mi abuela 👵');
@@ -375,7 +376,7 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
       const { records } = await run(root, deps);
 
       const post0 = records.find((r) => r.body === POST0_TEXT);
-      const photo = records.find((r) => r.originalPath?.endsWith('posts/media/playa.jpg'));
+      const photo = records.find((r) => ps(r.originalPath).endsWith('posts/media/playa.jpg'));
       expect(post0).toBeDefined();
       expect(photo?.originalPath).toBe(join(root, 'posts/media/playa.jpg'));
     });
@@ -398,7 +399,7 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
       const { deps } = makeZipDeps(FULL_ENTRIES);
       const realReadFile = deps.fs.readFile;
       deps.fs.readFile = (path: string) =>
-        path.endsWith('photos_and_videos/album/0.json')
+        ps(path).endsWith('photos_and_videos/album/0.json')
           ? Promise.reject(new Error('EACCES: permission denied'))
           : realReadFile(path);
 
