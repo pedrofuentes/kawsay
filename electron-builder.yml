@@ -1,0 +1,47 @@
+# electron-builder configuration — packaging skeleton (ARCHITECTURE §8, ADR-0007).
+#
+# Full packaging (signing, native-module rebuild, GitHub publish, fuses afterPack)
+# is delivered in card P1. This skeleton wires the targets so `pnpm dist` is ready:
+#   - macOS dmg (arm64 + x64)
+#   - Windows NSIS (x64 only in v1; win-arm64 deferred, ADR-0007)
+# v1 ships UNSIGNED (mac identity null); code-signing/notarization is a deferred gate.
+appId: es.pedrofuent.kawsay
+productName: Kawsay
+copyright: Copyright © 2026 Pedro Fuentes
+
+directories:
+  output: dist
+  buildResources: resources
+
+files:
+  - out/**
+  - package.json
+
+# Native modules (better-sqlite3, ffmpeg/ffprobe binaries) are added with their
+# asarUnpack rules in their respective feature cards.
+asar: true
+
+mac:
+  category: public.app-category.lifestyle
+  identity: null
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+publish:
+  provider: github
+  owner: pedrofuentes
+  repo: kawsay
+  releaseType: release
