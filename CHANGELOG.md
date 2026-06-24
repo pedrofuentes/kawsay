@@ -28,6 +28,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   with `aria-pressed` chips, a polite **status live region** announcing the result count, focus moved to the
   heading on entry, visible focus, and AA contrast. No new dependencies (the debounce is a few lines); the
   renderer talks **only** through `window.kawsayAPI` and tolerates its absence in a browser preview.
+- Browse / timeline view (card U1, AC-6 + AC-8): the main app's home is now a real, living **timeline** of
+  everything gathered — a grieving person opens the app and sees their loved one's memories laid out
+  **newest first**, gently grouped under **month-and-year** headers, with a quiet sticky label so they
+  always know where they are as they scroll (AC-6). The list is **virtualized**: only the handful of cards
+  in view are ever in the page, so a library of **tens of thousands** of memories scrolls smoothly and stays
+  light (AC-8); further pages stream in **as you reach them** through the timeline cursor, never all at once.
+  Each memory is a labelled card showing its caption, its date, its kind (photo · video · voice note ·
+  document · message) and, for clips, a length — read entirely through `window.kawsayAPI.getTimeline`, with
+  **no network** (AC-4). Because the renderer-facing item shape carries **no file path or asset URL** (a
+  deliberate sandbox boundary), each card shows a calm per-type **icon** rather than loading original bytes;
+  the bounded, on-demand mounting is what makes the view lazy. The empty library is met with a warm
+  invitation to **add memories** (not a blank wall), and the loading, error, and not-connected states are
+  all plain-language and reassuring — never a raw error code, never a bare spinner. Untrusted captions and
+  filenames are rendered as **escaped text**, never markup. The screen is keyboard-operable with a focusable
+  page heading, a named memories region, real list/heading semantics, visible focus, and no autoplaying
+  media (WCAG 2.1 AA, AC-13). No new runtime dependency — the windowing is hand-rolled.
+- Router exhaustiveness guard (issue #95, fixing an ADR-0015 gap from U3): `MainApp`'s view switch no longer
+  collapses `timeline` into a `default:` fall-through. It now has an explicit `case 'timeline'` and a
+  `default: return assertNever(view)`, so adding a future screen to the `View` union without handling it is
+  a **compile error** instead of silently rendering the timeline.
 - First-run onboarding & the shared renderer foundation (card U3, AC-12): the renderer is no longer a
   placeholder. A grieving, non-technical person is now walked — one calm screen at a time — from a warm
   **welcome**, through naming the person they are honoring, choosing where the **library** lives on this

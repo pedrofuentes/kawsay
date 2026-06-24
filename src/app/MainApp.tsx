@@ -1,7 +1,7 @@
 // The main application shell after onboarding. It owns the sidebar + status bar and
-// routes the primary sections. The timeline and search bodies are intentionally
-// light placeholders here — U1 and U2 replace them with the real screens, reading
-// the open library from LibraryContext and moving between sections via useNavigation.
+// routes the primary sections. The timeline (U1) and search (U2) are the real screens;
+// add-memories and settings stay light placeholders for now, all reading the open
+// library from LibraryContext and moving between sections via useNavigation.
 import type { ReactElement } from 'react';
 import { AppShell } from '@renderer/components/AppShell';
 import { Button } from '@renderer/components/Button';
@@ -10,6 +10,7 @@ import { Icon } from '@renderer/components/Icon';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
 import { Search } from '@renderer/views/Search';
+import { Timeline } from '@renderer/views/Timeline';
 import { Sidebar } from './Sidebar';
 
 export function MainApp(): ReactElement {
@@ -19,11 +20,15 @@ export function MainApp(): ReactElement {
 
   return (
     <AppShell variant="main" sidebar={<Sidebar />} libraryName={library?.name}>
-      <div className="mx-auto flex max-w-3xl flex-col gap-8">{renderSection()}</div>
+      {view.name === 'timeline' ? (
+        renderSection()
+      ) : (
+        <div className="mx-auto flex max-w-3xl flex-col gap-8">{renderSection()}</div>
+      )}
     </AppShell>
   );
 
-  function renderSection(): ReactElement {
+  function renderSection(): ReactElement | null {
     switch (view.name) {
       case 'search':
         return <Search />;
@@ -55,24 +60,20 @@ export function MainApp(): ReactElement {
           </section>
         );
       case 'timeline':
+        return <Timeline />;
+      // Onboarding is routed by the top-level <Router/> (App.tsx) and never reaches
+      // MainApp; the case exists only so the switch stays exhaustive over View.
+      case 'onboarding':
+        return null;
       default:
-        return (
-          <section className="flex flex-col gap-6">
-            <h1 className="font-display text-3xl font-semibold text-text-primary">
-              {library !== null ? `${library.name}'s timeline` : 'Timeline'}
-            </h1>
-            <EmptyState
-              icon={<Icon name="heart" className="h-8 w-8" />}
-              title="Their memories will gather here"
-              description="As you bring in chats, photos, and messages, they'll appear here in a gentle timeline."
-              action={
-                <Button variant="primary" onClick={() => navigate({ name: 'add-memories' })}>
-                  Add memories
-                </Button>
-              }
-            />
-          </section>
-        );
+        return assertNever(view);
     }
   }
+}
+
+// Exhaustiveness guard for the typed view router (ADR-0015, issue #95): if a new
+// View member is ever added without its own `case`, `view` is no longer `never`
+// here and this call fails to type-check — a compile error, not a silent fallback.
+function assertNever(view: never): never {
+  throw new Error(`Unhandled view: ${JSON.stringify(view)}`);
 }

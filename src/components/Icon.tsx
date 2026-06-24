@@ -8,6 +8,9 @@ export type IconName =
   | 'lock'
   | 'messages'
   | 'photos'
+  | 'video'
+  | 'audio'
+  | 'document'
   | 'archive'
   | 'globe'
   | 'briefcase'
@@ -15,10 +18,7 @@ export type IconName =
   | 'arrow-right'
   | 'check'
   | 'sparkle'
-  | 'search'
-  | 'video'
-  | 'audio'
-  | 'document';
+  | 'search';
 
 const PATHS: Record<IconName, ReactElement> = {
   lock: (
@@ -38,6 +38,29 @@ const PATHS: Record<IconName, ReactElement> = {
       <rect x="4" y="5" width="16" height="14" rx="2.5" />
       <circle cx="9" cy="10" r="1.6" />
       <path d="m5 17 4-4 3 3 3-3 4 4" />
+    </>
+  ),
+  video: (
+    <>
+      <rect x="3" y="6" width="18" height="12" rx="2.5" />
+      <path d="m10 9.5 5 2.5-5 2.5Z" />
+    </>
+  ),
+  audio: (
+    <>
+      <path d="M5 11v2" />
+      <path d="M9 8.5v7" />
+      <path d="M13 6v12" />
+      <path d="M17 9v6" />
+      <path d="M21 11v2" />
+    </>
+  ),
+  document: (
+    <>
+      <path d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5Z" />
+      <path d="M14 3.5V8h4" />
+      <path d="M9 13h6" />
+      <path d="M9 16.5h6" />
     </>
   ),
   archive: (
@@ -86,26 +109,6 @@ const PATHS: Record<IconName, ReactElement> = {
     <>
       <circle cx="11" cy="11" r="6" />
       <path d="m20 20-3.4-3.4" />
-    </>
-  ),
-  video: (
-    <>
-      <rect x="3" y="6" width="18" height="12" rx="2.5" />
-      <path d="m10 9.5 5 2.5-5 2.5Z" />
-    </>
-  ),
-  audio: (
-    <>
-      <rect x="9" y="3" width="6" height="11" rx="3" />
-      <path d="M5 11a7 7 0 0 0 14 0" />
-      <path d="M12 18v3" />
-    </>
-  ),
-  document: (
-    <>
-      <path d="M7 3.5h6.5L18 8v12.5H7Z" />
-      <path d="M13 3.5V8h5" />
-      <path d="M9.5 12.5h5M9.5 15.5h5" />
     </>
   ),
 };

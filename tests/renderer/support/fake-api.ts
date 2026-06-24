@@ -16,7 +16,11 @@ export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 let itemCardSeq = 0;
 
-/** Build a renderer-shaped timeline/search tile; ids stay unique per call. */
+/**
+ * Build a renderer-shaped timeline/search tile. The id is unique per call so
+ * list-key and dedup tests get visibly distinct rows; pass `over` (e.g. `{ id }`)
+ * to pin any field — including a deterministic id — when a test asserts on it.
+ */
 export function makeItemCard(over: Partial<ItemCardDTO> = {}): ItemCardDTO {
   itemCardSeq += 1;
   return {
