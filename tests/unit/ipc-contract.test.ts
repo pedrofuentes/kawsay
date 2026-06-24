@@ -1,0 +1,191 @@
+import { describe, expect, it } from 'vitest';
+import {
+  CATALOG_SEARCH,
+  CATALOG_TIMELINE,
+  IMPORT_CANCEL,
+  IMPORT_START,
+  LIBRARY_CREATE,
+  LIBRARY_OPEN,
+  ipcContract,
+} from '@shared/ipc/contract';
+import { IMPORT_PROGRESS, ipcEventContract } from '@shared/ipc/events';
+
+const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+function reqOk(channel: keyof typeof ipcContract, payload: unknown): boolean {
+  return ipcContract[channel].request.safeParse(payload).success;
+}
+function resOk(channel: keyof typeof ipcContract, payload: unknown): boolean {
+  return ipcContract[channel].response.safeParse(payload).success;
+}
+
+const librarySummary = {
+  root: '/Users/mateo/Mum',
+  name: 'Mum',
+  createdAt: '2026-06-24T00:00:00.000Z',
+  schemaVersion: 1,
+};
+
+const itemCard = {
+  id: UUID,
+  mediaType: 'photo',
+  mimeType: 'image/jpeg',
+  captureDate: '2020-05-01T10:00:00.000Z',
+  durationSec: null,
+  title: null,
+  description: null,
+  isFavourite: false,
+  width: 480,
+  height: 320,
+};
+
+describe('ipcContract — library:create', () => {
+  it('accepts a path with an optional personName', () => {
+    expect(reqOk(LIBRARY_CREATE, { path: '/Users/mateo/Mum', personName: 'Mum' })).toBe(true);
+    expect(reqOk(LIBRARY_CREATE, { path: '/Users/mateo/Mum' })).toBe(true);
+  });
+  it('rejects an empty, oversized, or wrong-typed path', () => {
+    expect(reqOk(LIBRARY_CREATE, { path: '' })).toBe(false);
+    expect(reqOk(LIBRARY_CREATE, { path: 'x'.repeat(4097) })).toBe(false);
+    expect(reqOk(LIBRARY_CREATE, { path: 123 })).toBe(false);
+    expect(reqOk(LIBRARY_CREATE, {})).toBe(false);
+  });
+  it('rejects an oversized personName and unknown keys (strict)', () => {
+    expect(reqOk(LIBRARY_CREATE, { path: '/x', personName: 'n'.repeat(201) })).toBe(false);
+    expect(reqOk(LIBRARY_CREATE, { path: '/x', rogue: true })).toBe(false);
+  });
+  it('validates the LibrarySummary response and rejects a malformed one', () => {
+    expect(resOk(LIBRARY_CREATE, librarySummary)).toBe(true);
+    expect(resOk(LIBRARY_CREATE, { ...librarySummary, schemaVersion: -1 })).toBe(false);
+    expect(resOk(LIBRARY_CREATE, { ...librarySummary, name: '' })).toBe(false);
+    // The internal catalog filesystem path must never leak to the renderer.
+    expect(resOk(LIBRARY_CREATE, { ...librarySummary, catalogPath: '/x/catalog.sqlite3' })).toBe(false);
+  });
+});
+
+describe('ipcContract — library:open', () => {
+  it('accepts a path and rejects an empty one or extra keys', () => {
+    expect(reqOk(LIBRARY_OPEN, { path: '/Users/mateo/Mum' })).toBe(true);
+    expect(reqOk(LIBRARY_OPEN, { path: '' })).toBe(false);
+    expect(reqOk(LIBRARY_OPEN, { path: '/x', personName: 'Mum' })).toBe(false);
+  });
+});
+
+describe('ipcContract — catalog:timeline', () => {
+  it('accepts a bounded limit with an optional opaque cursor', () => {
+    expect(reqOk(CATALOG_TIMELINE, { limit: 50 })).toBe(true);
+    expect(reqOk(CATALOG_TIMELINE, { limit: 50, cursor: 'opaque' })).toBe(true);
+  });
+  it('rejects an out-of-range / non-integer limit and an oversized cursor', () => {
+    expect(reqOk(CATALOG_TIMELINE, { limit: 0 })).toBe(false);
+    expect(reqOk(CATALOG_TIMELINE, { limit: 201 })).toBe(false);
+    expect(reqOk(CATALOG_TIMELINE, { limit: 1.5 })).toBe(false);
+    expect(reqOk(CATALOG_TIMELINE, { limit: 50, cursor: 'c'.repeat(4097) })).toBe(false);
+    expect(reqOk(CATALOG_TIMELINE, { limit: 50, rogue: 1 })).toBe(false);
+  });
+  it('validates a TimelinePage response (items + nullable cursor)', () => {
+    expect(resOk(CATALOG_TIMELINE, { items: [itemCard], nextCursor: 'next' })).toBe(true);
+    expect(resOk(CATALOG_TIMELINE, { items: [], nextCursor: null })).toBe(true);
+    expect(resOk(CATALOG_TIMELINE, { items: [{ ...itemCard, mediaType: 'hologram' }], nextCursor: null })).toBe(false);
+  });
+});
+
+describe('ipcContract — catalog:search', () => {
+  it('accepts a query and fills limit/offset defaults', () => {
+    const parsed = ipcContract[CATALOG_SEARCH].request.parse({ query: 'beach' });
+    expect(parsed).toEqual({ query: 'beach', limit: 50, offset: 0 });
+  });
+  it('rejects an oversized query, bad limit, or negative offset', () => {
+    expect(reqOk(CATALOG_SEARCH, { query: 'q'.repeat(513) })).toBe(false);
+    expect(reqOk(CATALOG_SEARCH, { query: 'q', limit: 0 })).toBe(false);
+    expect(reqOk(CATALOG_SEARCH, { query: 'q', offset: -1 })).toBe(false);
+  });
+  it('validates a SearchResult response', () => {
+    expect(resOk(CATALOG_SEARCH, { items: [itemCard], total: 1 })).toBe(true);
+    expect(resOk(CATALOG_SEARCH, { items: [], total: -1 })).toBe(false);
+  });
+});
+
+describe('ipcContract — import:start / import:cancel', () => {
+  it('accepts a known sourceType + inputPath and returns a jobId', () => {
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x' })).toBe(true);
+    expect(reqOk(IMPORT_START, { sourceType: 'whatsapp', inputPath: '/x.zip' })).toBe(true);
+    expect(resOk(IMPORT_START, { jobId: UUID })).toBe(true);
+    expect(resOk(IMPORT_START, { jobId: 'not-a-uuid' })).toBe(false);
+  });
+  it('rejects an unknown sourceType, empty/oversized inputPath, or extra keys', () => {
+    expect(reqOk(IMPORT_START, { sourceType: 'myspace', inputPath: '/x' })).toBe(false);
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '' })).toBe(false);
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'x'.repeat(4097) })).toBe(false);
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x', rogue: 1 })).toBe(false);
+  });
+  it('cancel requires a uuid jobId and returns a cancelled flag', () => {
+    expect(reqOk(IMPORT_CANCEL, { jobId: UUID })).toBe(true);
+    expect(reqOk(IMPORT_CANCEL, { jobId: 'nope' })).toBe(false);
+    expect(resOk(IMPORT_CANCEL, { cancelled: true })).toBe(true);
+    expect(resOk(IMPORT_CANCEL, { cancelled: 'yes' })).toBe(false);
+  });
+});
+
+describe('ipcEventContract — import:progress', () => {
+  const schema = ipcEventContract[IMPORT_PROGRESS];
+  const summary = {
+    recordCount: 3,
+    itemsTouched: 3,
+    occurrencesAdded: 3,
+    assetsAdded: 1,
+    thumbnailFailures: 0,
+    skipped: [{ ref: 'broken.heic', reason: 'unreadable', code: 'E_DECODE' }],
+    cancelled: false,
+  };
+
+  it('accepts an in-flight progress tick (no summary, no error)', () => {
+    expect(
+      schema.safeParse({
+        jobId: UUID,
+        phase: 'emit',
+        processed: 2,
+        total: 3,
+        message: '2 photos found',
+        summary: null,
+        error: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts a terminal done event carrying the summary', () => {
+    expect(
+      schema.safeParse({
+        jobId: UUID,
+        phase: 'done',
+        processed: 3,
+        total: 3,
+        message: null,
+        summary,
+        error: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts a terminal error event', () => {
+    expect(
+      schema.safeParse({
+        jobId: UUID,
+        phase: 'done',
+        processed: 0,
+        total: null,
+        message: null,
+        summary: null,
+        error: 'unsupported source',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a bad phase, negative counts, missing jobId, or unknown keys', () => {
+    expect(schema.safeParse({ jobId: UUID, phase: 'teleporting', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
+    expect(schema.safeParse({ jobId: UUID, phase: 'emit', processed: -1, total: null, message: null, summary: null, error: null }).success).toBe(false);
+    expect(schema.safeParse({ phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
+    expect(schema.safeParse({ jobId: 'nope', phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
+    expect(schema.safeParse({ jobId: UUID, phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null, rogue: true }).success).toBe(false);
+  });
+});

@@ -1,10 +1,23 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app, BrowserWindow, ipcMain, session } from 'electron';
-import { APP_GET_VERSION } from '@shared/ipc/contract';
+import {
+  APP_GET_VERSION,
+  CATALOG_SEARCH,
+  CATALOG_TIMELINE,
+  IMPORT_CANCEL,
+  IMPORT_START,
+  LIBRARY_CREATE,
+  LIBRARY_OPEN,
+} from '@shared/ipc/contract';
+import { IMPORT_PROGRESS } from '@shared/ipc/events';
 import { handleGetVersion } from './ipc/handlers/app';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
+import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
+import { createCatalogSession } from './app/catalog-session';
+import { createIngestionCoordinator } from './importers/ingestion/coordinator';
+import { createWorkerThreadsSpawner } from './importers/ingestion/worker-threads-transport';
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
 import { installNetworkGuard } from './security/network-guard';
 import {
@@ -33,10 +46,32 @@ const navigationOptions: NavigationHardeningOptions =
     ? { appEntryUrl: rendererEntryUrl }
     : { appEntryUrl: rendererEntryUrl, devServerUrl: rendererDevUrl };
 
+// The current window — the target for streamed import:progress events.
+let mainWindow: BrowserWindow | undefined;
+
+// The off-thread ingestion harness (AC-9): the coordinator forks a worker_threads
+// worker per import via the built worker entry, and streams progress back to the
+// renderer through the validated event sender. The session is the single seam
+// every catalog/library/import handler calls into.
+const emitEvent = createEventSender((channel, payload) => {
+  mainWindow?.webContents.send(channel, payload);
+});
+const ingestionCoordinator = createIngestionCoordinator({
+  spawn: createWorkerThreadsSpawner({ scriptPath: join(moduleDir, 'ingestion-worker.js') }),
+  emitProgress: (event) => emitEvent(IMPORT_PROGRESS, event),
+});
+const catalogSession = createCatalogSession({ coordinator: ingestionCoordinator });
+
 // The single source of truth for the renderer's capabilities. Each handler is a
 // pure, separately-tested function; the registrar adds the sender + zod guards.
 const ipcHandlers: IpcHandlerMap = {
   [APP_GET_VERSION]: () => handleGetVersion({ getVersion: () => app.getVersion() }),
+  [LIBRARY_CREATE]: (request) => catalogSession.createLibrary(request),
+  [LIBRARY_OPEN]: (request) => catalogSession.openLibrary(request),
+  [CATALOG_TIMELINE]: (request) => catalogSession.getTimeline(request),
+  [CATALOG_SEARCH]: (request) => catalogSession.search(request),
+  [IMPORT_START]: (request) => catalogSession.beginImport(request),
+  [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
 };
 
 function createMainWindow(): void {
@@ -54,6 +89,14 @@ function createMainWindow(): void {
   applyNavigationHardening(window.webContents, navigationOptions);
   window.once('ready-to-show', () => {
     window.show();
+  });
+  mainWindow = window;
+  window.on('closed', () => {
+    // Terminate any in-flight import worker so none is orphaned (AC-9 teardown).
+    ingestionCoordinator.disposeAll();
+    if (mainWindow === window) {
+      mainWindow = undefined;
+    }
   });
 
   if (rendererDevUrl === undefined) {
@@ -86,6 +129,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  // Full teardown on quit: close the open library and terminate every worker.
+  catalogSession.dispose();
 });
 
 void bootstrap();

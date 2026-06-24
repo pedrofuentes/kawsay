@@ -8,7 +8,18 @@ export default defineConfig({
   main: {
     build: {
       lib: {
-        entry: resolve(__dirname, 'electron/main/index.ts'),
+        entry: {
+          index: resolve(__dirname, 'electron/main/index.ts'),
+          'ingestion-worker': resolve(
+            __dirname,
+            'electron/main/importers/workers/ingestion-worker.ts',
+          ),
+        },
+      },
+      rollupOptions: {
+        output: {
+          entryFileNames: '[name].js',
+        },
       },
     },
     resolve: {
