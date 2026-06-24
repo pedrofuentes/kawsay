@@ -84,13 +84,32 @@ describe('electron-builder packaging contract (AC-5, ADR-0007)', () => {
     expect(win).not.toMatch(/arm64/); // win-arm64 deferred (ADR-0007)
   });
 
-  it('flips every declared security fuse to match FUSE_CONFIG', () => {
-    // Drift guard: the packaged posture (electron-builder electronFuses) must match
-    // the reviewed declaration in electron/fuses/fuses.ts exactly (ARCHITECTURE §2.5).
+  it('flips the declared security fuses to match FUSE_CONFIG (asar-integrity deferred to signing)', () => {
+    // Drift guard: the packaged posture (electron-builder electronFuses) must match the
+    // reviewed declaration in electron/fuses/fuses.ts (ARCHITECTURE §2.5) — with ONE
+    // deliberate v1 exception. enableEmbeddedAsarIntegrityValidation requires macOS code
+    // signing to work; on the UNSIGNED v1 build it makes the renderer fail to load from
+    // the asar (ERR_FILE_NOT_FOUND). v1 ships it OFF and the cofounder re-enables it with
+    // Developer ID signing/notarization (ADR-0019).
     const flipped = parseFlatBooleanBlock('electronFuses');
+    const SIGNING_GATED = 'enableEmbeddedAsarIntegrityValidation';
     for (const [key, value] of Object.entries(FUSE_CONFIG)) {
+      if (key === SIGNING_GATED) continue;
       expect(flipped[key]).toBe(value);
     }
+    expect(FUSE_CONFIG.enableEmbeddedAsarIntegrityValidation).toBe(true); // declared target
+    expect(flipped[SIGNING_GATED]).toBe(false); // unsigned v1 build defers it until signing
+  });
+
+  it('pins better-sqlite3 at an Electron-42-compatible version (native build floor)', () => {
+    // better-sqlite3 < 12.10.1 fails to compile against Electron 42's V8 (v8::External
+    // gained a required `tag` argument); 12.11.1 additionally fixes the Windows build.
+    // Vitest loads the Node-ABI prebuilt, which hides this — it can only regress at
+    // package time, so pin the floor here so a downgrade can't silently break `pnpm dist`.
+    const version = (packageJson.dependencies?.['better-sqlite3'] ?? '').replace(/^[\D]*/, '');
+    const [major, minor, patch] = version.split('.').map((n) => Number.parseInt(n, 10) || 0);
+    const compatible = major > 12 || (major === 12 && (minor > 11 || (minor === 11 && patch >= 1)));
+    expect(compatible, `better-sqlite3 "${version}" predates Electron 42 support`).toBe(true);
   });
 
   it('re-applies the ad-hoc macOS signature after flipping fuses', () => {
