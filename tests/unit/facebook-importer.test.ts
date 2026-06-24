@@ -223,6 +223,19 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
       expect(decodeFacebookText('café ☕')).toBe('café ☕');
       expect(decodeFacebookText('Жанна')).toBe('Жанна');
     });
+
+    it('leaves genuine multibyte / Latin-1-range text untouched and is idempotent (report finding 3)', () => {
+      // Report sentinel-pr64-a1f1b5a-c5 finding 3 PROVED this guard cannot
+      // double-decode conformant exports: FB DYI byte-escapes EVERY non-ASCII
+      // character, so a real ©/é/emoji never arrives as raw multibyte bytes.
+      // Ratchet that proven-safe behaviour (a genuine `©` = U+00A9 included) so
+      // a future change to decodeFacebookText cannot silently regress it.
+      for (const s of ['José', 'Schön', 'café ☕', 'Жанна', '日本語', '😀', '©', 'plain', '']) {
+        const once = decodeFacebookText(s);
+        expect(once).toBe(s); // genuine text passes through byte-for-byte
+        expect(decodeFacebookText(once)).toBe(once); // second pass == first (idempotent)
+      }
+    });
   });
 
   describe('canHandle discriminates Facebook from LinkedIn and unknown zips', () => {
