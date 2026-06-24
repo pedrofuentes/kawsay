@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import type { CaptureDateSource, MediaType, SourceType } from '@shared/catalog';
 
 export type { SourceType };
@@ -64,6 +65,22 @@ export interface FsLike {
   readDir(path: string): Promise<readonly string[]>;
   stat(path: string): Promise<FileStat>;
   exists(path: string): Promise<boolean>;
+  /**
+   * Stream a file's bytes for memory-bounded parsing of huge exports — a Gmail
+   * `.mbox` can be multiple GB, so the Takeout importer reads it message-by-
+   * message and MUST NOT buffer the whole file (AC-11). Optional so existing
+   * importers and their fixture doubles are unaffected; a connector that needs
+   * it falls back to {@link FsLike.readFile} or reports a skip when absent.
+   */
+  openReadStream?(path: string): Readable;
+  /**
+   * Persist bytes that were extracted from WITHIN a container export (e.g. an
+   * email attachment embedded in a `.mbox`) into the per-import scratch dir, so
+   * the worker can hash + content-address them exactly like any archive
+   * original (§4.4). Parent directories are created as needed. Optional, as
+   * above.
+   */
+  writeFile?(path: string, data: Buffer): Promise<void>;
 }
 
 /** One entry produced by the guarded (zip-slip-safe) archive extractor. */

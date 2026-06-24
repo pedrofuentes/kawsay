@@ -1,4 +1,6 @@
-import { promises as fsp } from 'node:fs';
+import { createReadStream, promises as fsp } from 'node:fs';
+import { dirname } from 'node:path';
+import type { Readable } from 'node:stream';
 import type { FileStat, FsLike } from '../types';
 
 /**
@@ -31,5 +33,18 @@ export const nodeFs: FsLike = {
     } catch {
       return false;
     }
+  },
+  openReadStream(path): Readable {
+    // Stream, never readFile: a Takeout Gmail .mbox can be multi-GB, so it is
+    // parsed message-by-message under a bounded memory ceiling (AC-11).
+    return createReadStream(path);
+  },
+  async writeFile(path, data): Promise<void> {
+    // Materialize bytes embedded in a container export (e.g. a .mbox
+    // attachment) so the worker can hash + content-address them like any
+    // archive original. Parents are created so callers can target nested
+    // scratch paths without a separate mkdir.
+    await fsp.mkdir(dirname(path), { recursive: true });
+    await fsp.writeFile(path, data);
   },
 };
