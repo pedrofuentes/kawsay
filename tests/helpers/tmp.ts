@@ -12,7 +12,10 @@ export function makeTmpDir(prefix = 'kawsay-'): string {
   return mkdtempSync(join(TMP_ROOT, prefix));
 }
 
-/** Remove a temp directory created by {@link makeTmpDir} (best effort). */
+/** Remove a temp directory created by {@link makeTmpDir} (best effort). The
+ *  retries make this resilient to Windows, where the OS can briefly hold a file
+ *  handle open (a just-closed read stream, an external reader) after the JS side
+ *  is done, making an immediate recursive rmdir fail with ENOTEMPTY/EBUSY. */
 export function removeTmpDir(dir: string): void {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
