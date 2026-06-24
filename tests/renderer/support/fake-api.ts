@@ -5,12 +5,40 @@ import { vi } from 'vitest';
 import type {
   ImportProgressEvent,
   ImportSummaryDTO,
+  ItemCardDTO,
   KawsayAPI,
   LibrarySummaryDTO,
+  SearchResultDTO,
 } from '@shared/kawsay-api';
 
 /** A stable, valid-looking job id used across import tests. */
 export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+let itemCardSeq = 0;
+
+/** Build a renderer-shaped timeline/search tile; ids stay unique per call. */
+export function makeItemCard(over: Partial<ItemCardDTO> = {}): ItemCardDTO {
+  itemCardSeq += 1;
+  return {
+    id: `00000000-0000-4000-8000-${String(itemCardSeq).padStart(12, '0')}`,
+    mediaType: 'photo',
+    mimeType: 'image/jpeg',
+    captureDate: '2019-06-15T10:00:00.000Z',
+    durationSec: null,
+    title: 'A quiet afternoon',
+    description: null,
+    isFavourite: false,
+    width: 1600,
+    height: 1200,
+    ...over,
+  };
+}
+
+/** Build a search-result page; `total` defaults to the number of items given. */
+export function makeSearchResult(over: Partial<SearchResultDTO> = {}): SearchResultDTO {
+  const items = over.items ?? [];
+  return { items, total: over.total ?? items.length };
+}
 
 export function makeLibrarySummary(over: Partial<LibrarySummaryDTO> = {}): LibrarySummaryDTO {
   return {
@@ -60,6 +88,8 @@ export interface FakeApiOptions {
   jobId?: string;
   createLibrary?: KawsayAPI['createLibrary'];
   openLibrary?: KawsayAPI['openLibrary'];
+  getTimeline?: KawsayAPI['getTimeline'];
+  searchCatalog?: KawsayAPI['searchCatalog'];
   startImport?: KawsayAPI['startImport'];
   cancelImport?: KawsayAPI['cancelImport'];
 }
@@ -81,8 +111,8 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       vi.fn((input: { path: string }) =>
         Promise.resolve(makeLibrarySummary({ root: input.path })),
       ),
-    getTimeline: vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
-    searchCatalog: vi.fn(() => Promise.resolve({ items: [], total: 0 })),
+    getTimeline: opts.getTimeline ?? vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
+    searchCatalog: opts.searchCatalog ?? vi.fn(() => Promise.resolve({ items: [], total: 0 })),
     startImport: opts.startImport ?? vi.fn(() => Promise.resolve({ jobId })),
     cancelImport: opts.cancelImport ?? vi.fn(() => Promise.resolve({ cancelled: true })),
     onImportProgress: (listener) => {
