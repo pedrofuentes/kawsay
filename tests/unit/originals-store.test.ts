@@ -207,3 +207,116 @@ describe('originals reference-counting (AC-14: never dangle)', () => {
     });
   });
 });
+
+// Archive filenames are attacker-controlled, so the hash/ext/asset-path that
+// drive the content-addressed store can be hostile. The store is the AC-14 /
+// ADR-0008 safety boundary: every copy/delete MUST stay inside the library root.
+describe('originals store path confinement (security: AC-14 / ADR-0008)', () => {
+  // The library lives one level under a tracked temp dir, so any escape lands
+  // inside `base` and is still cleaned up by afterEach.
+  let base: string;
+  let root: string;
+  let incoming: string;
+
+  beforeEach(() => {
+    base = makeTmpDir('originals-confine');
+    root = join(base, 'lib');
+    mkdirSync(root, { recursive: true });
+    incoming = join(root, 'incoming.jpg');
+    writeFileSync(incoming, 'JPEG-BYTES');
+  });
+  afterEach(() => removeTmpDir(base));
+
+  it('rejects a content hash that is not a 64-char lowercase hex string', () => {
+    const badHashes = [
+      `../${'a'.repeat(61)}`, // traversal
+      'g'.repeat(64), // non-hex
+      'abc', // too short
+      HASH_A.toUpperCase(), // not lowercase
+      `${'a'.repeat(63)}\0`, // NUL byte
+    ];
+    for (const hash of badHashes) {
+      expect(() => putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming })).toThrow(
+        /ERR_ORIGINAL_PATH_ESCAPE/,
+      );
+    }
+  });
+
+  it('rejects an extension containing a separator, traversal, or NUL', () => {
+    const badExts = [
+      '/../../../../etc/evil',
+      '.jpg/../../../secret',
+      '../evil',
+      '.jp/g',
+      '.jp\\g',
+      '.jp\0g',
+    ];
+    for (const ext of badExts) {
+      expect(() => putOriginal({ root, hash: HASH_A, ext, sourcePath: incoming })).toThrow(
+        /ERR_ORIGINAL_PATH_ESCAPE/,
+      );
+    }
+  });
+
+  it('never copies a blob outside the library root when given a hostile ext', () => {
+    const outside = join(base, 'escapee.jpg');
+    expect(() =>
+      putOriginal({ root, hash: HASH_A, ext: '/../../../../escapee.jpg', sourcePath: incoming }),
+    ).toThrow(/ERR_ORIGINAL_PATH_ESCAPE/);
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  it('still stores and resolves a valid original (the safe path stays green)', () => {
+    const put = putOriginal({ root, hash: HASH_A, ext: '.jpg', sourcePath: incoming });
+    expect(put.copied).toBe(true);
+    expect(put.absPath).toBe(blobAbsPath(root, HASH_A, '.jpg'));
+    expect(existsSync(put.absPath)).toBe(true);
+  });
+
+  it('refuses to resolve a stored content_hash that would escape the root', () => {
+    const db = openCatalog(join(root, 'catalog.sqlite3'));
+    runMigrations(db);
+    const repo = createCatalogRepo(db);
+    const src = repo.registerSource({ sourceKey: 'X', type: 'whatsapp', label: 'WA' });
+    const itemId = repo.insertItem({
+      mediaType: 'photo',
+      contentHash: '../../../../etc/passwd',
+      originalExt: '.jpg',
+    });
+    repo.addOccurrence({
+      itemId,
+      sourceId: src,
+      sourceRef: 'a/b.jpg',
+      originalKind: 'content_addressed',
+    });
+    expect(() => resolveOriginal(db, root, itemId)).toThrow(/ERR_ORIGINAL_PATH_ESCAPE/);
+    db.close();
+  });
+
+  it('refuses to delete a derived asset that escapes the root, leaving outside files intact', () => {
+    const db = openCatalog(join(root, 'catalog.sqlite3'));
+    runMigrations(db);
+    const repo = createCatalogRepo(db);
+    const src = repo.registerSource({ sourceKey: 'Y', type: 'whatsapp', label: 'WA' });
+
+    const sentinel = join(base, 'sentinel.txt');
+    writeFileSync(sentinel, 'SECRET');
+
+    const itemId = repo.insertItem({ mediaType: 'photo', contentHash: HASH_A, originalExt: '.jpg' });
+    const blob = putOriginal({ root, hash: HASH_A, ext: '.jpg', sourcePath: incoming }).absPath;
+    // A surviving content-addressed blob is legitimate; only the asset path is hostile.
+    repo.addAsset({ itemId, kind: 'thumbnail', path: join('..', 'sentinel.txt') });
+    const occ = repo.addOccurrence({
+      itemId,
+      sourceId: src,
+      sourceRef: 'a/b.jpg',
+      originalKind: 'content_addressed',
+    });
+
+    expect(() => removeOccurrence(db, root, occ.id)).toThrow(/ERR_ORIGINAL_PATH_ESCAPE/);
+    // The hostile undo is refused atomically — nothing outside (or the valid blob) is deleted.
+    expect(existsSync(sentinel)).toBe(true);
+    expect(existsSync(blob)).toBe(true);
+    db.close();
+  });
+});
