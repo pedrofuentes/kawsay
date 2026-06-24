@@ -1,0 +1,112 @@
+# AC-4 zero-network-egress gate (ARCHITECTURE §6.2 / PRD AC-4).
+#
+# The AUTHORITATIVE proof of the local-only invariant. On a Linux runner this job
+# enables an outbound-firewall DENY (loopback only), ASSERTS the deny rule is
+# actually in force (so a green run can never be a silent no-op), then drives the
+# positive controls from the main process, a worker thread, and a simulated
+# ffmpeg subprocess at a routable target — catching any real OS-level egress the
+# in-process Vitest spies cannot see across process boundaries.
+#
+# Scope note: a fully-portable per-OS firewall is out of scope here, so the
+# OS-level deny is implemented authoritatively on Linux. macOS/Windows rely on
+# the in-process spies + nock (run in the main `ci.yml` test matrix, owned by
+# another card); this job is the kernel-enforced backstop for the invariant.
+name: AC-4 zero-egress
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ac4-egress-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  os-deny:
+    name: Linux outbound-DENY firewall
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # A routable public endpoint that WOULD connect without the firewall, so a
+      # blocked attempt proves the kernel deny is the thing stopping egress.
+      KAWSAY_AC4_PUBLIC_HOST: 1.1.1.1
+      KAWSAY_AC4_PUBLIC_PORT: '443'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      # Everything that needs the network (the registry) runs BEFORE the firewall.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Defense-in-depth: the hermetic in-process spies + positive controls. These
+      # pass without the firewall (they use loopback), proving the guard logic.
+      - name: Run in-process AC-4 suite
+        run: pnpm test tests/ac4
+
+      - name: Enable outbound DENY firewall (loopback only)
+        run: |
+          set -euo pipefail
+          # IPv4: default-deny OUTPUT, allow loopback + return traffic of the
+          # runner's already-established control connection.
+          sudo iptables -P OUTPUT DROP
+          sudo iptables -A OUTPUT -o lo -j ACCEPT
+          sudo iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+          # IPv6: same posture.
+          sudo ip6tables -P OUTPUT DROP
+          sudo ip6tables -A OUTPUT -o lo -j ACCEPT
+          sudo ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+      - name: Assert the DENY rule is active (fail the job if not)
+        run: |
+          set -euo pipefail
+          echo "----- iptables -S OUTPUT -----"
+          sudo iptables -S OUTPUT
+          echo "----- ip6tables -S OUTPUT -----"
+          sudo ip6tables -S OUTPUT
+          # The default OUTPUT policy MUST be DROP.
+          if ! sudo iptables -S OUTPUT | grep -qx -- '-P OUTPUT DROP'; then
+            echo "::error::IPv4 OUTPUT policy is not DROP — refusing to trust this run"
+            exit 1
+          fi
+          if ! sudo ip6tables -S OUTPUT | grep -qx -- '-P OUTPUT DROP'; then
+            echo "::error::IPv6 OUTPUT policy is not DROP — refusing to trust this run"
+            exit 1
+          fi
+          # The loopback carve-out MUST exist (local tests rely on it).
+          sudo iptables -C OUTPUT -o lo -j ACCEPT
+          sudo ip6tables -C OUTPUT -o lo -j ACCEPT
+
+      - name: Self-check — real outbound egress is blocked
+        run: node tests/ac4/assert-egress-blocked.mjs
+
+      - name: AC-4 OS-deny e2e (main + worker + subprocess)
+        env:
+          # Point the positive controls at the routable target so the firewall —
+          # not a closed loopback port — is what blocks every attempt.
+          KAWSAY_AC4_TARGET_HOST: 1.1.1.1
+          KAWSAY_AC4_TARGET_PORT: '443'
+        run: node tests/ac4/egress-e2e.mjs
+
+      - name: Restore outbound networking
+        if: always()
+        run: |
+          sudo iptables -P OUTPUT ACCEPT || true
+          sudo iptables -F OUTPUT || true
+          sudo ip6tables -P OUTPUT ACCEPT || true
+          sudo ip6tables -F OUTPUT || true
