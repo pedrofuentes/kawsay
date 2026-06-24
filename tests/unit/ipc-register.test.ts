@@ -18,6 +18,11 @@ function fakeIpcMain() {
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
 const rendererEntryPath = '/app/out/renderer/index.html';
+// POSIX fixtures — pin the platform so the sender-origin trust check runs under
+// POSIX path semantics on any host, including the Windows CI runner (issue #34).
+// Without this, `process.platform === 'win32'` on CI treats the drive-less
+// `file:///app/...` path as an invalid Windows path and rejects the legit sender.
+const trustedSenderOptions = { rendererEntryPath, platform: 'darwin' as const };
 
 describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§2.6)', () => {
   const handlers: IpcHandlerMap = {
@@ -32,7 +37,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
 
   it('runs the handler and returns its validated response for a trusted sender', async () => {
     const ipcMain = fakeIpcMain();
-    registerIpcHandlers(ipcMain, handlers, { rendererEntryPath });
+    registerIpcHandlers(ipcMain, handlers, trustedSenderOptions);
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
     expect(listener).toBeDefined();
 
@@ -42,7 +47,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('rejects a non-app file:// sender (attacker-dropped HTML) without calling the handler', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, { rendererEntryPath });
+    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, trustedSenderOptions);
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(
@@ -74,7 +79,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('re-validates the request in main and rejects unexpected payload keys', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, { rendererEntryPath });
+    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, trustedSenderOptions);
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(listener?.(trustedEvent, { rogue: true })).rejects.toThrow();
