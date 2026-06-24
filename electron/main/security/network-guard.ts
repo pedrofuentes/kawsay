@@ -9,9 +9,11 @@
  * build makes no outbound network connection of any kind.
  *
  * Deny-by-default: a URL is permitted ONLY when it matches an explicit local
- * scheme (or, in development, the Vite dev server / HMR websocket on loopback).
- * Anything unrecognised — including unparseable URLs and every remote origin —
- * is cancelled.
+ * scheme AND carries no remote authority — a `file://host/share` URL is a remote
+ * target (on Windows a UNC path → outbound SMB), so only the host-less
+ * `file:///…` form is local — or, in development, the Vite dev server / HMR
+ * websocket on a loopback host. Anything unrecognised — including unparseable
+ * URLs and every remote origin — is cancelled.
  */
 
 /** Schemes that never leave the machine and are always permitted. */
@@ -22,6 +24,16 @@ const LOCAL_SCHEMES: ReadonlySet<string> = new Set([
   'data:',
   'devtools:',
 ]);
+
+/**
+ * Local schemes whose authority denotes a REAL remote host — for these a
+ * non-empty hostname is network egress, not a local resource. `file://host/share`
+ * is a Windows UNC path → outbound SMB (TCP 445) + NTLM credential leak, so only
+ * the host-less `file:///…` form is truly local. (`kawsay-media:`/`devtools:`
+ * also carry an authority, but it is an in-process handler/internal host that is
+ * never dialled over the network, so they are intentionally NOT listed here.)
+ */
+const HOST_SENSITIVE_LOCAL_SCHEMES: ReadonlySet<string> = new Set(['file:']);
 
 /** Loopback hostnames the Vite dev server / HMR socket bind to — DEV ONLY. */
 const DEV_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -44,7 +56,8 @@ export interface NetworkGuardOptions {
 /**
  * Decide whether a request URL is local-only and may proceed (ARCHITECTURE §6.1).
  *
- * Deny-by-default: returns `true` only for an explicit local scheme, or — in a
+ * Deny-by-default: returns `true` only for an explicit local scheme that carries
+ * no remote authority (a `file://host/…` UNC target is rejected), or — in a
  * development build — for the Vite dev server / HMR socket on a loopback host.
  * Every other URL, and anything that fails to parse, returns `false`.
  */
@@ -58,6 +71,14 @@ export function isLocalOnlyRequest(rawUrl: string, options: NetworkGuardOptions)
   }
 
   if (LOCAL_SCHEMES.has(parsed.protocol)) {
+    // A host-sensitive local scheme (`file:`) that carries an authority targets a
+    // REMOTE host (Windows UNC → SMB), not a local resource: deny it. Only the
+    // host-less `file:///…` form is truly local. Other local schemes
+    // (`kawsay-media:`/`devtools:`) may also have a non-empty hostname, but it is
+    // an in-process/internal host that never reaches the network, so they pass.
+    if (HOST_SENSITIVE_LOCAL_SCHEMES.has(parsed.protocol) && parsed.hostname !== '') {
+      return false;
+    }
     return true;
   }
 
