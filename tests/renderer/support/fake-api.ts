@@ -1,0 +1,99 @@
+// Test doubles for the renderer suites: a configurable in-memory KawsayAPI plus
+// small DTO builders. The fake never touches Electron/IPC — it just records calls
+// and lets a test drive the import-progress stream synchronously via emitProgress.
+import { vi } from 'vitest';
+import type {
+  ImportProgressEvent,
+  ImportSummaryDTO,
+  KawsayAPI,
+  LibrarySummaryDTO,
+} from '@shared/kawsay-api';
+
+/** A stable, valid-looking job id used across import tests. */
+export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
+export function makeLibrarySummary(over: Partial<LibrarySummaryDTO> = {}): LibrarySummaryDTO {
+  return {
+    root: '/Users/elena/Documents/Kawsay — Elena',
+    name: 'Elena',
+    createdAt: '2026-06-24T12:00:00.000Z',
+    schemaVersion: 1,
+    ...over,
+  };
+}
+
+export function makeImportSummary(over: Partial<ImportSummaryDTO> = {}): ImportSummaryDTO {
+  return {
+    recordCount: 347,
+    itemsTouched: 347,
+    occurrencesAdded: 347,
+    assetsAdded: 320,
+    thumbnailFailures: 0,
+    skipped: [],
+    cancelled: false,
+    ...over,
+  };
+}
+
+export function makeProgressEvent(over: Partial<ImportProgressEvent> = {}): ImportProgressEvent {
+  return {
+    jobId: FAKE_JOB_ID,
+    phase: 'parse',
+    processed: 0,
+    total: null,
+    message: null,
+    summary: null,
+    error: null,
+    ...over,
+  };
+}
+
+export interface FakeApi extends KawsayAPI {
+  /** Push a progress event to every current onImportProgress subscriber. */
+  emitProgress(event: ImportProgressEvent): void;
+  /** Number of live import-progress subscribers (asserts clean unsubscribe). */
+  subscriberCount(): number;
+}
+
+export interface FakeApiOptions {
+  appVersion?: string;
+  jobId?: string;
+  createLibrary?: KawsayAPI['createLibrary'];
+  openLibrary?: KawsayAPI['openLibrary'];
+  startImport?: KawsayAPI['startImport'];
+  cancelImport?: KawsayAPI['cancelImport'];
+}
+
+/** Build a fully typed fake KawsayAPI whose methods are spies (vi.fn). */
+export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
+  const listeners = new Set<(event: ImportProgressEvent) => void>();
+  const jobId = opts.jobId ?? FAKE_JOB_ID;
+
+  return {
+    getAppVersion: vi.fn(() => Promise.resolve(opts.appVersion ?? '0.1.0')),
+    createLibrary:
+      opts.createLibrary ??
+      vi.fn((input: { path: string; personName?: string }) =>
+        Promise.resolve(makeLibrarySummary({ root: input.path, name: input.personName ?? 'Library' })),
+      ),
+    openLibrary:
+      opts.openLibrary ??
+      vi.fn((input: { path: string }) =>
+        Promise.resolve(makeLibrarySummary({ root: input.path })),
+      ),
+    getTimeline: vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
+    searchCatalog: vi.fn(() => Promise.resolve({ items: [], total: 0 })),
+    startImport: opts.startImport ?? vi.fn(() => Promise.resolve({ jobId })),
+    cancelImport: opts.cancelImport ?? vi.fn(() => Promise.resolve({ cancelled: true })),
+    onImportProgress: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    emitProgress: (event) => {
+      for (const listener of [...listeners]) listener(event);
+    },
+    subscriberCount: () => listeners.size,
+  };
+}
