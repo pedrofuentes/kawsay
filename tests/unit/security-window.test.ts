@@ -25,7 +25,9 @@ describe('buildSecureWebPreferences (BrowserWindow hardening, ARCHITECTURE §2.1
 });
 
 describe('applyNavigationHardening (navigation + window.open lockdown, ARCHITECTURE §2.1)', () => {
-  function fakeWebContents(currentUrl: string) {
+  const appEntryUrl = 'file:///app/out/renderer/index.html';
+
+  function fakeWebContents() {
     let willNavigate: WillNavigateListener | undefined;
     const wc: NavigationHardenableWebContents & {
       fireWillNavigate: (url: string) => boolean;
@@ -38,7 +40,7 @@ describe('applyNavigationHardening (navigation + window.open lockdown, ARCHITECT
         wc.openHandler = handler;
       },
       getURL() {
-        return currentUrl;
+        return appEntryUrl;
       },
       fireWillNavigate(url: string) {
         let prevented = false;
@@ -50,20 +52,49 @@ describe('applyNavigationHardening (navigation + window.open lockdown, ARCHITECT
   }
 
   it('denies every window.open / target=_blank attempt', () => {
-    const wc = fakeWebContents('file:///app/index.html');
-    applyNavigationHardening(wc);
+    const wc = fakeWebContents();
+    applyNavigationHardening(wc, { appEntryUrl });
     expect(wc.openHandler?.({ url: 'https://example.com' })).toEqual({ action: 'deny' });
   });
 
-  it('blocks navigation to a different origin', () => {
-    const wc = fakeWebContents('file:///app/index.html');
-    applyNavigationHardening(wc);
+  it('allows navigation to the exact app entry', () => {
+    const wc = fakeWebContents();
+    applyNavigationHardening(wc, { appEntryUrl });
+    expect(wc.fireWillNavigate(appEntryUrl)).toBe(false);
+  });
+
+  it('blocks navigation to an unrelated local file (opaque file:// origin)', () => {
+    const wc = fakeWebContents();
+    applyNavigationHardening(wc, { appEntryUrl });
+    expect(wc.fireWillNavigate('file:///etc/passwd')).toBe(true);
+  });
+
+  it('blocks a sibling file in the app directory that is not the entry', () => {
+    const wc = fakeWebContents();
+    applyNavigationHardening(wc, { appEntryUrl });
+    expect(wc.fireWillNavigate('file:///app/out/renderer/other.html')).toBe(true);
+  });
+
+  it('blocks data:, about: and javascript: navigations (opaque origins)', () => {
+    const wc = fakeWebContents();
+    applyNavigationHardening(wc, { appEntryUrl });
+    expect(wc.fireWillNavigate('data:text/html,<script>alert(1)</script>')).toBe(true);
+    expect(wc.fireWillNavigate('about:blank')).toBe(true);
+    expect(wc.fireWillNavigate('javascript:alert(1)')).toBe(true);
+  });
+
+  it('blocks remote origins', () => {
+    const wc = fakeWebContents();
+    applyNavigationHardening(wc, { appEntryUrl });
     expect(wc.fireWillNavigate('https://evil.example/phish')).toBe(true);
   });
 
-  it('permits navigation within the same origin', () => {
-    const wc = fakeWebContents('file:///app/index.html');
-    applyNavigationHardening(wc);
-    expect(wc.fireWillNavigate('file:///app/other.html')).toBe(false);
+  it('allows the dev-server origin ONLY when a dev server is configured', () => {
+    const devServerUrl = 'http://localhost:5173';
+    const wc = fakeWebContents();
+    applyNavigationHardening(wc, { appEntryUrl, devServerUrl });
+    expect(wc.fireWillNavigate('http://localhost:5173/any/route')).toBe(false);
+    // A foreign origin is still blocked, even in development.
+    expect(wc.fireWillNavigate('http://localhost:4444/')).toBe(true);
   });
 });
