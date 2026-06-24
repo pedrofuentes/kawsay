@@ -884,6 +884,13 @@ achieved by emitting/persisting records as they're found rather than batching at
 // electron/main/security/network-guard.ts  (installed at startup, before window load)
 export function installNetworkGuard(session: Session) {
   const ALLOWED = new Set(['file:', 'kawsay-media:', 'blob:', 'data:', 'devtools:']);
+  // `file://host/share` is a Windows UNC path → outbound SMB (TCP 445) + NTLM credential
+  // leak, so a `file:` URL is local ONLY when it carries no authority (`file:///…`).
+  // (`kawsay-media:`/`devtools:` also carry an authority, but it is an in-process/internal
+  // host that never reaches the network, so they are NOT host-checked.)
+  const HOST_SENSITIVE = new Set(['file:']);
+  const localOk = (url: URL) =>
+    ALLOWED.has(url.protocol) && !(HOST_SENSITIVE.has(url.protocol) && url.hostname !== '');
   // DEV-ONLY: permit the Vite dev server (http) + HMR websocket (ws) on loopback so `pnpm dev`
   // works. This branch is impossible in the packaged app (app.isPackaged === true), so it can
   // NEVER weaken the shipped guard — and the AC-4 e2e runs the PACKAGED app, exercising the real one.
@@ -893,7 +900,7 @@ export function installNetworkGuard(session: Session) {
     (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]');
   session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, cb) => {
     const url = new URL(details.url);
-    const ok = ALLOWED.has(url.protocol) || devLoopbackOk(url);
+    const ok = localOk(url) || devLoopbackOk(url);
     if (!ok && !app.isPackaged) console.error('[NETWORK-GUARD] blocked', details.url);
     cb({ cancel: !ok });
   });
