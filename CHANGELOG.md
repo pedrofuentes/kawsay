@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Ingestion engine (card F3b): the concrete, sandboxed `ImporterDeps` wrappers and the off-UI-thread
+  **ingestion orchestrator** that turn an `Importer`'s `CatalogRecord` stream into catalogued memories.
+  Wrappers: a streaming **SHA-256** `FileHasher` (lowercase hex), an **`exifr`** `ExifReader` (capture
+  date/GPS/camera; a malformed header is a skip, never a crash; EXIF read as UTC), a **`fluent-ffmpeg` +
+  `ffprobe-static`** `MediaProber` (duration/dimensions), and an **`ffmpeg-static`** thumbnail/poster
+  generator writing WebP renditions into the library `derived/` tree — ffmpeg/ffprobe run as subprocesses
+  fed only local paths (array argv, no shell). The orchestrator drains the importer record-by-record
+  (streaming, back-pressured, cancellable via `AbortSignal`) and, per record, writes the catalog
+  transactionally: **dedup-with-provenance** (`insertItem` by `content_hash` + `addOccurrence`), retaining
+  originals **in place** for folder sources and **content-addressed** (`putOriginal`) for archives,
+  generating a thumbnail/poster (`addAsset`), merging cross-source search tokens, throttling progress, and
+  collecting skipped items (AC-15) without aborting the run. _(The IPC channels — `library:create/open`,
+  `catalog:timeline/search`, `import:start/cancel/progress` — and the worker/`utilityProcess` harness that
+  runs the orchestrator off-thread are deferred to follow-up card F3c to keep this PR reviewable; the
+  orchestrator is written thread-agnostic so that harness runs it unchanged.)_
 - Local library core (card F3): the main-process catalog over **`better-sqlite3`**. A versioned,
   transactional, idempotent migration runner (`user_version`-gated) applies the ARCHITECTURE §4 schema —
   `items` (SHA-256 `content_hash` dedup key), `item_occurrences` (provenance), `item_assets`, `sources`,
