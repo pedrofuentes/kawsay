@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { createCatalogSession } from '../../electron/main/app/catalog-session';
 import { openCatalog } from '../../electron/main/db/connection';

@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { APP_GET_VERSION } from '@shared/ipc/contract';
+import {
+  APP_GET_VERSION,
+  CATALOG_SEARCH,
+  CATALOG_TIMELINE,
+  IMPORT_CANCEL,
+  IMPORT_START,
+  LIBRARY_CREATE,
+  LIBRARY_OPEN,
+} from '@shared/ipc/contract';
 import {
   registerIpcHandlers,
   type IpcHandlerMap,
@@ -16,6 +24,18 @@ function fakeIpcMain() {
   };
 }
 
+// Trivial, correctly-typed stubs for the non-app channels, so the handler map
+// satisfies the (now multi-channel) contract. These tests only exercise the
+// app:getVersion listener — the stubs are never invoked.
+const otherHandlers = {
+  [LIBRARY_CREATE]: () => ({ root: '/x', name: 'x', createdAt: 'x', schemaVersion: 1 }),
+  [LIBRARY_OPEN]: () => ({ root: '/x', name: 'x', createdAt: 'x', schemaVersion: 1 }),
+  [CATALOG_TIMELINE]: () => ({ items: [], nextCursor: null }),
+  [CATALOG_SEARCH]: () => ({ items: [], total: 0 }),
+  [IMPORT_START]: () => ({ jobId: '00000000-0000-0000-0000-000000000000' }),
+  [IMPORT_CANCEL]: () => ({ cancelled: false }),
+} satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
+
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
 const rendererEntryPath = '/app/out/renderer/index.html';
 // POSIX fixtures — pin the platform so the sender-origin trust check runs under
@@ -26,6 +46,7 @@ const trustedSenderOptions = { rendererEntryPath, platform: 'darwin' as const };
 
 describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§2.6)', () => {
   const handlers: IpcHandlerMap = {
+    ...otherHandlers,
     [APP_GET_VERSION]: () => ({ version: '0.1.0' }),
   };
 
@@ -47,7 +68,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('rejects a non-app file:// sender (attacker-dropped HTML) without calling the handler', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, trustedSenderOptions);
+    registerIpcHandlers(ipcMain, { ...otherHandlers, [APP_GET_VERSION]: spy }, trustedSenderOptions);
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(
@@ -59,7 +80,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('rejects a payload from an untrusted sender origin without calling the handler', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy });
+    registerIpcHandlers(ipcMain, { ...otherHandlers, [APP_GET_VERSION]: spy });
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(
@@ -79,7 +100,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('re-validates the request in main and rejects unexpected payload keys', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, trustedSenderOptions);
+    registerIpcHandlers(ipcMain, { ...otherHandlers, [APP_GET_VERSION]: spy }, trustedSenderOptions);
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(listener?.(trustedEvent, { rogue: true })).rejects.toThrow();
