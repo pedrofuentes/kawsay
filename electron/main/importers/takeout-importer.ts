@@ -555,11 +555,13 @@ async function buildAttachmentRecord(
   const kind = classify(fileName) ?? classifyMime(att.contentType) ?? FALLBACK_KIND;
   const content = Buffer.isBuffer(att.content) ? att.content : Buffer.from(att.content ?? []);
 
-  const scratchPath = join(
-    ctx.workDir,
-    'takeout-mbox-attachments',
-    sanitizeSegment(basename(file.sourceRef)),
-    `${messageIndex}-${attIndex}-${sanitizeSegment(basename(fileName))}`,
+  const scratchPath = toPosix(
+    join(
+      ctx.workDir,
+      'takeout-mbox-attachments',
+      sanitizeSegment(basename(file.sourceRef)),
+      `${messageIndex}-${attIndex}-${sanitizeSegment(basename(fileName))}`,
+    ),
   );
 
   const writeFile = ctx.deps.fs.writeFile;
