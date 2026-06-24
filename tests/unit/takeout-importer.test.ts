@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Readable } from 'node:stream';
 import { join } from 'node:path';
 import { drainImporter } from '../../electron/main/importers/drain';
-import { takeoutImporter } from '../../electron/main/importers/takeout-importer';
+import { findSidecarName, takeoutImporter } from '../../electron/main/importers/takeout-importer';
 import type {
   CatalogRecord,
   ExifData,
@@ -764,5 +764,65 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
         expect(next.value.recordCount).toBeGreaterThanOrEqual(1);
       }
     });
+  });
+});
+
+// A Map that records how its lookup primitives are exercised, so a test can prove
+// the sidecar matcher reuses the per-directory JSON Map directly (O(1) `has`, a
+// single lazy `keys` pass only for the truncation fallback) rather than the old
+// per-media-file `[...keys()]` spread + `new Set(...)` rebuild that made album
+// matching O(n²) on user-controlled input size.
+class CountingMap extends Map<string, string> {
+  hasCalls = 0;
+  keysCalls = 0;
+  override has(key: string): boolean {
+    this.hasCalls += 1;
+    return super.has(key);
+  }
+  override keys() {
+    this.keysCalls += 1;
+    return super.keys();
+  }
+}
+
+describe('findSidecarName (reuses the per-directory JSON Map — O(n²) sidecar-match fix)', () => {
+  it('resolves a canonical media.ext.json through Map.has, never scanning the whole album', () => {
+    const jsons = new CountingMap();
+    for (let i = 0; i < 500; i++) jsons.set(`filler-${i}.jpg.json`, `/abs/filler-${i}.jpg.json`);
+    jsons.set('IMG_1234.jpg.json', '/abs/IMG_1234.jpg.json');
+
+    const match = findSidecarName('IMG_1234.jpg', jsons);
+
+    expect(match).toBe('IMG_1234.jpg.json');
+    // A direct hit is an O(1) Map.has — it must NOT spread/scan every key per file.
+    expect(jsons.hasCalls).toBeGreaterThanOrEqual(1);
+    expect(jsons.keysCalls).toBe(0);
+  });
+
+  it('matches the name(1).jpg ↔ name.jpg(1).json duplicate-counter quirk through Map.has', () => {
+    const jsons = new CountingMap();
+    jsons.set('IMG_0001.jpg(1).json', '/abs/IMG_0001.jpg(1).json');
+
+    const match = findSidecarName('IMG_0001(1).jpg', jsons);
+
+    expect(match).toBe('IMG_0001.jpg(1).json');
+    expect(jsons.keysCalls).toBe(0); // resolved by has(), no full-album scan
+  });
+
+  it('falls back to a single longest-prefix pass over Map.keys only when no direct match exists', () => {
+    const jsons = new CountingMap();
+    jsons.set('averyverylongphotonamethatgottrunc.json', '/abs/trunc.json');
+
+    const match = findSidecarName('averyverylongphotonamethatgottruncated.jpg', jsons);
+
+    expect(match).toBe('averyverylongphotonamethatgottrunc.json');
+    expect(jsons.keysCalls).toBe(1); // one lazy scan, not a per-key Set rebuild
+  });
+
+  it('returns null when nothing matches so the caller falls back to EXIF/mtime (never drops)', () => {
+    const jsons = new CountingMap();
+    jsons.set('unrelatedphoto.jpg.json', '/abs/unrelatedphoto.jpg.json');
+
+    expect(findSidecarName('orphan.jpg', jsons)).toBeNull();
   });
 });
