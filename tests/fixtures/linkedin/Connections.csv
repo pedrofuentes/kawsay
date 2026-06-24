@@ -1,0 +1,6 @@
+﻿Notes:
+"When exporting your connection data, you may notice that some of your connections don't have an email address. This is expected behavior."
+
+First Name,Last Name,URL,Email Address,Company,Position,Connected On
+José,García,https://www.linkedin.com/in/josegarcia,,"Acme, Inc.",Senior Engineer,15 Jan 2024
+Æsop,Fontaine,https://www.linkedin.com/in/aesop,aesop@example.com,Globex,"Director, Operations",03 Feb 2024

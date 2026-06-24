@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Facebook & LinkedIn importers (card C5, AC-16): two more connectors that bring a person's social
+  history into the catalogue, each opened from its export **`.zip`** through the zip-slip–guarded
+  extractor (never a raw unzip) or from a folder you already extracted. **Facebook "Download Your
+  Information"** reads the JSON export — your **posts, message threads, and photo albums** — and fixes
+  the notorious Facebook **mojibake**: the export escapes every character as raw UTF-8 bytes, so a naive
+  read turns "José" into "JosÃ©" and an emoji into garble; the importer re-decodes the text so names and
+  messages are **faithful**, which matters when the archive is a memorial. Post and photo timestamps
+  (Unix seconds) and message timestamps (milliseconds) are read correctly as UTC, each photo/video is
+  linked to its exported file (a reference can only ever point inside the extract, never out via a
+  crafted path), and **nothing is silently dropped** — a text post and its photo are kept as separate
+  memories and a contentless message is still catalogued. **LinkedIn** reads the CSV export —
+  **messages, connections, and shared media links** — through a dependency-free RFC 4180 reader, so a
+  quoted comma, an embedded newline, a UTF-8 BOM, or the free-text `Notes:` preamble can never truncate
+  a message or smear it across rows; column headers are matched across export versions and the varied
+  LinkedIn date formats are read as UTC, with an unrecognized date keeping the row rather than dropping
+  it. For both, a corrupt archive, an unreadable or malformed file, or a missing media file is **skipped
+  and reported** rather than aborting (AC-15), an out-of-range or garbage timestamp keeps the record with
+  no date instead of crashing the import, and a running import can be cancelled. _(Exported as
+  `facebookImporter` / `linkedinImporter`; wiring them into the importer registry is a follow-up.)_
 - Google Takeout importer (card C4, AC-11): the connector for a **Google Takeout** export — it brings your
   **Gmail mailbox** and **Google Photos** library into the catalogue. Point it at the export folder, the
   original **`.zip`** (unpacked through the zip-slip–guarded extractor, never a raw unzip), or a standalone
