@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Packaged, installable app (card P1, AC-5): Kawsay can now be built into real installers — a **macOS
+  `.dmg`** (and `.zip`) for Apple Silicon and Intel, and a **Windows `.exe`** (NSIS) — with one command,
+  `pnpm dist`. The native catalogue engine (`better-sqlite3`, bumped to **12.11.1** for Electron 42
+  compatibility) is rebuilt for the bundled Electron and unpacked alongside the `ffmpeg`/`ffprobe` media
+  tools so it all loads in the installed app, not just in development. The build flips the app's security
+  fuses (no Node escape hatches, ASAR-only loading, hardened file protocol, encrypted cookies) and
+  re-applies the ad-hoc macOS signature so the unsigned build still opens on Apple Silicon. **v1 is
+  unsigned** — the first launch shows a one-time "unidentified developer" prompt (right-click → Open on
+  macOS; *More info → Run anyway* on Windows); code-signing and notarization are a later step, and ASAR
+  **integrity validation** (which depends on signing on macOS) is enabled together with them rather than in
+  the unsigned v1. There is **no auto-updater, no update feed, and no telemetry** — the installer adds no
+  network egress, preserving the local-only promise (AC-4). The automated build never publishes; releasing
+  to GitHub Releases is a deliberate, human-approved step.
 - Search across the library (card U2, AC-6 · AC-7): a calm way to find one memory by a few plain words.
   The renderer's `search` section is now a working **Search** view — a labelled search box whose query is
   **debounced** before it reaches `searchCatalog` (so the catalogue is queried once for the final words, not

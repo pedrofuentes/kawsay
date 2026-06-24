@@ -28,6 +28,148 @@
 
 ---
 
+### ADR-0019: Defer enableEmbeddedAsarIntegrityValidation to the signed build
+**Date**: 2026-06-24
+**Status**: Accepted (refines ADR-0007; v1 exception to ARCHITECTURE §2.5)
+**Tier**: auto-with-audit (adjusts the declared security posture for the *unsigned* v1 build). This ADR is
+the audit note.
+
+**Context**
+`electron/fuses/fuses.ts` `FUSE_CONFIG` declares `enableEmbeddedAsarIntegrityValidation: true` as the
+target packaged-app posture. On macOS this fuse **requires code signing**: the asar-integrity hash lives in
+`Info.plist` and is only trusted under a valid signature. On the unsigned v1 build (`mac.identity: null`;
+signing is a deferred human-required step — ADR-0007), enabling it makes Chromium refuse to load the
+renderer from the asar — the packaged app starts but the window is blank with
+`Failed to load URL … app.asar/out/renderer/index.html (ERR_FILE_NOT_FOUND)`. This is the documented
+Electron behaviour for unsigned builds.
+
+**Decision**
+The unsigned v1 build flips every declared fuse **except** `enableEmbeddedAsarIntegrityValidation`, which is
+set `false` in `electron-builder.yml`. `FUSE_CONFIG` keeps `true` as the signed-production target, and the
+drift guard in `tests/unit/packaging-config.test.ts` encodes the exception (all other fuses lock-step;
+integrity asserted `false` for v1 against the `true` FUSE_CONFIG target). The cofounder re-enables it in
+`electron-builder.yml` together with Developer ID signing + notarization (see the release checklist).
+
+**Alternatives considered**
+- *Keep it `true` and ship v1* — rejected: produces a blank-window app on every unsigned build (including CI
+  smoke builds and any pre-signing testing), verified locally.
+- *Change FUSE_CONFIG to `false`* — rejected: FUSE_CONFIG is the declared *signed-production* target;
+  flipping it there would lose the intent and the cofounder's re-enable signal. The deviation belongs in the
+  v1 build config, documented and test-pinned.
+- *Ad-hoc sign the whole app to satisfy integrity* — rejected: `resetAdHocDarwinSignature` only re-signs the
+  fuse-modified binary; a meaningful integrity guarantee needs the real Developer ID signature, which is the
+  deferred human step anyway.
+
+**Consequences**
+- ✅ The unsigned v1 dmg/zip launches and loads the renderer (verified) while keeping all other hardening
+  fuses active (no Node escape hatches, asar-only loading, hardened `file://`, encrypted cookies).
+- ⚠️ asar tamper-evidence is not active until signing is configured; re-enabling it is a checklist item on
+  the human-required first-publish gate.
+
+---
+
+### ADR-0018: Bump better-sqlite3 12.9.0 → 12.11.1 for Electron 42 native compatibility
+**Date**: 2026-06-24
+**Status**: Accepted (enables ADR-0007 / card P1, AC-5)
+**Tier**: auto-with-audit (the one dependency change in P1). This ADR is the audit note.
+
+**Context**
+Card P1 rebuilds `better-sqlite3` from source for Electron 42's ABI at package time. The pinned `12.9.0`
+fails to compile against Electron 42's V8 (13.x): `v8::External::New` now takes a required `tag` argument
+and `Object::SetNativeDataProperty` is an ambiguous overload. The Node-ABI binary used by Vitest is a
+downloaded *prebuilt*, so the source never compiled locally and the break only surfaces at package time —
+`pnpm dist` (and the same rebuild on CI) cannot produce a loadable native module. better-sqlite3 shipped the
+fixes after 12.9.0: 12.10.1 "Fix V8 external API usage for Electron 42" and 12.11.1 "Fix Electron v42 build
+errors on Windows".
+
+**Decision**
+Bump the exact-pinned `better-sqlite3` to `12.11.1` (same major). 12.11.1 (not 12.10.1) is required because
+AC-5 also ships a Windows `.exe`, and the Windows Electron-42 build fix only landed in 12.11.1. The exact
+pin (no caret) is preserved — native-module ABI builds must stay deterministic.
+
+**Alternatives considered**
+- *Keep 12.9.0 and use prebuilt Electron binaries instead of a source build* — rejected: 12.9.0 predates
+  Electron 42 so publishes no Electron-42 prebuilt, and ADR-0007 deliberately builds native deps from source
+  (`buildDependenciesFromSource: true`) for reproducibility.
+- *Bump only to 12.10.1* — rejected: fixes macOS/general V8 but not the Windows Electron-42 build, and AC-5
+  needs both installers.
+- *Stay on 12.9.0 / downgrade Electron* — rejected: leaves AC-5 unsatisfiable.
+
+**Consequences**
+- ✅ `better-sqlite3` compiles for Electron 42 on macOS (arm64 + x64, both verified) and is configured for
+  the Windows runner; the packaged app loads it at startup (verified by launch).
+- ✅ Same major version; the full test suite (which loads the real module on the Node ABI) stays green.
+- ⚠️ A regression-floor test (`tests/unit/packaging-config.test.ts`) pins `better-sqlite3 ≥ 12.11.1`, because
+  the Node-ABI prebuilt hides Electron-ABI compile breaks from the ordinary test run — a downgrade would
+  otherwise only fail at package time.
+- Called out for review per the card's "only electron-builder" constraint: this is a required compatibility
+  bump of an existing runtime dependency, not a new package.
+
+---
+
+### ADR-0017: Packaging finalization (card P1) — fuse-flip mechanism, non-publishing auto-builds, ABI ordering
+**Date**: 2026-06-24
+**Status**: Accepted (refines ADR-0007)
+**Tier**: auto-with-audit. No new *package* is added (electron-builder + @electron/rebuild already present);
+the one dependency change is a patch-level bump of the existing `better-sqlite3` for Electron-42 native
+compatibility (ADR-0018). Every choice here is reversible config + dev assets, and the local-only runtime
+(ADR-0008, AC-4) is untouched. This ADR is the audit note.
+
+**Context**
+ADR-0007 chose `electron-builder` → GitHub Releases and named the *what* (dmg+zip / nsis, asarUnpack the
+native modules, flip `@electron/fuses` + ASAR integrity, unsigned v1, human-required publish). Card P1
+turns that skeleton into a `pnpm dist` that actually builds and launches, which forced several concrete
+*how* decisions ADR-0007 left open.
+
+**Decision**
+1. **Flip fuses via electron-builder's native `electronFuses` config**, not a custom `afterPack` hook.
+   electron-builder 26 flips `@electron/fuses` (its own bundled copy, via `dynamicImport`) "right before
+   signing" and re-applies the macOS ad-hoc signature when `resetAdHocDarwinSignature: true`. The
+   `electronFuses` block mirrors `electron/fuses/fuses.ts` `FUSE_CONFIG` and is kept in lock-step by
+   `tests/unit/packaging-config.test.ts`. **`resetAdHocDarwinSignature: true` is mandatory**: flipping a
+   fuse rewrites the binary and invalidates its signature, and Apple Silicon refuses to launch a binary
+   with a broken signature — without the re-sign the *unsigned* v1 build would not start on arm64. Net:
+   **zero new packages** (no direct `@electron/fuses`, no hook module). One fuse is the exception —
+   `enableEmbeddedAsarIntegrityValidation` is deferred on the unsigned v1 build (ADR-0019).
+2. **The automated/local build never publishes.** `dist`/`dist:mac`/`dist:win` pass `--publish never`, so
+   a developer or CI build can never upload a GitHub Release. The `publish: github` block exists *only* for
+   the human-gated release workflow (protected GitHub Environment, @pedrofuentes approval). This makes the
+   "first production publish is HUMAN-REQUIRED" gate (ADR-0007, PRD AC-5) structural, not procedural. No
+   `electron-updater`/`autoUpdater` is bundled, so the publish provider introduces no runtime network feed
+   and the zero-egress guarantee (AC-4) is untouched.
+3. **`pnpm dist` rebuilds the native module via electron-builder's own `npmRebuild`, not a pre-step.** The
+   skeleton chained `pnpm rebuild:native` (the standalone `@electron/rebuild` 3.7.2 CLI) before the build;
+   that is dropped from `dist`/`dist:mac`/`dist:win` because electron-builder already rebuilds
+   `better-sqlite3` from source for Electron's ABI during packaging, and the standalone CLI additionally
+   mis-resolves the module out of a nested git worktree (see LEARNINGS). The `rebuild:native` script is kept
+   for switching a dev checkout to the Electron ABI by hand. Ordering still matters: tests run on Node's
+   ABI, `pnpm dist` leaves `better-sqlite3` on Electron's ABI, so `pnpm dist` runs *after* the test gate and
+   `pnpm rebuild better-sqlite3` restores the Node ABI for subsequent `pnpm test` runs (see LEARNINGS).
+4. **Placeholder MIT icons** (`resources/icon.icns/.ico/.png`) are generated dependency-free and
+   auto-discovered via `buildResources`; replacing them with final brand art is a later visual task.
+
+**Alternatives considered**
+- *Custom `afterPack` hook + direct `@electron/fuses` devDependency* — rejected: more code, a new dep, and
+  it would have to re-implement the ad-hoc re-sign that electron-builder already does correctly.
+- *Keep `publish: github` active for `pnpm dist` (rely on the absence of a tag to avoid publishing)* —
+  rejected: `--publish never` is explicit and cannot be defeated by CI env heuristics.
+- *Ship `enableEmbeddedAsarIntegrityValidation` active in v1* — rejected: macOS asar-integrity validation
+  requires code signing, so on the unsigned v1 build the renderer fails to load from the asar
+  (ERR_FILE_NOT_FOUND). It is deferred to the signing step (ADR-0019).
+
+**Consequences**
+- ✅ `pnpm dist` builds the macOS dmg/zip (arm64 + x64) locally with the native catalog engine loading under
+  Electron's ABI and the hardening fuses active — verified by launching the packaged app (the renderer and
+  the eagerly-loaded `better-sqlite3` 12.11.1 both come up clean).
+- ✅ The only dependency change is the `better-sqlite3` patch bump (ADR-0018); no new package is added.
+- ✅ An automated build cannot publish a release; publishing remains a deliberate human act.
+- ⚠️ Running `pnpm test` immediately after `pnpm dist` fails until `pnpm rebuild better-sqlite3` restores
+  the Node ABI — documented in LEARNINGS and handled by ordering in the release workflow.
+- ⚠️ Windows `.exe` cannot be cross-built on macOS (native module + NSIS); it is produced on the Windows CI
+  runner. The config is verified correct; the artifact itself is built/smoke-launched on `windows-latest`.
+
+---
+
 ### ADR-0016: jsdom + Testing Library (dev-only) to drive the renderer test-first
 **Date**: 2026-06-24
 **Status**: Accepted
