@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Importer registry wiring (card W1): the **Google Takeout**, **Facebook**, and **LinkedIn** connectors
+  are now registered, so an import started from the app (`import:start`) actually **reaches** them — both
+  by auto-detection (the registry returns the first connector whose cheap `canHandle` accepts the dropped
+  path) and by explicit source type. The list is ordered **most-specific first** so the right connector
+  always wins: WhatsApp, then Facebook and LinkedIn (which claim only on their named export markers), then
+  Google Takeout, with the generic **folder** importer **last** as the catch-all — it claims *any*
+  directory, so placed earlier it would shadow a Takeout/Facebook/LinkedIn/WhatsApp folder and silently
+  ingest it as a plain photo folder. No new dependencies; no connector behaviour changed.
 - Facebook & LinkedIn importers (card C5, AC-16): two more connectors that bring a person's social
   history into the catalogue, each opened from its export **`.zip`** through the zip-slip–guarded
   extractor (never a raw unzip) or from a folder you already extracted. **Facebook "Download Your
@@ -27,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   it. For both, a corrupt archive, an unreadable or malformed file, or a missing media file is **skipped
   and reported** rather than aborting (AC-15), an out-of-range or garbage timestamp keeps the record with
   no date instead of crashing the import, and a running import can be cancelled. _(Exported as
-  `facebookImporter` / `linkedinImporter`; wiring them into the importer registry is a follow-up.)_
+  `facebookImporter` / `linkedinImporter`; wired into the importer registry in card W1.)_
 - Google Takeout importer (card C4, AC-11): the connector for a **Google Takeout** export — it brings your
   **Gmail mailbox** and **Google Photos** library into the catalogue. Point it at the export folder, the
   original **`.zip`** (unpacked through the zip-slip–guarded extractor, never a raw unzip), or a standalone
@@ -60,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `AbortSignal`, the orchestrator stops at the next record boundary and returns a **partial summary**
   with `cancelled: true` (no throw, honouring AC-15). Workers are torn down on completion, on cancel,
   and on window-close/quit, so none is ever orphaned. Adds an ordered **importer registry**
-  (`selectImporter` picks the first connector whose `canHandle` matches — folder, then WhatsApp) and the
+  (`selectImporter` picks the first connector whose `canHandle` matches) and the
   TS types the renderer cards (U1–U3) import. No new dependencies; the F1 security model
   (contextIsolation, nodeIntegration off, CSP, navigation guards, AC-4 zero-egress) is unchanged.
 - WhatsApp "Export Chat" importer (card C3, AC-1): the flagship messaging connector — brings a
