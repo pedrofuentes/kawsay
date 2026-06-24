@@ -38,15 +38,20 @@ asarUnpack:
 
 # Security fuses flipped at package time (ARCHITECTURE §2.5/§8, ADR-0007). Mirrors
 # electron/fuses/fuses.ts FUSE_CONFIG — kept in lock-step by tests/unit/packaging-
-# config.test.ts. electron-builder flips these via its bundled @electron/fuses right
-# before signing. resetAdHocDarwinSignature re-applies the ad-hoc macOS signature
-# after the flip so the UNSIGNED v1 build still launches on Apple Silicon (arm64).
+# config.test.ts — with ONE deliberate v1 exception (the asar-integrity fuse below).
+# electron-builder flips these via its bundled @electron/fuses right before signing.
+# resetAdHocDarwinSignature re-applies the ad-hoc macOS signature after the flip so the
+# UNSIGNED v1 build still launches on Apple Silicon (arm64).
 electronFuses:
   runAsNode: false
   enableNodeOptionsEnvironmentVariable: false
   enableNodeCliInspectArguments: false
   onlyLoadAppFromAsar: true
-  enableEmbeddedAsarIntegrityValidation: true
+  # FUSE_CONFIG declares this true (the signed-production target), but macOS asar
+  # integrity validation REQUIRES code signing: on the UNSIGNED v1 build it makes the
+  # renderer fail to load from the asar (ERR_FILE_NOT_FOUND). v1 ships it OFF; the
+  # cofounder re-enables it with Developer ID signing/notarization (ADR-0019, AC-5).
+  enableEmbeddedAsarIntegrityValidation: false
   grantFileProtocolExtraPrivileges: false
   enableCookieEncryption: true
   resetAdHocDarwinSignature: true
