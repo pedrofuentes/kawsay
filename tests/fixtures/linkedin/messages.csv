@@ -1,0 +1,5 @@
+CONVERSATION ID,CONVERSATION TITLE,FROM,SENDER PROFILE URL,TO,RECIPIENT PROFILE URLS,DATE,SUBJECT,CONTENT,FOLDER
+abc123,,Ana Lopez,https://www.linkedin.com/in/analopez,Pedro Fuentes,https://www.linkedin.com/in/pedro,2024-03-15 09:30:00 UTC,Coffee?,"Hey Pedro, let's grab coffee, maybe Tuesday?",INBOX
+def456,,Pedro Fuentes,https://www.linkedin.com/in/pedro,Ana Lopez,https://www.linkedin.com/in/analopez,2024-03-15 10:00:00 UTC,Re: Coffee?,"Sounds great!
+Tuesday at 3pm works.",INBOX
+BADROW
