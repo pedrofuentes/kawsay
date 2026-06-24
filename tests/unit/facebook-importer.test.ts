@@ -7,6 +7,7 @@ import {
   decodeFacebookText,
   facebookImporter,
 } from '../../electron/main/importers/facebook-importer';
+import { toIsoUtc } from '../../electron/main/db/catalog-repo';
 import type {
   CatalogRecord,
   FileStat,
@@ -420,6 +421,73 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
       // The post bodies are still catalogued even though their media is missing.
       expect(records.find((r) => r.body === POST0_TEXT)).toBeDefined();
       expect(records.find((r) => r.body === POST1_TEXT)).toBeDefined();
+    });
+  });
+
+  describe('out-of-range timestamps — never emit an Invalid Date that aborts ingest (AC-15)', () => {
+    // The downstream ingest consumer renders every record's date through
+    // catalog-repo `toIsoUtc` → `Date.prototype.toISOString()`, which throws
+    // `RangeError: Invalid time value` on an Invalid Date. With no per-record
+    // catch in the ingest drain loop, that single throw aborts the whole import
+    // and drops every not-yet-persisted memory — the exact WhatsApp data-loss
+    // class AC-15 exists to prevent. A finite-but-out-of-range FB timestamp
+    // (`asFiniteNumber` lets it through) must therefore yield a record kept with
+    // `date: null`, never an Invalid Date pushed across the importer boundary.
+    const OUT_OF_RANGE = 1e16; // finite, but new Date(1e16[ ms ]) / *1000 overflows → Invalid Date
+
+    it('keeps a post with an out-of-range SECONDS timestamp as date:null, preserving other posts', async () => {
+      const content = JSON.stringify([
+        { timestamp: 1672531200, data: [{ post: 'good post' }] },
+        { timestamp: OUT_OF_RANGE, data: [{ post: 'bad timestamp post' }] },
+      ]);
+      const entries: ArchiveEntry[] = [{ entryPath: 'posts/your_posts_1.json', content }];
+
+      const { records, result, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      // The good post keeps its valid date; the out-of-range post is still
+      // catalogued (never silently dropped) but with NO date.
+      expect(records).toHaveLength(2);
+      const good = records.find((r) => r.body === 'good post');
+      const bad = records.find((r) => r.body === 'bad timestamp post');
+      expect(good?.date?.value.getTime()).toBe(1672531200 * 1000);
+      expect(bad).toBeDefined();
+      expect(bad?.date).toBeNull();
+      // The run completed (no abort, nothing skipped) and EVERY emitted date is
+      // safe to render — the downstream toIsoUtc never sees an Invalid Date.
+      expect(result.recordCount).toBe(2);
+      expect(skips).toHaveLength(0);
+      for (const r of records) {
+        const d = r.date;
+        if (d) expect(() => toIsoUtc(d.value)).not.toThrow();
+      }
+    });
+
+    it('keeps a message with an out-of-range MILLISECONDS timestamp as date:null, preserving other messages', async () => {
+      const content = JSON.stringify({
+        participants: [{ name: 'Ana' }],
+        messages: [
+          { sender_name: 'Ana', timestamp_ms: 1672617600000, content: 'good message' },
+          { sender_name: 'Ana', timestamp_ms: OUT_OF_RANGE, content: 'bad timestamp message' },
+        ],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+      ];
+
+      const { records, result, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(records).toHaveLength(2);
+      const good = records.find((r) => r.body === 'good message');
+      const bad = records.find((r) => r.body === 'bad timestamp message');
+      expect(good?.date?.value.getTime()).toBe(1672617600000);
+      expect(bad).toBeDefined();
+      expect(bad?.date).toBeNull();
+      expect(result.recordCount).toBe(2);
+      expect(skips).toHaveLength(0);
+      for (const r of records) {
+        const d = r.date;
+        if (d) expect(() => toIsoUtc(d.value)).not.toThrow();
+      }
     });
   });
 
