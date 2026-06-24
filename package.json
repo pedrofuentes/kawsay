@@ -30,6 +30,7 @@
     "better-sqlite3": "12.9.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "yauzl": "^3.4.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -39,6 +40,7 @@
     "@types/node": "^20.19.0",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "@types/yauzl": "^3.4.0",
     "@vitejs/plugin-react": "^4.7.0",
     "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
