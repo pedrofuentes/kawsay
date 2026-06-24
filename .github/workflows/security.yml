@@ -1,0 +1,65 @@
+name: Security
+
+# Secret scanning (gitleaks) + SAST (semgrep). On this private repo GitHub
+# Advanced Security (CodeQL + secret scanning) is unavailable, so these two
+# open-source scanners substitute for that coverage and gate every change.
+on:
+  pull_request:
+  push:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Scope tokens to this job (least-privilege). On pull_request events the
+    # gitleaks-action GETs /repos/.../pulls/<n>/commits to enumerate the range
+    # to scan; that read needs pull-requests: read, otherwise the API returns
+    # 403 "Resource not accessible by integration". Stays read-only — comments
+    # are disabled below so pull-requests: write is never required.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history so gitleaks can scan every commit reachable from HEAD.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No license needed: this repo is owned by a personal account.
+          # Comments stay off so the job never needs pull-requests: write; a
+          # real finding still fails the check and surfaces in the SARIF summary.
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+
+  semgrep:
+    name: Semgrep (SAST)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run semgrep
+        # Run the official, digest-pinned semgrep container via `docker run`
+        # rather than as a job `container:` — the image is Alpine/musl, which
+        # cannot execute glibc-based JavaScript actions (e.g. actions/checkout).
+        # `--error` makes any finding fail the job. v1.167.0.
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -w /src \
+            semgrep/semgrep@sha256:06938c1f365d3f67b8cedd8bc117607ae64253f88a0e768e9da9408548927dd6 \
+            semgrep scan --config=auto --error
