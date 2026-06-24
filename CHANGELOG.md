@@ -25,8 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a message or smear it across rows; column headers are matched across export versions and the varied
   LinkedIn date formats are read as UTC, with an unrecognized date keeping the row rather than dropping
   it. For both, a corrupt archive, an unreadable or malformed file, or a missing media file is **skipped
-  and reported** rather than aborting (AC-15), and a running import can be cancelled. _(Exported as
+  and reported** rather than aborting (AC-15), an out-of-range or garbage timestamp keeps the record with
+  no date instead of crashing the import, and a running import can be cancelled. _(Exported as
   `facebookImporter` / `linkedinImporter`; wiring them into the importer registry is a follow-up.)_
+- WhatsApp "Export Chat" importer (card C3, AC-1): the flagship messaging connector — brings a
   conversation's **text messages, photos, voice notes, audio, video, and documents** into the
   catalogue end-to-end. Point it at the exported **`.zip`** (unpacked through the zip-slip–guarded
   extractor, never a raw unzip) or a folder you already extracted. It reads the `_chat.txt` log
