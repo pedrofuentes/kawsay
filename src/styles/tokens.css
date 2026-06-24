@@ -1,0 +1,162 @@
+/* Design tokens — USER_FLOWS §5. Authored as a Tailwind v4 `@theme` so every
+ * value is both a CSS custom property (`var(--…)`) and a generated utility
+ * (`bg-canvas`, `text-text-secondary`, `font-display`, `rounded-lg`, …).
+ * Components consume tokens only — zero hardcoded hex, sizes, or durations
+ * (ARCHITECTURE §9; AC-13). Semantically named for a future opt-in dark theme. */
+
+@theme {
+  /* ── Typography: families (bundled locally, see fonts.css) ───────────── */
+  --font-display: 'Lora', 'Source Serif 4', Georgia, serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+
+  /* ── Typography: size scale (18px preferred body for 60+ readers) ────── */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-md: 18px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 30px;
+  --text-3xl: 36px;
+  --text-4xl: 48px;
+
+  /* ── Typography: line-heights ────────────────────────────────────────── */
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-base: 1.6;
+  --leading-relaxed: 1.75;
+  --leading-loose: 2;
+
+  /* ── Typography: letter-spacing ──────────────────────────────────────── */
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-wider: 0.04em;
+
+  /* ── Colour: canvas & surface (warm off-white, never clinical) ───────── */
+  --color-canvas: #f6f2ee;
+  --color-surface-raised: #ffffff;
+  --color-surface-tinted: #f0ebe4;
+  --color-surface-sunken: #ede6dd;
+
+  /* ── Colour: text (warm near-black; ratios vs canvas, USER_FLOWS §6.1) ─ */
+  --color-text-primary: #2a1f1a;
+  --color-text-secondary: #5c504a;
+  --color-text-tertiary: #8a7d76;
+  --color-text-disabled: #c0b4ac;
+  --color-text-inverse: #faf7f4;
+  --color-text-on-primary: #ffffff;
+
+  /* ── Colour: sage (primary interactive) ──────────────────────────────── */
+  --color-sage-50: #f0f5f2;
+  --color-sage-100: #dce9e2;
+  --color-sage-200: #b8d2c5;
+  --color-sage-300: #8db8a4;
+  --color-sage-400: #619b84;
+  --color-sage-500: #3f7d64;
+  --color-sage-600: #2e5e4a;
+  --color-sage-700: #1f4234;
+  --color-sage-800: #132b22;
+  --color-sage-900: #0a1811;
+
+  /* ── Colour: clay (warm secondary accent) ────────────────────────────── */
+  --color-clay-50: #faf3ee;
+  --color-clay-100: #f2e3d6;
+  --color-clay-200: #e4c6ac;
+  --color-clay-300: #cfa47e;
+  --color-clay-400: #b78153;
+  --color-clay-500: #9e6235;
+  --color-clay-600: #7c4b27;
+  --color-clay-700: #58341b;
+  --color-clay-800: #371f0f;
+  --color-clay-900: #1c0f05;
+
+  /* ── Colour: parchment (gentle amber warmth, used sparingly) ─────────── */
+  --color-parchment-100: #fdf8f0;
+  --color-parchment-200: #faf0de;
+  --color-parchment-300: #f5e2b8;
+
+  /* ── Colour: borders ─────────────────────────────────────────────────── */
+  --color-border-subtle: #e6ddd5;
+  --color-border-default: #d1c5bb;
+  --color-border-strong: #b5a89d;
+  --color-border-interactive: #6e6259;
+
+  /* ── Colour: semantic status (muted, warm, never alarming) ───────────── */
+  --color-success-bg: #eef5f0;
+  --color-success-text: #215c38;
+  --color-success-border: #b2d6bd;
+  --color-error-bg: #fdf0ec;
+  --color-error-text: #8c2e1a;
+  --color-error-border: #f0b9a8;
+  --color-warning-bg: #fdf6e6;
+  --color-warning-text: #6b4500;
+  --color-warning-border: #edd898;
+  --color-info-bg: #eef3f7;
+  --color-info-text: #1c4565;
+  --color-info-border: #b0cee4;
+
+  /* ── Colour: focus ring (sage-600) ───────────────────────────────────── */
+  --color-focus-ring: #2e5e4a;
+
+  /* ── Border radius (rounded = warm/approachable) ─────────────────────── */
+  --radius-sm: 4px;
+  --radius-base: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* ── Elevation (warm-tinted shadows; brown base, never cool grey) ────── */
+  --shadow-sm: 0 1px 3px rgba(42, 31, 26, 0.06), 0 1px 2px rgba(42, 31, 26, 0.04);
+  --shadow-base: 0 4px 6px -1px rgba(42, 31, 26, 0.07), 0 2px 4px -2px rgba(42, 31, 26, 0.04);
+  --shadow-md: 0 10px 15px -3px rgba(42, 31, 26, 0.08), 0 4px 6px -4px rgba(42, 31, 26, 0.04);
+  --shadow-lg: 0 20px 25px -5px rgba(42, 31, 26, 0.09), 0 8px 10px -6px rgba(42, 31, 26, 0.04);
+
+  /* ── Motion: easings ─────────────────────────────────────────────────── */
+  --ease-default: ease-out;
+  --ease-gentle: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Tokens without a Tailwind utility namespace — available via `var(--…)`.
+ * Spacing intentionally mirrors Tailwind's default 4px scale (USER_FLOWS §5.5),
+ * so `p-6` = 24px, `gap-4` = 16px, etc. already match the token steps. */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  --duration-instant: 80ms;
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
+  --duration-calm: 600ms;
+}
+
+/* Reduced motion is the default posture and is honoured globally (USER_FLOWS
+ * §5.6; AC-13): all animation/transition collapses to near-instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

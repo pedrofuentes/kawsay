@@ -1,0 +1,64 @@
+/* Typefaces bundled locally as .woff2 — NEVER fetched from Google Fonts, a CDN,
+ * or any URL at runtime (MISSION §5 NEVER list; AC-4; USER_FLOWS §5.4). Served
+ * under `font-src 'self'` by the strict CSP. OFL-1.1 licences live alongside the
+ * files (OFL-Inter.txt, OFL-Lora.txt). */
+
+/* Inter — screen-legible UI / body */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/inter-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/inter-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./fonts/inter-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/inter-latin-700-normal.woff2') format('woff2');
+}
+
+/* Lora — warmth and gravitas for the loved one's name, titles, payoff lines */
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/lora-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/lora-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./fonts/lora-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/lora-latin-700-normal.woff2') format('woff2');
+}

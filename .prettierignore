@@ -1,0 +1,17 @@
+# Build output and dependencies
+out/
+dist/
+node_modules/
+.worktrees/
+
+# Generated / not hand-formatted
+pnpm-lock.yaml
+
+# Locally-vendored fonts (binary + upstream OFL licences — never reformat)
+src/styles/fonts/
+*.woff2
+
+# Hand-maintained project & process docs (some are edit-restricted — never reformat).
+# Prettier governs this card's code only (TS/TSX/CSS/HTML/JSON/YAML).
+*.md
+docs/
