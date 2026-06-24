@@ -4,6 +4,7 @@ import { createCatalogSession } from '../../electron/main/app/catalog-session';
 import { openCatalog } from '../../electron/main/db/connection';
 import { createCatalogRepo } from '../../electron/main/db/catalog-repo';
 import { librarySummarySchema, itemCardSchema } from '@shared/ipc/schemas';
+import type { SourceType } from '@shared/catalog';
 import type { IngestionCoordinator } from '../../electron/main/importers/ingestion/coordinator';
 import type { IngestionJobSpec } from '../../electron/main/importers/ingestion/protocol';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
@@ -146,9 +147,25 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(job.workDir).toBe(join(root, 'extract', job.sourceId));
   });
 
-  it('beginImport rejects a source type that has no connector yet', () => {
+  it('beginImport reaches every newly wired connector (Takeout, Facebook, LinkedIn)', () => {
     session.createLibrary({ path: root });
-    expect(() => session.beginImport({ sourceType: 'google_takeout', inputPath: root })).toThrow();
+    for (const sourceType of ['google_takeout', 'facebook', 'linkedin'] as const) {
+      const { jobId } = session.beginImport({ sourceType, inputPath: root });
+      expect(jobId).toBe(JOB_ID);
+    }
+    expect(coordinator.started).toHaveLength(3);
+    expect(coordinator.started.map((job) => job.sourceType)).toEqual([
+      'google_takeout',
+      'facebook',
+      'linkedin',
+    ]);
+  });
+
+  it('beginImport rejects an unknown source type and starts nothing', () => {
+    session.createLibrary({ path: root });
+    expect(() =>
+      session.beginImport({ sourceType: 'instagram' as unknown as SourceType, inputPath: root }),
+    ).toThrow();
     expect(coordinator.started).toHaveLength(0);
   });
 

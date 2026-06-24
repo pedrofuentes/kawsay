@@ -1,26 +1,51 @@
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { importers, selectImporter } from '../../electron/main/importers/registry';
 import { folderImporter } from '../../electron/main/importers/folder-importer';
 import { whatsappImporter } from '../../electron/main/importers/whatsapp-importer';
+import { takeoutImporter } from '../../electron/main/importers/takeout-importer';
+import { facebookImporter } from '../../electron/main/importers/facebook-importer';
+import { linkedinImporter } from '../../electron/main/importers/linkedin-importer';
 import type { ImporterDeps } from '../../electron/main/importers/types';
 
-// A deps double whose fs makes a path look like a directory and/or a zip that
-// carries the WhatsApp `_chat.txt` central-directory marker — enough to drive
-// each concrete importer's real `canHandle` predicate without touching disk.
-function fakeDeps(options: { dirs?: Set<string>; zipMarkers?: Record<string, string> } = {}): ImporterDeps {
-  const dirs = options.dirs ?? new Set<string>();
+interface FakeFsOptions {
+  /** Paths whose `stat().isDirectory()` reports a directory. */
+  dirs?: Iterable<string>;
+  /** Paths `exists()` reports present — marker files/subdirs and standalone `.mbox`. */
+  files?: Iterable<string>;
+  /** Top-level entry names returned by `readDir(dirPath)`. */
+  entries?: Record<string, readonly string[]>;
+  /** Verbatim bytes returned by `readFile(path)` — the zip central-directory scan seam. */
+  zipMarkers?: Record<string, string>;
+}
+
+/**
+ * A deps double that drives each concrete importer's REAL `canHandle` predicate
+ * from in-memory fixtures: directory-ness (`stat`), discriminating marker
+ * presence (`exists`), the top-level listing (`readDir`), and a zip's
+ * central-directory bytes (`readFile`).
+ *
+ * `exists` defaults to ABSENT, so a directory only resolves to a *specific*
+ * connector when its discriminating marker is explicitly present — otherwise the
+ * generic folder importer (which claims any directory) is the catch-all. This is
+ * what makes the precedence assertions below meaningful rather than accidental.
+ */
+function fakeDeps(options: FakeFsOptions = {}): ImporterDeps {
+  const dirs = new Set(options.dirs ?? []);
+  const files = new Set(options.files ?? []);
+  const entries = options.entries ?? {};
   const zipMarkers = options.zipMarkers ?? {};
   return {
     fs: {
       readFile: async (path: string) => Buffer.from(zipMarkers[path] ?? ''),
-      readDir: async () => [],
+      readDir: async (path: string) => entries[path] ?? [],
       stat: async (path: string) => ({
         size: 0,
         mtimeMs: 0,
         isFile: () => !dirs.has(path),
         isDirectory: () => dirs.has(path),
       }),
-      exists: async () => true,
+      exists: async (path: string) => files.has(path) || dirs.has(path),
     },
     extractArchive: async () => [],
     readExif: async () => null,
@@ -29,37 +54,153 @@ function fakeDeps(options: { dirs?: Set<string>; zipMarkers?: Record<string, str
   };
 }
 
-describe('importer registry (ARCHITECTURE §3.4)', () => {
-  it('exposes the concrete importers currently on main, in order', () => {
-    expect(importers).toEqual([folderImporter, whatsappImporter]);
+describe('importer registry — composition & resolution order (ARCHITECTURE §3.4)', () => {
+  it('wires every concrete connector in, specific-first with folder as the catch-all', () => {
+    expect(importers).toEqual([
+      whatsappImporter,
+      facebookImporter,
+      linkedinImporter,
+      takeoutImporter,
+      folderImporter,
+    ]);
   });
 
-  it('is a frozen, ordered list (registration order is the resolution order)', () => {
-    expect(importers[0]?.id).toBe('folder');
-    expect(importers[1]?.id).toBe('whatsapp');
+  it('lists the generic folder importer LAST so it never shadows a specific connector', () => {
+    expect(importers.map((importer) => importer.id)).toEqual([
+      'whatsapp',
+      'facebook',
+      'linkedin',
+      'google_takeout',
+      'folder',
+    ]);
+    expect(importers[importers.length - 1]).toBe(folderImporter);
   });
 
-  it('selectImporter picks the folder importer for a directory', async () => {
-    const deps = fakeDeps({ dirs: new Set(['/memories/photos']) });
-    const chosen = await selectImporter('/memories/photos', deps);
-    expect(chosen).toBe(folderImporter);
-  });
-
-  it('selectImporter picks the WhatsApp importer for an export .zip carrying _chat.txt', async () => {
-    const deps = fakeDeps({ zipMarkers: { '/dl/WhatsApp Chat - Mum.zip': 'PK\u0003\u0004_chat.txt' } });
-    const chosen = await selectImporter('/dl/WhatsApp Chat - Mum.zip', deps);
+  it('routes an unpacked WhatsApp export folder to the WhatsApp importer (not folder)', async () => {
+    const dir = '/imp/whatsapp-export';
+    const deps = fakeDeps({
+      dirs: [dir],
+      files: [join(dir, '_chat.txt')],
+      entries: { [dir]: ['_chat.txt', 'IMG-001.jpg'] },
+    });
+    const chosen = await selectImporter(dir, deps);
     expect(chosen).toBe(whatsappImporter);
+    expect(chosen).not.toBe(folderImporter);
   });
 
-  it('selectImporter returns undefined when no importer can handle the path', async () => {
-    const deps = fakeDeps();
-    const chosen = await selectImporter('/dl/mystery.bin', deps);
-    expect(chosen).toBeUndefined();
+  it('routes a WhatsApp export .zip carrying _chat.txt to the WhatsApp importer', async () => {
+    const deps = fakeDeps({ zipMarkers: { '/dl/WhatsApp Chat - Mum.zip': 'PK\u0003\u0004_chat.txt' } });
+    expect(await selectImporter('/dl/WhatsApp Chat - Mum.zip', deps)).toBe(whatsappImporter);
   });
 
-  it('selectImporter returns undefined for a .zip that is not a WhatsApp export', async () => {
+  it('routes a Google Takeout export folder to the Takeout importer (not folder)', async () => {
+    const dir = '/imp/Takeout';
+    const deps = fakeDeps({
+      dirs: [dir],
+      entries: { [dir]: ['archive_browser.html', 'Mail', 'Google Photos'] },
+    });
+    const chosen = await selectImporter(dir, deps);
+    expect(chosen).toBe(takeoutImporter);
+    expect(chosen).not.toBe(folderImporter);
+  });
+
+  it('routes a Google Takeout .zip to the Takeout importer', async () => {
+    const zip = '/imp/takeout-20240101.zip';
+    const deps = fakeDeps({ zipMarkers: { [zip]: 'PK\u0003\u0004Takeout/archive_browser.html' } });
+    expect(await selectImporter(zip, deps)).toBe(takeoutImporter);
+  });
+
+  it('routes a Facebook DYI export folder to the Facebook importer (not folder)', async () => {
+    const dir = '/imp/facebook-export';
+    const deps = fakeDeps({
+      dirs: [dir],
+      files: [join(dir, 'your_activity_across_facebook')],
+      entries: { [dir]: ['your_activity_across_facebook'] },
+    });
+    const chosen = await selectImporter(dir, deps);
+    expect(chosen).toBe(facebookImporter);
+    expect(chosen).not.toBe(folderImporter);
+  });
+
+  it('routes a LinkedIn CSV export folder to the LinkedIn importer (not folder)', async () => {
+    const dir = '/imp/linkedin-export';
+    const deps = fakeDeps({
+      dirs: [dir],
+      files: [join(dir, 'Connections.csv')],
+      entries: { [dir]: ['Connections.csv', 'messages.csv', 'Rich_Media.csv'] },
+    });
+    const chosen = await selectImporter(dir, deps);
+    expect(chosen).toBe(linkedinImporter);
+    expect(chosen).not.toBe(folderImporter);
+  });
+
+  it('routes a LinkedIn export .zip of CSVs to the LinkedIn importer', async () => {
+    const zip = '/imp/Basic_LinkedInDataExport.zip';
+    const deps = fakeDeps({ zipMarkers: { [zip]: 'PK\u0003\u0004Connections.csv messages.csv' } });
+    expect(await selectImporter(zip, deps)).toBe(linkedinImporter);
+  });
+
+  it('falls back to the folder importer for a plain photo folder (no connector markers)', async () => {
+    const dir = '/imp/holiday-photos';
+    const deps = fakeDeps({
+      dirs: [dir],
+      entries: { [dir]: ['IMG_001.jpg', 'IMG_002.jpg', 'clip.mp4'] },
+    });
+    expect(await selectImporter(dir, deps)).toBe(folderImporter);
+  });
+
+  it('keeps the generic folder importer from shadowing ANY specific connector', async () => {
+    // Every fixture is a *directory* — the input shape folderImporter always
+    // claims — so this is THE regression guard: each specific export must
+    // out-resolve folder, which is only true while folder is registered last.
+    const whatsappDir = '/d/whatsapp';
+    const takeoutDir = '/d/Takeout';
+    const facebookDir = '/d/facebook';
+    const linkedinDir = '/d/linkedin';
+    const deps = fakeDeps({
+      dirs: [whatsappDir, takeoutDir, facebookDir, linkedinDir],
+      files: [
+        join(whatsappDir, '_chat.txt'),
+        join(facebookDir, 'your_activity_across_facebook'),
+        join(linkedinDir, 'Connections.csv'),
+      ],
+      entries: {
+        [takeoutDir]: ['archive_browser.html'],
+        [facebookDir]: ['your_activity_across_facebook'],
+        [linkedinDir]: ['Connections.csv'],
+      },
+    });
+    expect(await selectImporter(whatsappDir, deps)).toBe(whatsappImporter);
+    expect(await selectImporter(takeoutDir, deps)).toBe(takeoutImporter);
+    expect(await selectImporter(facebookDir, deps)).toBe(facebookImporter);
+    expect(await selectImporter(linkedinDir, deps)).toBe(linkedinImporter);
+    for (const dir of [whatsappDir, takeoutDir, facebookDir, linkedinDir]) {
+      expect(await selectImporter(dir, deps)).not.toBe(folderImporter);
+    }
+  });
+
+  it('prefers the marker-specific Facebook importer over the broad Takeout album heuristic', async () => {
+    // A Facebook export root that ALSO carries a top-level JSON + media file —
+    // exactly what Takeout's `hasJson && hasMedia` Google-Photos-album fallback
+    // would claim. Distinctive markers must win, so Facebook precedes Takeout.
+    const dir = '/imp/fb-with-media';
+    const deps = fakeDeps({
+      dirs: [dir],
+      files: [join(dir, 'your_activity_across_facebook')],
+      entries: { [dir]: ['profile_information.json', 'avatar.jpg', 'your_activity_across_facebook'] },
+    });
+    // Takeout's predicate really would accept this folder…
+    expect(await takeoutImporter.canHandle(dir, deps)).toBe(true);
+    // …but resolution returns Facebook because it is registered ahead of Takeout.
+    expect(await selectImporter(dir, deps)).toBe(facebookImporter);
+  });
+
+  it('returns undefined when no importer recognises the path', async () => {
+    expect(await selectImporter('/dl/mystery.bin', fakeDeps())).toBeUndefined();
+  });
+
+  it('returns undefined for a .zip that matches no connector', async () => {
     const deps = fakeDeps({ zipMarkers: { '/dl/random.zip': 'PK\u0003\u0004just-some-files' } });
-    const chosen = await selectImporter('/dl/random.zip', deps);
-    expect(chosen).toBeUndefined();
+    expect(await selectImporter('/dl/random.zip', deps)).toBeUndefined();
   });
 });

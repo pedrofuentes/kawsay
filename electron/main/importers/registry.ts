@@ -1,21 +1,44 @@
 import type { Importer, ImporterDeps } from './types';
 import { folderImporter } from './folder-importer';
 import { whatsappImporter } from './whatsapp-importer';
+import { facebookImporter } from './facebook-importer';
+import { linkedinImporter } from './linkedin-importer';
+import { takeoutImporter } from './takeout-importer';
 
 /**
  * The ordered list of concrete connectors the ingestion worker can run
  * (ARCHITECTURE §3.4). Registration order IS resolution order: {@link
  * selectImporter} returns the FIRST importer whose `canHandle` accepts the
- * dropped path, so more permissive importers are listed last. Today only the two
- * connectors merged on main are wired in; C4/C5 (Takeout, Facebook/LinkedIn)
- * append here with no other layer change.
+ * dropped path, and `beginImport` (catalog-session) likewise resolves a chosen
+ * `sourceType` by `id` from this same array — so a connector is only reachable
+ * from `import:start` once it is listed here.
  *
- * `folder` precedes `whatsapp` because a WhatsApp export is recognised by its
- * `.zip` (or an unpacked `_chat.txt` folder) while `folder` only ever claims a
- * directory — so a dropped `.zip` falls through to `whatsapp`, and a plain photo
- * directory is handled in place by `folder`.
+ * Order is by SPECIFICITY, most specific first, because the first match wins:
+ *
+ * - `whatsapp` claims only on its unique `_chat.txt` marker (a `.zip`
+ *   central-directory byte-scan, or that file inside an unpacked folder).
+ * - `facebook` / `linkedin` claim only on their distinctive named export markers
+ *   (Facebook activity/messages/posts paths; LinkedIn `Connections.csv` /
+ *   `messages.csv` / `Rich_Media.csv`). They precede `takeout` so an export whose
+ *   root also happens to carry a top-level JSON + media file is not swallowed by
+ *   Takeout's broad Google-Photos-album fallback.
+ * - `google_takeout` matches specific Takeout markers (`archive_browser.html`,
+ *   `Mail`, `Google Photos`, a `Takeout` basename, a `.mbox`) PLUS a permissive
+ *   `hasJson && hasMedia` album heuristic, making it the broadest concrete
+ *   connector; it sits directly above the catch-all.
+ * - `folder` is LAST: it claims ANY directory (`stat.isDirectory()`), the generic
+ *   in-place catch-all. Listed first it would shadow every directory-form export
+ *   above; listed last it only runs when no specific connector recognises the
+ *   path. (A dropped `.zip`/`.mbox` is never a directory, so `folder` never
+ *   competes for those.)
  */
-export const importers: readonly Importer[] = [folderImporter, whatsappImporter];
+export const importers: readonly Importer[] = [
+  whatsappImporter,
+  facebookImporter,
+  linkedinImporter,
+  takeoutImporter,
+  folderImporter,
+];
 
 /**
  * Pick the importer for a dropped path: the first registered connector whose
