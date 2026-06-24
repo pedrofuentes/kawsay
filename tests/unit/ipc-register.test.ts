@@ -17,6 +17,7 @@ function fakeIpcMain() {
 }
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
+const rendererEntryPath = '/app/out/renderer/index.html';
 
 describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§2.6)', () => {
   const handlers: IpcHandlerMap = {
@@ -31,11 +32,23 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
 
   it('runs the handler and returns its validated response for a trusted sender', async () => {
     const ipcMain = fakeIpcMain();
-    registerIpcHandlers(ipcMain, handlers);
+    registerIpcHandlers(ipcMain, handlers, { rendererEntryPath });
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
     expect(listener).toBeDefined();
 
     await expect(listener?.(trustedEvent, {})).resolves.toEqual({ version: '0.1.0' });
+  });
+
+  it('rejects a non-app file:// sender (attacker-dropped HTML) without calling the handler', async () => {
+    const ipcMain = fakeIpcMain();
+    const spy = vi.fn(() => ({ version: '0.1.0' }));
+    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, { rendererEntryPath });
+    const listener = ipcMain.listeners.get(APP_GET_VERSION);
+
+    await expect(
+      listener?.({ senderFrame: { url: 'file:///tmp/evil/attacker.html' } }, {}),
+    ).rejects.toThrow();
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('rejects a payload from an untrusted sender origin without calling the handler', async () => {
@@ -61,7 +74,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('re-validates the request in main and rejects unexpected payload keys', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy });
+    registerIpcHandlers(ipcMain, { [APP_GET_VERSION]: spy }, { rendererEntryPath });
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(listener?.(trustedEvent, { rogue: true })).rejects.toThrow();
