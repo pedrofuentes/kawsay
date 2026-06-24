@@ -25,6 +25,21 @@ export interface IngestionCoordinatorOptions {
   emitProgress: (event: ImportProgressEvent) => void;
 }
 
+/**
+ * A worker FAULT observed via the worker_threads `error`/`exit` lifecycle — a
+ * crash OUTSIDE the job's own try/catch (a module-load failure, a native abort
+ * in better-sqlite3/exifr/ffmpeg, OOM, or a rogue `process.exit`). The worker
+ * never gets to post a terminal `done`/`error` message, so the coordinator
+ * surfaces this to the renderer as a terminal `import:progress` error and tears
+ * the worker down — the import settles with a typed failure instead of hanging.
+ */
+export class IngestionWorkerFaultError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IngestionWorkerFaultError';
+  }
+}
+
 export interface IngestionCoordinator {
   /** Spawn a worker and run `job` off-thread; events stream via `emitProgress`. */
   start(job: IngestionJobSpec): void;
@@ -81,8 +96,20 @@ export function createIngestionCoordinator(
   function teardown(jobId: string): void {
     const handle = handles.get(jobId);
     if (handle === undefined) return;
+    // Delete BEFORE terminate so the worker's own 'exit' (which terminate emits)
+    // arrives with the job already forgotten and is ignored as a graceful close.
     handles.delete(jobId);
     void handle.terminate();
+  }
+
+  // Settle an import whose worker faulted via the worker_threads `error`/`exit`
+  // events (no terminal message). Guarded on `handles.has` so it fires at most
+  // once per job and NEVER on the post-teardown 'exit' that follows a graceful
+  // done/cancel — that exit arrives after teardown removed the handle.
+  function settleFault(jobId: string, fault: IngestionWorkerFaultError): void {
+    if (!handles.has(jobId)) return;
+    emitProgress(errorEvent(jobId, fault.message));
+    teardown(jobId);
   }
 
   function onMessage(job: IngestionJobSpec, handle: IngestionWorkerHandle, message: WorkerToHostMessage): void {
@@ -111,6 +138,18 @@ export function createIngestionCoordinator(
       const handle = spawn();
       handles.set(job.jobId, handle);
       handle.onMessage((message) => onMessage(job, handle, message));
+      // A fault outside the worker's job try/catch surfaces as a worker_threads
+      // 'error'/'exit' EVENT, never a protocol message. Observing both keeps a
+      // crash off the main process and stops an abnormal exit orphaning the handle.
+      handle.onError((error) =>
+        settleFault(job.jobId, new IngestionWorkerFaultError(`ingestion worker crashed: ${error.message}`)),
+      );
+      handle.onExit((code) =>
+        settleFault(
+          job.jobId,
+          new IngestionWorkerFaultError(`ingestion worker exited before completing (code ${String(code)})`),
+        ),
+      );
     },
     cancel(jobId) {
       const handle = handles.get(jobId);

@@ -57,13 +57,28 @@ export interface WorkerPort {
 
 /**
  * The HOST-side handle to one spawned worker: post commands, subscribe to its
- * events, and terminate it (teardown — no orphaned worker on done/cancel/window
- * close). Implemented over a worker_threads `Worker` in production and by a fake
- * in unit tests.
+ * events, observe a worker-level FAULT, and terminate it (teardown — no orphaned
+ * worker on done/cancel/window close). Implemented over a worker_threads
+ * `Worker` in production and by a fake in unit tests.
  */
 export interface IngestionWorkerHandle {
   post(message: HostToWorkerMessage): void;
   onMessage(handler: (message: WorkerToHostMessage) => void): void;
+  /**
+   * Subscribe to a worker FAULT — an error thrown OUTSIDE the job's own
+   * try/catch (a module-load failure, a native crash in better-sqlite3/exifr/
+   * ffmpeg, OOM). Installing this listener is ALSO what stops the fault from
+   * reaching the host as an `uncaughtException`, which would crash the Electron
+   * main process.
+   */
+  onError(handler: (error: Error) => void): void;
+  /**
+   * Subscribe to worker termination (`code` is the OS exit code, 0 = clean). An
+   * exit that arrives before a terminal `done`/`error` message is an abnormal
+   * teardown (native abort, OOM kill, `process.exit`) that would otherwise
+   * orphan the handle and hang the import forever.
+   */
+  onExit(handler: (code: number) => void): void;
   /** Fire-and-forget teardown (the return — sync or a Promise — is ignored). */
   terminate(): unknown;
 }
