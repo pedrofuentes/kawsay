@@ -1,0 +1,490 @@
+import { randomUUID } from 'node:crypto';
+import type {
+  AssetKind,
+  CaptureDateSource,
+  MediaType,
+  OriginalKind,
+  SourceType,
+} from '@shared/catalog';
+import type { CatalogDatabase } from './connection';
+
+// ── Inputs ────────────────────────────────────────────────────────────────
+
+/** A deduplicated logical memory (ARCHITECTURE §4.2 `items`). */
+export interface ItemInput {
+  /** Pre-allocated UUID; generated when omitted. */
+  id?: string;
+  mediaType: MediaType;
+  mimeType?: string | null;
+  /** SHA-256 hex of the file bytes; NULL for pure messages (never deduped). */
+  contentHash?: string | null;
+  originalExt?: string | null;
+  fileSizeBytes?: number | null;
+  /** Canonical ISO-8601 UTC instant (see {@link toIsoUtc}); NULL if unknown. */
+  captureDate?: string | null;
+  captureDateSrc?: CaptureDateSource | null;
+  width?: number | null;
+  height?: number | null;
+  durationSec?: number | null;
+  orientation?: number | null;
+  cameraMake?: string | null;
+  cameraModel?: string | null;
+  gpsLat?: number | null;
+  gpsLon?: number | null;
+  gpsAlt?: number | null;
+  title?: string | null;
+  description?: string | null;
+  /** Denormalized FTS feed (filenames, senders, subjects). */
+  searchMeta?: string | null;
+}
+
+/** A provenance record: one (item, source) occurrence (dedup-with-provenance). */
+export interface OccurrenceInput {
+  id?: string;
+  itemId: string;
+  sourceId: string;
+  /** Path/index within that source — the per-source provenance key. */
+  sourceRef: string;
+  originalKind?: OriginalKind;
+  /** `in_place` external absolute path; NULL otherwise. */
+  originalPath?: string | null;
+  author?: string | null;
+  occurredAt?: string | null;
+  sourceMeta?: string | null;
+}
+
+export interface OccurrenceResult {
+  id: string;
+  /** False when an identical occurrence already existed (idempotent re-import). */
+  inserted: boolean;
+}
+
+/** A generated rendition under derived/ (never the original). */
+export interface AssetInput {
+  id?: string;
+  itemId: string;
+  kind: AssetKind;
+  path: string;
+  width?: number | null;
+  height?: number | null;
+  byteSize?: number | null;
+}
+
+/** A logical import source, stable across re-imports via `sourceKey`. */
+export interface SourceInput {
+  id?: string;
+  sourceKey: string;
+  type: SourceType;
+  label: string;
+  originPath?: string | null;
+  rootPath?: string | null;
+}
+
+// ── Outputs ───────────────────────────────────────────────────────────────
+
+/** A catalog item as returned by browse/search reads. */
+export interface ItemRow {
+  id: string;
+  mediaType: MediaType;
+  mimeType: string | null;
+  contentHash: string | null;
+  originalExt: string | null;
+  fileSizeBytes: number | null;
+  captureDate: string | null;
+  captureDateSrc: CaptureDateSource | null;
+  importDate: string;
+  width: number | null;
+  height: number | null;
+  durationSec: number | null;
+  title: string | null;
+  description: string | null;
+  searchMeta: string | null;
+  isFavourite: boolean;
+  thumbStatus: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Opaque keyset position: the last row's (capture_date, id). */
+export interface TimelineCursor {
+  captureDate: string | null;
+  id: string;
+}
+
+export interface TimelineQuery {
+  limit: number;
+  cursor?: TimelineCursor | null;
+}
+
+export interface TimelinePage {
+  rows: ItemRow[];
+  nextCursor: TimelineCursor | null;
+}
+
+export interface SearchQuery {
+  query: string;
+  limit: number;
+  offset: number;
+}
+
+export interface SearchResult {
+  rows: ItemRow[];
+  total: number;
+}
+
+export interface CatalogRepo {
+  insertItem(input: ItemInput): string;
+  addOccurrence(input: OccurrenceInput): OccurrenceResult;
+  addAsset(input: AssetInput): string;
+  registerSource(input: SourceInput): string;
+  queryTimeline(query: TimelineQuery): TimelinePage;
+  search(query: SearchQuery): SearchResult;
+}
+
+// ── Pure helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Render a Date as a canonical ISO-8601 UTC instant (e.g.
+ * `2019-06-14T13:45:30.000Z`). Every importer writes capture_date this way so
+ * lexicographic DESC equals chronological DESC (ARCHITECTURE §3.2).
+ */
+export function toIsoUtc(date: Date): string {
+  return date.toISOString();
+}
+
+/**
+ * Order-preserving, de-duplicated union of whitespace-separated tokens. Used to
+ * merge `search_meta` across sources on dedup so a deduped item stays findable
+ * by every source's filenames/senders/subjects (AC-7).
+ */
+export function mergeTokens(existing: string | null, incoming: string | null): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const source of [existing, incoming]) {
+    if (!source) continue;
+    for (const token of source.split(/\s+/)) {
+      if (token === '' || seen.has(token)) continue;
+      seen.add(token);
+      out.push(token);
+    }
+  }
+  return out.join(' ');
+}
+
+/**
+ * Turn free user text into a safe FTS5 MATCH expression: each token becomes a
+ * quoted prefix term (`"foo"*`), quotes are escaped, and tokens with no letter
+ * or digit are dropped. Returns null when nothing tokenizable remains, so the
+ * caller can short-circuit to an empty result instead of an FTS syntax error.
+ */
+export function toFtsMatchQuery(raw: string): string | null {
+  const terms: string[] = [];
+  for (const token of raw.split(/\s+/)) {
+    if (token === '' || !/[\p{L}\p{N}]/u.test(token)) continue;
+    terms.push(`"${token.replace(/"/g, '""')}"*`);
+  }
+  return terms.length === 0 ? null : terms.join(' ');
+}
+
+// ── Internal row mapping ────────────────────────────────────────────────────
+
+const ITEM_COLUMNS = [
+  'id',
+  'media_type',
+  'mime_type',
+  'content_hash',
+  'original_ext',
+  'file_size_bytes',
+  'capture_date',
+  'capture_date_src',
+  'import_date',
+  'width',
+  'height',
+  'duration_sec',
+  'title',
+  'description',
+  'search_meta',
+  'is_favourite',
+  'thumb_status',
+  'created_at',
+  'updated_at',
+] as const;
+
+const ITEM_SELECT = ITEM_COLUMNS.join(', ');
+const ITEM_SELECT_I = ITEM_COLUMNS.map((column) => `i.${column}`).join(', ');
+
+interface RawItemRow {
+  id: string;
+  media_type: MediaType;
+  mime_type: string | null;
+  content_hash: string | null;
+  original_ext: string | null;
+  file_size_bytes: number | null;
+  capture_date: string | null;
+  capture_date_src: CaptureDateSource | null;
+  import_date: string;
+  width: number | null;
+  height: number | null;
+  duration_sec: number | null;
+  title: string | null;
+  description: string | null;
+  search_meta: string | null;
+  is_favourite: number;
+  thumb_status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapItemRow(row: RawItemRow): ItemRow {
+  return {
+    id: row.id,
+    mediaType: row.media_type,
+    mimeType: row.mime_type,
+    contentHash: row.content_hash,
+    originalExt: row.original_ext,
+    fileSizeBytes: row.file_size_bytes,
+    captureDate: row.capture_date,
+    captureDateSrc: row.capture_date_src,
+    importDate: row.import_date,
+    width: row.width,
+    height: row.height,
+    durationSec: row.duration_sec,
+    title: row.title,
+    description: row.description,
+    searchMeta: row.search_meta,
+    isFavourite: row.is_favourite === 1,
+    thumbStatus: row.thumb_status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function requireRow<T>(row: T | undefined, operation: string): T {
+  if (row === undefined) throw new Error(`catalog: ${operation} returned no row`);
+  return row;
+}
+
+// ── Factory ─────────────────────────────────────────────────────────────────
+
+/**
+ * Build the catalog data-access layer over an open, migrated database. The repo
+ * is the single writer (ARCHITECTURE §4.1): every write goes through one
+ * `INSERT ... ON CONFLICT ... RETURNING` so dedup and provenance stay atomic.
+ */
+export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
+  // SQLite-side token merge for the dedup UPDATE path (keeps cross-source
+  // search_meta on the row without a read-modify-write round-trip).
+  db.function('merge_tokens', { deterministic: true }, (existing, incoming) =>
+    mergeTokens(
+      typeof existing === 'string' ? existing : null,
+      typeof incoming === 'string' ? incoming : null,
+    ),
+  );
+
+  const insertItemStmt = db.prepare(`
+    INSERT INTO items (
+      id, media_type, mime_type, content_hash, original_ext, file_size_bytes,
+      capture_date, capture_date_src, width, height, duration_sec, orientation,
+      camera_make, camera_model, gps_lat, gps_lon, gps_alt,
+      title, description, search_meta
+    ) VALUES (
+      @id, @mediaType, @mimeType, @contentHash, @originalExt, @fileSizeBytes,
+      @captureDate, @captureDateSrc, @width, @height, @durationSec, @orientation,
+      @cameraMake, @cameraModel, @gpsLat, @gpsLon, @gpsAlt,
+      @title, @description, @searchMeta
+    )
+    ON CONFLICT(content_hash) DO UPDATE SET
+      mime_type        = COALESCE(items.mime_type, excluded.mime_type),
+      original_ext     = COALESCE(items.original_ext, excluded.original_ext),
+      file_size_bytes  = COALESCE(items.file_size_bytes, excluded.file_size_bytes),
+      capture_date     = COALESCE(items.capture_date, excluded.capture_date),
+      capture_date_src = COALESCE(items.capture_date_src, excluded.capture_date_src),
+      width            = COALESCE(items.width, excluded.width),
+      height           = COALESCE(items.height, excluded.height),
+      duration_sec     = COALESCE(items.duration_sec, excluded.duration_sec),
+      orientation      = COALESCE(items.orientation, excluded.orientation),
+      camera_make      = COALESCE(items.camera_make, excluded.camera_make),
+      camera_model     = COALESCE(items.camera_model, excluded.camera_model),
+      gps_lat          = COALESCE(items.gps_lat, excluded.gps_lat),
+      gps_lon          = COALESCE(items.gps_lon, excluded.gps_lon),
+      gps_alt          = COALESCE(items.gps_alt, excluded.gps_alt),
+      title            = COALESCE(items.title, excluded.title),
+      description      = COALESCE(items.description, excluded.description),
+      search_meta      = merge_tokens(items.search_meta, excluded.search_meta),
+      updated_at       = datetime('now')
+    RETURNING id
+  `);
+
+  const insertOccurrenceStmt = db.prepare(`
+    INSERT INTO item_occurrences (
+      id, item_id, source_id, source_ref, original_kind, original_path,
+      author, occurred_at, source_meta
+    ) VALUES (
+      @id, @itemId, @sourceId, @sourceRef, @originalKind, @originalPath,
+      @author, @occurredAt, @sourceMeta
+    )
+    ON CONFLICT(item_id, source_id, source_ref) DO NOTHING
+    RETURNING id
+  `);
+  const selectOccurrenceStmt = db.prepare(`
+    SELECT id FROM item_occurrences
+    WHERE item_id = @itemId AND source_id = @sourceId AND source_ref = @sourceRef
+  `);
+
+  const insertAssetStmt = db.prepare(`
+    INSERT INTO item_assets (id, item_id, kind, path, width, height, byte_size)
+    VALUES (@id, @itemId, @kind, @path, @width, @height, @byteSize)
+    ON CONFLICT(item_id, kind) DO UPDATE SET
+      path      = excluded.path,
+      width     = COALESCE(excluded.width, item_assets.width),
+      height    = COALESCE(excluded.height, item_assets.height),
+      byte_size = COALESCE(excluded.byte_size, item_assets.byte_size)
+    RETURNING id
+  `);
+
+  const insertSourceStmt = db.prepare(`
+    INSERT INTO sources (id, source_key, type, label, origin_path, root_path)
+    VALUES (@id, @sourceKey, @type, @label, @originPath, @rootPath)
+    ON CONFLICT(source_key) DO UPDATE SET
+      label       = excluded.label,
+      origin_path = COALESCE(excluded.origin_path, sources.origin_path),
+      root_path   = COALESCE(excluded.root_path, sources.root_path),
+      imported_at = datetime('now')
+    RETURNING id
+  `);
+
+  const timelineFirstStmt = db.prepare(`
+    SELECT ${ITEM_SELECT} FROM items
+    ORDER BY capture_date DESC NULLS LAST, id DESC
+    LIMIT @limit
+  `);
+  // Dated cursor: earlier dates, ties broken by id, then the undated tail.
+  const timelineDatedStmt = db.prepare(`
+    SELECT ${ITEM_SELECT} FROM items
+    WHERE capture_date < @cd
+       OR (capture_date = @cd AND id < @id)
+       OR capture_date IS NULL
+    ORDER BY capture_date DESC NULLS LAST, id DESC
+    LIMIT @limit
+  `);
+  // Null-tail cursor: paging within the undated rows, ordered by id DESC.
+  const timelineNullTailStmt = db.prepare(`
+    SELECT ${ITEM_SELECT} FROM items
+    WHERE capture_date IS NULL AND id < @id
+    ORDER BY id DESC
+    LIMIT @limit
+  `);
+
+  const searchStmt = db.prepare(`
+    SELECT ${ITEM_SELECT_I} FROM items_fts
+    JOIN items i ON i.rowid = items_fts.rowid
+    WHERE items_fts MATCH @match
+    ORDER BY rank
+    LIMIT @limit OFFSET @offset
+  `);
+  const searchCountStmt = db.prepare(`
+    SELECT COUNT(*) AS n FROM items_fts WHERE items_fts MATCH @match
+  `);
+
+  return {
+    insertItem(input) {
+      const row = insertItemStmt.get<{ id: string }>({
+        id: input.id ?? randomUUID(),
+        mediaType: input.mediaType,
+        mimeType: input.mimeType ?? null,
+        contentHash: input.contentHash ?? null,
+        originalExt: input.originalExt ?? null,
+        fileSizeBytes: input.fileSizeBytes ?? null,
+        captureDate: input.captureDate ?? null,
+        captureDateSrc: input.captureDateSrc ?? null,
+        width: input.width ?? null,
+        height: input.height ?? null,
+        durationSec: input.durationSec ?? null,
+        orientation: input.orientation ?? null,
+        cameraMake: input.cameraMake ?? null,
+        cameraModel: input.cameraModel ?? null,
+        gpsLat: input.gpsLat ?? null,
+        gpsLon: input.gpsLon ?? null,
+        gpsAlt: input.gpsAlt ?? null,
+        title: input.title ?? null,
+        description: input.description ?? null,
+        searchMeta: input.searchMeta ?? null,
+      });
+      return requireRow(row, 'insertItem').id;
+    },
+
+    addOccurrence(input) {
+      const params = {
+        id: input.id ?? randomUUID(),
+        itemId: input.itemId,
+        sourceId: input.sourceId,
+        sourceRef: input.sourceRef,
+        originalKind: input.originalKind ?? 'none',
+        originalPath: input.originalPath ?? null,
+        author: input.author ?? null,
+        occurredAt: input.occurredAt ?? null,
+        sourceMeta: input.sourceMeta ?? null,
+      };
+      const inserted = insertOccurrenceStmt.get<{ id: string }>(params);
+      if (inserted) return { id: inserted.id, inserted: true };
+      const existing = requireRow(
+        selectOccurrenceStmt.get<{ id: string }>({
+          itemId: params.itemId,
+          sourceId: params.sourceId,
+          sourceRef: params.sourceRef,
+        }),
+        'addOccurrence',
+      );
+      return { id: existing.id, inserted: false };
+    },
+
+    addAsset(input) {
+      const row = insertAssetStmt.get<{ id: string }>({
+        id: input.id ?? randomUUID(),
+        itemId: input.itemId,
+        kind: input.kind,
+        path: input.path,
+        width: input.width ?? null,
+        height: input.height ?? null,
+        byteSize: input.byteSize ?? null,
+      });
+      return requireRow(row, 'addAsset').id;
+    },
+
+    registerSource(input) {
+      const row = insertSourceStmt.get<{ id: string }>({
+        id: input.id ?? randomUUID(),
+        sourceKey: input.sourceKey,
+        type: input.type,
+        label: input.label,
+        originPath: input.originPath ?? null,
+        rootPath: input.rootPath ?? null,
+      });
+      return requireRow(row, 'registerSource').id;
+    },
+
+    queryTimeline({ limit, cursor }) {
+      let raws: RawItemRow[];
+      if (!cursor) {
+        raws = timelineFirstStmt.all<RawItemRow>({ limit });
+      } else if (cursor.captureDate !== null) {
+        raws = timelineDatedStmt.all<RawItemRow>({ cd: cursor.captureDate, id: cursor.id, limit });
+      } else {
+        raws = timelineNullTailStmt.all<RawItemRow>({ id: cursor.id, limit });
+      }
+      const rows = raws.map(mapItemRow);
+      const last = rows.at(-1);
+      const nextCursor =
+        last && rows.length === limit ? { captureDate: last.captureDate, id: last.id } : null;
+      return { rows, nextCursor };
+    },
+
+    search({ query, limit, offset }) {
+      const match = toFtsMatchQuery(query);
+      if (match === null) return { rows: [], total: 0 };
+      const total = Number(searchCountStmt.get<{ n: number }>({ match })?.n ?? 0);
+      const raws = searchStmt.all<RawItemRow>({ match, limit, offset });
+      return { rows: raws.map(mapItemRow), total };
+    },
+  };
+}

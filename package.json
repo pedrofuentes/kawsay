@@ -21,16 +21,19 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "dist": "electron-vite build && electron-builder",
-    "dist:mac": "electron-vite build && electron-builder --mac dmg",
-    "dist:win": "electron-vite build && electron-builder --win nsis"
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
+    "dist": "pnpm rebuild:native && electron-vite build && electron-builder",
+    "dist:mac": "pnpm rebuild:native && electron-vite build && electron-builder --mac dmg",
+    "dist:win": "pnpm rebuild:native && electron-vite build && electron-builder --win nsis"
   },
   "dependencies": {
+    "better-sqlite3": "12.9.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "3.7.2",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.1",
     "@types/node": "^20.19.0",
@@ -50,5 +53,10 @@
     "typescript-eslint": "^8.62.0",
     "vite": "^5.4.21",
     "vitest": "^3.2.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }

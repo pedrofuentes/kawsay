@@ -19,6 +19,32 @@
 
 <!-- Add new learnings below this line, most recent first -->
 
+### [2026-06-23] better-sqlite3 in an Electron+Vitest repo: dual ABI, local typings, `?raw` DDL
+**Context**: Building the local library core (card F3) — wiring `better-sqlite3` so it works both under
+Electron (runtime) and under Vitest (Node) without adding dependencies beyond the two the card allows.
+**Learning**:
+- **Dual ABI, no `postinstall` rebuild.** `pnpm install` builds `better-sqlite3` against the **Node**
+  ABI, which is exactly what Vitest (Node) needs — so the unit suite runs the real engine with no mocks.
+  Rebuilding for Electron's ABI must therefore be an **explicit, separate** step (`@electron/rebuild`
+  via a `rebuild:native` script, also wired into the `dist*` scripts), **never** a `postinstall` — a
+  postinstall rebuild would flip the binary to the Electron ABI and break `pnpm test`. `pnpm build`
+  (`electron-vite build`) externalizes `better-sqlite3`, so it never loads native code.
+- **Local typings instead of `@types/better-sqlite3`.** To keep the dependency surface to exactly the
+  two packages the card permits, hand-write a minimal `declare module 'better-sqlite3'` (generic
+  `Statement.get<T>()`/`all<T>()`, `SqlScalar`) — enough for the catalog, eslint-strict-clean (no
+  `any`), and zero extra deps. Extend it as the API surface grows.
+- **DDL lives in real `.sql` files, imported with Vite `?raw`.** Keeps the schema auditable yet shipped
+  inlined (no runtime `fs` read). `tsc` needs a `declare module '*.sql?raw'`; Vitest resolves `?raw`
+  natively. Verified it survives `electron-vite build` by transiently importing the migration module
+  into the main entry — the DDL string is inlined into `out/main/index.js` (bundle 7→31 kB).
+- **Named-param binding (v12):** missing keys throw, `boolean` throws (convert to 0/1), `undefined`
+  should be coerced to `null`. `INSERT … ON CONFLICT(content_hash) DO UPDATE … RETURNING id` with
+  `.get()` returns the **existing** row id on conflict (the dedup primitive), and a NULL `content_hash`
+  never conflicts, so message rows always insert — one statement handles both dedup and 1:1 messages.
+**Impact**: Don't add `better-sqlite3` to a `postinstall` rebuild, don't add `@types/better-sqlite3`,
+and keep migration DDL in `.sql` + `?raw`. The clean-tree gate (`git archive HEAD` → `pnpm install
+--frozen-lockfile --offline` → test) confirms the offline native restore from the warm pnpm store.
+
 ### [2026-06-23] electron-vite 5 needs Vite 6 types; electron 42 self-downloads its binary
 **Context**: Scaffolding the app shell (card F1) — getting `pnpm typecheck` and `pnpm build` green on
 the Vite 5.4 toolchain pinned for the renderer, then smoke-launching the built app.
