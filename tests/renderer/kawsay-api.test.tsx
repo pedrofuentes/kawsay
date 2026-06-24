@@ -17,7 +17,6 @@ describe('useKawsayApi', () => {
   it('tolerates the absence of window.kawsayAPI (browser preview) by returning undefined', () => {
     // No provider, no window bridge: a plain browser preview must not crash.
     const original = (window as { kawsayAPI?: unknown }).kawsayAPI;
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
     delete (window as { kawsayAPI?: unknown }).kawsayAPI;
     try {
       const { result } = renderHook(() => useKawsayApi());
@@ -37,7 +36,6 @@ describe('useKawsayApi', () => {
       const { result } = renderHook(() => useKawsayApi(), { wrapper });
       expect(result.current).toBe(api);
     } finally {
-      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
       delete (window as { kawsayAPI?: unknown }).kawsayAPI;
     }
   });
