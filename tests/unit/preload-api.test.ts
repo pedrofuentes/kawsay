@@ -4,6 +4,8 @@ import {
   APP_GET_VERSION,
   CATALOG_SEARCH,
   CATALOG_TIMELINE,
+  DIALOG_OPEN_DIRECTORY,
+  DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
   IMPORT_START,
   LIBRARY_CREATE,
@@ -24,6 +26,8 @@ function fakeInvoke() {
     [CATALOG_SEARCH]: { items: [], total: 0 },
     [IMPORT_START]: { jobId: UUID },
     [IMPORT_CANCEL]: { cancelled: true },
+    [DIALOG_OPEN_DIRECTORY]: '/picked/dir',
+    [DIALOG_OPEN_FILE]: '/picked/file.zip',
   };
   const invoke = vi.fn((channel: string, payload: unknown) => {
     calls.push({ channel, payload });
@@ -45,7 +49,11 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     await api.searchCatalog({ query: 'beach' });
     await api.startImport({ sourceType: 'folder', inputPath: '/lib' });
     await api.cancelImport({ jobId: UUID });
+    const pickedDir = await api.openDirectory({ title: 'Pick a folder' });
+    const pickedFile = await api.openFile({});
 
+    expect(pickedDir).toBe('/picked/dir');
+    expect(pickedFile).toBe('/picked/file.zip');
     expect(calls.map((c) => c.channel)).toEqual([
       APP_GET_VERSION,
       LIBRARY_CREATE,
@@ -54,8 +62,12 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       CATALOG_SEARCH,
       IMPORT_START,
       IMPORT_CANCEL,
+      DIALOG_OPEN_DIRECTORY,
+      DIALOG_OPEN_FILE,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
+    expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
+    expect(calls[8].payload).toEqual({});
   });
 
   it('wires onImportProgress onto the import:progress event subscription', () => {
@@ -82,6 +94,8 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'getAppVersion',
         'getTimeline',
         'onImportProgress',
+        'openDirectory',
+        'openFile',
         'openLibrary',
         'searchCatalog',
         'startImport',

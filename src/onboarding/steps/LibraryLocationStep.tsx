@@ -78,10 +78,11 @@ export function LibraryLocationStep({
           }
           value={path}
           onChange={setPath}
+          browseFor="directory"
           helper={
             mode === 'create'
-              ? 'Type or paste a folder path. Nothing leaves your computer.'
-              : 'Type or paste the path to your Kawsay folder.'
+              ? 'Choose a folder with Browse, or type a path. Nothing leaves your computer.'
+              : 'Choose your Kawsay folder with Browse, or type its path.'
           }
           placeholder="e.g. Documents/Kawsay"
           invalid={hasError}

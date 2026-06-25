@@ -1,10 +1,12 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, session } from 'electron';
 import {
   APP_GET_VERSION,
   CATALOG_SEARCH,
   CATALOG_TIMELINE,
+  DIALOG_OPEN_DIRECTORY,
+  DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
   IMPORT_START,
   LIBRARY_CREATE,
@@ -12,6 +14,7 @@ import {
 } from '@shared/ipc/contract';
 import { IMPORT_PROGRESS } from '@shared/ipc/events';
 import { handleGetVersion } from './ipc/handlers/app';
+import { handleOpenDirectory, handleOpenFile, type ShowOpenDialog } from './ipc/handlers/dialog';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
@@ -62,6 +65,17 @@ const ingestionCoordinator = createIngestionCoordinator({
 });
 const catalogSession = createCatalogSession({ coordinator: ingestionCoordinator });
 
+// The native open-dialog capability (W2): always parented to the focused window
+// (falling back to the current main window) so it appears as a sheet/modal, and
+// only ever invoked with the handler's hardcoded `properties` — the renderer can
+// influence nothing but a title/defaultPath.
+const showOpenDialog: ShowOpenDialog = (options) => {
+  const parent = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  return parent !== undefined
+    ? dialog.showOpenDialog(parent, options)
+    : dialog.showOpenDialog(options);
+};
+
 // The single source of truth for the renderer's capabilities. Each handler is a
 // pure, separately-tested function; the registrar adds the sender + zod guards.
 const ipcHandlers: IpcHandlerMap = {
@@ -72,6 +86,8 @@ const ipcHandlers: IpcHandlerMap = {
   [CATALOG_SEARCH]: (request) => catalogSession.search(request),
   [IMPORT_START]: (request) => catalogSession.beginImport(request),
   [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
+  [DIALOG_OPEN_DIRECTORY]: (request) => handleOpenDirectory({ showOpenDialog }, request),
+  [DIALOG_OPEN_FILE]: (request) => handleOpenFile({ showOpenDialog }, request),
 };
 
 function createMainWindow(): void {
