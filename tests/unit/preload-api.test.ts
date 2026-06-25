@@ -3,6 +3,7 @@ import { createKawsayApi } from '../../electron/preload/api';
 import {
   APP_GET_VERSION,
   CATALOG_SEARCH,
+  CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
@@ -28,6 +29,7 @@ function fakeInvoke() {
     [IMPORT_CANCEL]: { cancelled: true },
     [DIALOG_OPEN_DIRECTORY]: '/picked/dir',
     [DIALOG_OPEN_FILE]: '/picked/file.zip',
+    [CATALOG_THUMBNAIL]: 'data:image/png;base64,AAAA',
   };
   const invoke = vi.fn((channel: string, payload: unknown) => {
     calls.push({ channel, payload });
@@ -51,9 +53,11 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     await api.cancelImport({ jobId: UUID });
     const pickedDir = await api.openDirectory({ title: 'Pick a folder' });
     const pickedFile = await api.openFile({});
+    const thumbnail = await api.getThumbnail({ id: UUID });
 
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
+    expect(thumbnail).toBe('data:image/png;base64,AAAA');
     expect(calls.map((c) => c.channel)).toEqual([
       APP_GET_VERSION,
       LIBRARY_CREATE,
@@ -64,10 +68,12 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       IMPORT_CANCEL,
       DIALOG_OPEN_DIRECTORY,
       DIALOG_OPEN_FILE,
+      CATALOG_THUMBNAIL,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
     expect(calls[8].payload).toEqual({});
+    expect(calls[9].payload).toEqual({ id: UUID });
   });
 
   it('wires onImportProgress onto the import:progress event subscription', () => {
@@ -92,6 +98,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'cancelImport',
         'createLibrary',
         'getAppVersion',
+        'getThumbnail',
         'getTimeline',
         'onImportProgress',
         'openDirectory',

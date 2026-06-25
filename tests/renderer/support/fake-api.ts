@@ -35,6 +35,9 @@ export function makeItemCard(over: Partial<ItemCardDTO> = {}): ItemCardDTO {
     width: 1600,
     height: 1200,
     source: 'folder',
+    // Default false so existing list/render tests trigger NO thumbnail fetch and
+    // keep showing the media-type icon; thumbnail tests opt in with `true`.
+    hasThumbnail: false,
     ...over,
   };
 }
@@ -99,6 +102,7 @@ export interface FakeApiOptions {
   cancelImport?: KawsayAPI['cancelImport'];
   openDirectory?: KawsayAPI['openDirectory'];
   openFile?: KawsayAPI['openFile'];
+  getThumbnail?: KawsayAPI['getThumbnail'];
 }
 
 /** Build a fully typed fake KawsayAPI whose methods are spies (vi.fn). */
@@ -126,6 +130,9 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
     // unaffected; tests that exercise the picker pass their own resolved path.
     openDirectory: opts.openDirectory ?? vi.fn(() => Promise.resolve(null)),
     openFile: opts.openFile ?? vi.fn(() => Promise.resolve(null)),
+    // Default to "no thumbnail" (null) so any tile rendered in an existing test
+    // simply shows its media-type icon; thumbnail tests inject their own resolver.
+    getThumbnail: opts.getThumbnail ?? vi.fn(() => Promise.resolve(null)),
     onImportProgress: (listener) => {
       listeners.add(listener);
       return () => {

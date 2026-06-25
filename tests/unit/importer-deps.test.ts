@@ -17,8 +17,11 @@ import {
 import {
   derivedRelPath,
   buildFrameArgs,
+  buildFramePipeArgs,
   createThumbnailGenerator,
+  createVideoFrameThumbnailer,
   type RunFfmpeg,
+  type RunFfmpegCapture,
 } from '../../electron/main/importers/deps/thumbnail';
 import { assertLocalMediaPath } from '../../electron/main/importers/deps/media-path';
 import {
@@ -436,6 +439,71 @@ describe('thumbnail (ffmpeg generator, ARCHITECTURE §5.1/§7.2)', () => {
       }),
     ).rejects.toThrow(/local file/i);
     expect(ran).toBe(false); // ffmpeg is never spawned on a non-local input
+  });
+});
+
+describe('on-demand video-frame thumbnailer (catalog:thumbnail by id — U4)', () => {
+  it('writes a single bounded WebP frame to STDOUT (pipe:1), file-protocol-pinned (AC-4)', () => {
+    const args = buildFramePipeArgs('/v/clip.mp4', 320);
+    // Output is the literal stdout sink, never an attacker-influenced path.
+    expect(args.at(-1)).toBe('pipe:1');
+    expect(args).toContain('/v/clip.mp4');
+    // -protocol_whitelist file precedes -i so it binds the input demuxer.
+    const pw = args.indexOf('-protocol_whitelist');
+    expect(pw).toBeGreaterThanOrEqual(0);
+    expect(args[pw + 1]).toBe('file');
+    expect(pw).toBeLessThan(args.indexOf('-i'));
+    // Exactly one frame, scaled down to the requested longest edge.
+    expect(args).toContain('-frames:v');
+    expect(args.join(' ')).toContain("scale='min(320,iw)'");
+  });
+
+  it('refuses a remote-style video path before building the argv (no spawn)', () => {
+    expect(() => buildFramePipeArgs('https://evil.example/x.mp4', 320)).toThrow(/local file/i);
+  });
+
+  it('returns the captured WebP bytes via the injected runner', async () => {
+    const calls: { command: string; args: readonly string[] }[] = [];
+    const run: RunFfmpegCapture = async (command, args) => {
+      calls.push({ command, args });
+      return Buffer.from('WEBP-BYTES');
+    };
+    const thumb = createVideoFrameThumbnailer({ ffmpegPath: '/bin/ffmpeg', run });
+
+    const out = await thumb('/v/clip.mp4', 200);
+
+    expect(out).toEqual({ data: Buffer.from('WEBP-BYTES'), mimeType: 'image/webp' });
+    expect(calls[0]?.command).toBe('/bin/ffmpeg');
+    expect(calls[0]?.args).toContain('/v/clip.mp4');
+    expect(calls[0]?.args.at(-1)).toBe('pipe:1');
+  });
+
+  it('degrades to null when ffmpeg fails (one unreadable clip → icon fallback)', async () => {
+    const thumb = createVideoFrameThumbnailer({
+      ffmpegPath: '/bin/ffmpeg',
+      run: async () => {
+        throw new Error('ffmpeg exited 1');
+      },
+    });
+    expect(await thumb('/v/clip.mp4', 320)).toBeNull();
+  });
+
+  it('treats an empty frame as no thumbnail (null)', async () => {
+    const thumb = createVideoFrameThumbnailer({ ffmpegPath: '/bin/ffmpeg', run: async () => Buffer.alloc(0) });
+    expect(await thumb('/v/clip.mp4', 320)).toBeNull();
+  });
+
+  it('rejects a remote-style path at the thumbnailer too, never spawning (defense-in-depth)', async () => {
+    let ran = false;
+    const thumb = createVideoFrameThumbnailer({
+      ffmpegPath: '/bin/ffmpeg',
+      run: async () => {
+        ran = true;
+        return Buffer.from('X');
+      },
+    });
+    await expect(thumb('https://evil.example/x.mp4', 320)).rejects.toThrow(/local file/i);
+    expect(ran).toBe(false);
   });
 });
 
