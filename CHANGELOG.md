@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Test-coverage measurement is now wired up and enforced (card #109). Running `pnpm coverage` measures the
+  whole Vitest suite with the **v8** provider and prints a text table plus a browsable HTML report and a
+  machine-readable `coverage-summary.json`, and the run now **fails** if statements, branches, functions or
+  lines fall below the **80%** Definition-of-Done bar that AGENTS.md and the Sentinel checklist always
+  specified but which was never enforceable without a provider installed. The current suite already clears
+  it comfortably — **statements 94.64%, branches 84.35%, functions 95.57%, lines 94.64%** across 525 tests —
+  so no behaviour changed; the gate simply pins that posture against regressions. Only the four process
+  entry/bootstrap files that cannot run under the test runner (the Electron main entry, the preload bridge
+  bootstrap, the ingestion worker entry, and the React root) are excluded; every piece of testable logic is
+  measured. A new dev-only dependency, `@vitest/coverage-v8` — see ADR-0021. No runtime dependencies were
+  added and the local-only / zero-egress posture is untouched.
 - Search by **source** (card U2b, **completing AC-7**): the search filters gain the one way of
   narrowing that U2 could not yet offer. U2 shipped **type** and **date** as in-memory filters and noted
   that the catalogue's result tiles carried no source — so **source** could not be one of them. This closes

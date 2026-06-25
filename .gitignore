@@ -6,6 +6,9 @@ dist/
 build/
 out/
 
+# Test coverage reports
+coverage/
+
 # Local tool state
 .impeccable/
 .worktrees/
