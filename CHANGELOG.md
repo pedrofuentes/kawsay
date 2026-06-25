@@ -277,6 +277,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - WhatsApp importer now treats a corrupt, locked, or unreadable export — a `.zip` that cannot be
   extracted, or a discovered `_chat.txt` that cannot be read — as a reported skip and finishes with
   whatever it has already gathered, instead of throwing and aborting the whole import (AC-15).
+- Google Takeout importer no longer lets a single unreadable Gmail mailbox abort the whole import. If
+  setting up the streaming reader for an `.mbox` faults, that one mailbox is now reported as a skipped
+  item and the run keeps going — every other email, attachment and photo in the export is still brought
+  in — and the reader is always closed afterwards so nothing is left open in the background. Previously
+  such a fault could escape and stop the entire import, losing everything else it would have gathered
+  (AC-15).
 
 ### Security
 

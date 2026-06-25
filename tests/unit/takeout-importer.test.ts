@@ -485,6 +485,43 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(result.skipped.some((s) => s.code === 'E_READ_MBOX')).toBe(true);
     });
 
+    it('reports E_READ_MBOX, preserves prior emails and never leaks the stream when createInterface throws (AC-15)', async () => {
+      // Defensive AC-15 path (#76): the read-stream seam is acquired fine, but
+      // `createInterface` itself throws while wiring up the readline interface.
+      // Such a throw must be REPORTED as a skip — never escape the import
+      // generator and abort the whole run, losing every other email/photo —
+      // and the acquired stream must still be destroyed (no leak).
+      const f = buildFs({
+        'Mail/good.mbox': { content: mbox(EMAIL_0, EMAIL_1) },
+        'Mail/bad.mbox': { content: mbox(EMAIL_2) },
+        'Google Photos/Album/keep.jpg': { content: 'jpeg', mtimeMs: utc(2020, 0, 1, 0, 0, 0) },
+      });
+      let destroyed = false;
+      const realOpen = f.fs.openReadStream?.bind(f.fs);
+      // A value the readline interface rejects at construction (no `.on`), so
+      // `createInterface({ input })` throws — yet `destroy()` must still run.
+      const poisoned = {
+        destroy: () => {
+          destroyed = true;
+        },
+      } as unknown as Readable;
+      f.fs.openReadStream = (path: string) =>
+        path === abs('Mail/bad.mbox') ? poisoned : (realOpen?.(path) as Readable);
+
+      const { records, result, skips } = await run(ROOT, makeDeps(f));
+
+      // The createInterface failure was reported, not thrown (we reached here).
+      expect(skips.some((s) => s.code === 'E_READ_MBOX')).toBe(true);
+      expect(result.skipped.some((s) => s.code === 'E_READ_MBOX')).toBe(true);
+      // Partial preserved: the healthy mailbox's emails AND the photo survived.
+      const subjects = records.filter((r) => r.mediaType === 'message').map((r) => r.sourceMeta.subject);
+      expect(subjects).toContain('Hello there');
+      expect(subjects).toContain('Quote');
+      expect(records.some((r) => r.sourceRef.endsWith('keep.jpg'))).toBe(true);
+      // No leak: the acquired stream was destroyed even though createInterface threw.
+      expect(destroyed).toBe(true);
+    });
+
     it('keeps a benign email with no subject and no body (never silently dropped)', async () => {
       const onlyHeaders = plainEmail({
         from: 'Dora <dora@example.com>',

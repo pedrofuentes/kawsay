@@ -720,10 +720,15 @@ async function* streamMboxRecords(
     }
   }
 
-  const rl = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+  let rl: ReturnType<typeof createInterface> | undefined;
   let current: string[] = [];
   let messageIndex = 0;
   try {
+    // Constructed INSIDE the try so a throw here (defensive — a corrupt stream
+    // the readline interface rejects) is reported via onSkip, never escaping the
+    // generator to abort the whole import (AC-15); `finally` still destroys the
+    // stream so it never leaks.
+    rl = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
     for await (const line of rl) {
       if (ctx.signal.aborted) break;
       if (MBOX_FROM_RE.test(line)) {
@@ -740,11 +745,12 @@ async function* streamMboxRecords(
       yield* emitMessage(current, messageIndex, file, ctx, skipped);
     }
   } catch (error) {
-    // A mid-stream read error (e.g. the file vanished) is reported, not thrown;
-    // any messages already emitted are preserved (AC-15).
+    // A failed interface construction or a mid-stream read error (the file
+    // vanished, or the readline stream emits `error` during iteration) is
+    // reported, not thrown; any messages already emitted are preserved (AC-15).
     recordSkip(ctx, skipped, file.sourceRef, `could not read mbox: ${errorMessage(error)}`, 'E_READ_MBOX');
   } finally {
-    rl.close();
+    rl?.close();
     stream.destroy();
   }
 }
