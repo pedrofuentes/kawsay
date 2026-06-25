@@ -260,7 +260,7 @@ export function Search(): ReactElement {
             aria-describedby={hintId}
             autoComplete="off"
             placeholder="A name, a place, a few words…"
-            className="min-h-14 rounded-lg border border-border-interactive bg-surface-raised px-4 font-body text-md text-text-primary placeholder:text-text-tertiary"
+            className="min-h-14 rounded-lg border border-border-interactive bg-surface-raised px-4 font-body text-md text-text-primary placeholder:text-text-secondary"
           />
           <p id={hintId} className="font-body text-sm text-text-secondary">
             Memories never leave this computer.

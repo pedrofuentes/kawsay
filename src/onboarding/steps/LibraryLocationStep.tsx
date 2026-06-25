@@ -1,7 +1,7 @@
 // Step 2 — Where the library lives. The user either creates a fresh library or
 // opens one they made before. Failures are shown in plain language only; the raw
 // OS/Node error (EACCES, ENOENT…) is never surfaced.
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
 import { ErrorBanner } from '@renderer/components/ErrorBanner';
@@ -27,6 +27,8 @@ export function LibraryLocationStep({
   const { createLibrary, openLibrary, status } = useLibrary();
   const [mode, setMode] = useState<Mode>('create');
   const [path, setPath] = useState('');
+  const errorId = useId();
+  const hasError = status === 'error';
 
   const busy = status === 'loading';
   const canSubmit = path.trim().length > 0 && !busy;
@@ -82,9 +84,12 @@ export function LibraryLocationStep({
               : 'Type or paste the path to your Kawsay folder.'
           }
           placeholder="e.g. Documents/Kawsay"
+          invalid={hasError}
+          describedBy={hasError ? errorId : undefined}
         />
-        {status === 'error' ? (
+        {hasError ? (
           <ErrorBanner
+            id={errorId}
             message={
               mode === 'create'
                 ? "We couldn't make a library in that folder. Try another place, like your Documents folder."

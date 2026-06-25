@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Accessibility pass across the whole app (card X2, AC-13 · WCAG 2.1 AA): a holistic, cross-screen audit
+  and the fixes that only surface when the onboarding, timeline, search and app-shell screens are taken
+  together. A **skip-to-content** link is now the first thing keyboard and switch users reach on every
+  screen — hidden until focused, it jumps straight past the sidebar to the main content (WCAG 2.4.1).
+  Landmarks are unique and complete app-wide: the sidebar is named distinctly from the in-app navigation so
+  assistive tech never sees two "Sections" regions (WCAG 1.3.1). Moving between the lighter main views
+  (add memories, settings) now moves focus to the new screen's heading, matching the timeline, search and
+  onboarding steps, so the keyboard and screen-reader cursor is never stranded on a stale control
+  (WCAG 2.4.3). When a library folder can't be created or opened, the gentle error is now tied to the path
+  field itself (`aria-invalid` + `aria-describedby`), so it is announced the moment focus lands there
+  (WCAG 3.3.1). And the last sub-AA item is closed: placeholder text in the path and search fields moves
+  from `text-tertiary` (3.98:1) to `text-secondary` (7.77:1), bringing it to AA contrast (issue #104,
+  WCAG 1.4.3). Every primary screen and state is now also swept through **axe-core** (WCAG 2.1 A/AA) in the
+  test suite as a standing regression ratchet — a new dev-only dependency, see ADR-0020. No runtime
+  dependencies were added and the renderer still talks **only** through `window.kawsayAPI`.
 - Search across the library (card U2, AC-6 · AC-7): a calm way to find one memory by a few plain words.
   The renderer's `search` section is now a working **Search** view — a labelled search box whose query is
   **debounced** before it reaches `searchCatalog` (so the catalogue is queried once for the final words, not
