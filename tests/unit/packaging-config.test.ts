@@ -10,12 +10,20 @@ import { FUSE_CONFIG } from '../../electron/fuses/fuses';
 // zero-egress / human-required-publish boundary — so they cannot silently regress.
 const repoRoot = (rel: string): string => fileURLToPath(new URL(`../../${rel}`, import.meta.url));
 const builderYml = readFileSync(repoRoot('electron-builder.yml'), 'utf8');
-// The config with comments removed, for assertions about actual configuration
-// (not the explanatory prose, which legitimately names what we deliberately omit).
-const builderConfig = builderYml
-  .split('\n')
-  .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
-  .join('\n');
+
+/**
+ * Strip YAML comments (`# …`) so the assertions below test the actual
+ * configuration, not the explanatory prose — which legitimately names what we
+ * deliberately omit (e.g. the line stating we bundle "no electron-updater/
+ * autoUpdater"). `builderConfig` is the comment-free view used by those checks.
+ */
+function stripYamlComments(yaml: string): string {
+  return yaml
+    .split('\n')
+    .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
+    .join('\n');
+}
+const builderConfig = stripYamlComments(builderYml);
 const packageJson = JSON.parse(readFileSync(repoRoot('package.json'), 'utf8')) as {
   scripts: Record<string, string>;
   dependencies?: Record<string, string>;
@@ -130,5 +138,40 @@ describe('packaging preserves zero-egress + the human-required publish gate (AC-
     const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
     expect(Object.keys(deps)).not.toContain('electron-updater');
     expect(builderConfig).not.toMatch(/autoUpdater/);
+  });
+});
+
+describe('stripYamlComments tolerates CRLF and LF line endings (Windows-checkout safe)', () => {
+  // A Windows checkout (no `.gitattributes` renormalization) yields CRLF (`\r\n`)
+  // line endings, so each comment line carries a trailing `\r`. The strip must
+  // still remove `#` comments, otherwise a `\r`-terminated comment survives and a
+  // contract assertion (e.g. "no autoUpdater") fails only on Windows CI. Each
+  // comment line is followed by another line so it carries that trailing `\r`
+  // under CRLF — the exact condition the old `.split('\n')` could not strip.
+  const lines = [
+    'publish:',
+    '  provider: github',
+    '# Kawsay bundles no electron-updater/autoUpdater feed (prose, not config)',
+    '  releaseType: release # inline telemetry note',
+    '  owner: pedrofuentes',
+  ];
+
+  it('strips full-line and inline comments from a CRLF document', () => {
+    const stripped = stripYamlComments(lines.join('\r\n'));
+    // These two FAIL on the old `.split('\n')`: the trailing `\r` left the
+    // comment unmatched, so the prose words leaked into the stripped config.
+    expect(stripped).not.toMatch(/autoUpdater/);
+    expect(stripped).not.toMatch(/telemetry/);
+    // Real configuration must survive the strip on CRLF input.
+    expect(stripped).toMatch(/provider: github/);
+    expect(stripped).toMatch(/releaseType: release/);
+  });
+
+  it('strips the same comments from an LF document (parity)', () => {
+    const stripped = stripYamlComments(lines.join('\n'));
+    expect(stripped).not.toMatch(/autoUpdater/);
+    expect(stripped).not.toMatch(/telemetry/);
+    expect(stripped).toMatch(/provider: github/);
+    expect(stripped).toMatch(/releaseType: release/);
   });
 });
