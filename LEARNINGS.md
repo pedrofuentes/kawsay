@@ -19,6 +19,69 @@
 
 <!-- Add new learnings below this line, most recent first -->
 
+### [2026-06-24] Packaging Kawsay with electron-builder: native ABI, the asar-integrity/signing trap, nested-worktree rebuilds
+**Context**: Card P1 (AC-5) — turning the electron-builder skeleton into a `pnpm dist` that actually builds
+the macOS dmg/zip + Windows nsis and *launches*. Most of the work was diagnosing why the first real
+`pnpm dist` produced an app that wouldn't run.
+**Learning**:
+- **`better-sqlite3` 12.9.0 cannot compile against Electron 42's V8 (13.x).** The break is in the V8 C++
+  API, not the headers: `v8::External::New` now requires a third `tag` argument (external-pointer sandbox)
+  and `Object::SetNativeDataProperty` became an ambiguous overload. Symptoms in the rebuild log:
+  *"too few arguments to function … v8::External::New"* and *"call of overloaded SetNativeDataProperty(...)
+  is ambiguous"*. The fix landed **after** 12.9.0: **12.10.1** ("Fix V8 external API usage for Electron 42")
+  and **12.11.1** ("Fix Electron v42 build errors on Windows"). For a two-platform target you need
+  **≥ 12.11.1**.
+- **A Node-ABI prebuilt masks the break.** `pnpm install` downloads a *prebuilt* Node-ABI `.node`, so
+  `better-sqlite3` never compiles from source locally and `pnpm test` is green — the incompatibility only
+  surfaces when electron-builder rebuilds **from source** for the Electron ABI at package time. Lesson: a
+  green test suite does **not** prove the native module will build for Electron; pin a version floor
+  (`tests/unit/packaging-config.test.ts`) so a downgrade fails in CI instead of silently at package time.
+- **`enableEmbeddedAsarIntegrityValidation` requires macOS code signing.** On an **unsigned** build
+  (`mac.identity: null`) this fuse makes Chromium refuse to load the renderer from the asar — the app starts
+  (main process is fine, `better-sqlite3` loads) but the window is blank with
+  `Failed to load URL … app.asar/out/renderer/index.html (ERR_FILE_NOT_FOUND)`, even though the integrity
+  hash *is* in `Info.plist` and the file *is* in the asar. Proof by isolation: a `--dir` rebuild with
+  `-c.electronFuses.enableEmbeddedAsarIntegrityValidation=false` launches clean; it is the **sole** fuse
+  that breaks unsigned (the other six — incl. `onlyLoadAppFromAsar`, `grantFileProtocolExtraPrivileges:false`,
+  `enableCookieEncryption` — are fine). Keep it `true` in `FUSE_CONFIG` (the signed-production target) but
+  `false` in `electron-builder.yml` for v1, and re-enable it *with* signing.
+- **electron-builder's own `npmRebuild` is the robust native-rebuild path — not the standalone
+  `rebuild:native` script.** electron-builder 26 bundles `@electron/rebuild` 4.x, runs it app-scoped
+  (`workspaceRoot` = the package dir, `buildFromSource=true`) and rebuilds `better-sqlite3` for the Electron
+  ABI during packaging. So `pnpm rebuild:native &&` was **removed** from the `dist*` scripts (redundant — and
+  electron-builder even warns the dep is excess). The standalone `@electron/rebuild` 3.7.2 CLI is kept only
+  for switching a dev checkout's ABI by hand.
+- **Nested git worktrees break `@electron/rebuild` 3.7.2.** Because `.worktrees/p1-package` lives *inside*
+  the main repo, `searchForModule` walks **up** the filesystem and rebuilds the **main repo's** stale
+  `better-sqlite3@12.9.0` (which fails), ignoring the worktree's 12.11.1 — even with `-m "$PWD"`. This is why
+  `pnpm rebuild:native` fails locally but the same rebuild works in a standalone CI clone. Another reason to
+  rely on electron-builder's app-scoped rebuild instead.
+- **The dual-ABI dance is real and unavoidable with `pnpm dist`.** electron-builder rebuilds the
+  pnpm-store `better-sqlite3` **in place** to the Electron ABI (NODE_MODULE_VERSION 146), which then breaks
+  `pnpm test` (needs Node ABI 141) until you run **`pnpm rebuild better-sqlite3`**. Always:
+  lint/typecheck/test (Node ABI) → `pnpm dist` (Electron ABI) → `pnpm rebuild better-sqlite3` to restore. CI
+  is unaffected (fresh `pnpm install` + test, never `pnpm dist` on the same checkout).
+- **Verified artifacts (host = macOS):** `Kawsay-0.1.0-arm64.dmg` ≈ 198 MB + `Kawsay-0.1.0-arm64-mac.zip`
+  ≈ 199 MB (Apple Silicon), and the x64 cross-build `Kawsay-0.1.0.dmg` ≈ 205 MB (its `better_sqlite3.node`
+  is `Mach-O x86_64`). The Windows `.exe` cannot be cross-built on macOS (native module + NSIS) → produced on
+  the `windows-latest` runner; the config is verified correct.
+- **The 12.11.x bump has a CI cost: it dropped the Node-20 prebuilt.** `better-sqlite3` 12.9.0 shipped a
+  `node-v115` (Node 20, the `engines` floor) prebuilt for every platform; **≥ 12.10.1 ships only `node-v127`
+  / `v137` / `v141` / `v147` (Node 22/24/25/…)**. The `ci.yml` Verify job pins **Node 20**, so after the bump
+  it finds no prebuilt and tries to compile: macOS/Linux compile from source and pass, but **Windows fails** —
+  the runner's bundled node-gyp 10.2.0 mis-detects the image's "Visual Studio 18" (VS 2026) and its PowerShell
+  finder crashes (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`). The clean fix is a one-line `.github` change —
+  `node-version: 20` → `22` in `ci.yml` (Node 22's `node-v127` prebuilt exists for 12.11.1, and
+  `ac4-egress.yml` already uses Node 22) — which is coordinator-owned, so P1 escalates it rather than touching
+  the harness. Takeaway: when bumping a native dep, check its **prebuilt ABI matrix against the CI Node
+  version**, not just the local one.
+**Impact**: Keep `better-sqlite3 ≥ 12.11.1` for Electron 42 (floor-tested), and pair it with **CI Node ≥ 22**
+so Windows Verify gets a prebuilt instead of compiling. Leave
+`enableEmbeddedAsarIntegrityValidation` **off** in `electron-builder.yml` until Developer ID signing +
+notarization land, then flip it on in the same change. Don't re-add a `rebuild:native` pre-step to `dist`;
+let electron-builder rebuild natives. After any local `pnpm dist`, run `pnpm rebuild better-sqlite3` before
+`pnpm test`. Don't run `@electron/rebuild` from a nested worktree.
+
 ### [2026-06-24] axe-core in jsdom cannot judge colour-contrast — assert tokens, not pixels
 **Context**: Card X2 — adding `axe-core` to ratchet WCAG 2.1 A/AA across every renderer screen, and trying
 to make the suite catch the sub-AA placeholder colour (issue #104).

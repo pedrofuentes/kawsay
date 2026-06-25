@@ -1,10 +1,14 @@
-# electron-builder configuration — packaging skeleton (ARCHITECTURE §8, ADR-0007).
+# electron-builder configuration — card P1 (AC-5, ADR-0007, ARCHITECTURE §8).
 #
-# Full packaging (signing, native-module rebuild, GitHub publish, fuses afterPack)
-# is delivered in card P1. This skeleton wires the targets so `pnpm dist` is ready:
-#   - macOS dmg (arm64 + x64)
-#   - Windows NSIS (x64 only in v1; win-arm64 deferred, ADR-0007)
-# v1 ships UNSIGNED (mac identity null); code-signing/notarization is a deferred gate.
+# Produces the installable v1 artifacts and launches:
+#   - macOS  dmg + zip   (arm64 + x64)
+#   - Windows NSIS .exe   (x64 only in v1; win-arm64 deferred — no hosted arm64
+#                          Windows runner can smoke-launch it for AC-5, ADR-0007)
+# v1 ships UNSIGNED (mac identity null; NSIS unsigned); code-signing/notarization
+# is a deferred, human-gated step. Native modules are rebuilt for Electron's ABI
+# and unpacked from the asar; the security fuses (ARCHITECTURE §2.5) are flipped at
+# package time. Built locally / in CI with `pnpm dist` (never publishes); the first
+# production publish of each release is HUMAN-REQUIRED (protected GitHub Environment).
 appId: es.pedrofuent.kawsay
 productName: Kawsay
 copyright: Copyright © 2026 Pedro Fuentes
@@ -13,24 +17,54 @@ directories:
   output: dist
   buildResources: resources
 
+# Rebuild better-sqlite3 (and any native dep) against the bundled Electron's ABI at
+# package time, compiling from source so the `.node` matches the shipped runtime.
+npmRebuild: true
+buildDependenciesFromSource: true
+
 files:
   - out/**
   - package.json
 
-# Native modules (ffmpeg/ffprobe binaries) add their asarUnpack rules in their
-# respective feature cards. better-sqlite3 (the catalog engine, card F3) must be
-# unpacked from the asar so its compiled `.node` binary is loadable at runtime;
-# the Electron-ABI rebuild itself is wired via `pnpm rebuild:native` (P1 finalizes
-# afterPack rebuild + fuses).
+# A compiled `.node` can't be dlopen'd, and the ffmpeg/ffprobe binaries can't be
+# spawned, from inside the asar — the native catalog engine (better-sqlite3, card
+# F3) and the bundled media binaries are unpacked to app.asar.unpacked so they load
+# and exec at runtime in the packaged app (ADR-0007, ARCHITECTURE §8).
 asar: true
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
+  - '**/node_modules/ffmpeg-static/**'
+  - '**/node_modules/ffprobe-static/**'
+
+# Security fuses flipped at package time (ARCHITECTURE §2.5/§8, ADR-0007). Mirrors
+# electron/fuses/fuses.ts FUSE_CONFIG — kept in lock-step by tests/unit/packaging-
+# config.test.ts — with ONE deliberate v1 exception (the asar-integrity fuse below).
+# electron-builder flips these via its bundled @electron/fuses right before signing.
+# resetAdHocDarwinSignature re-applies the ad-hoc macOS signature after the flip so the
+# UNSIGNED v1 build still launches on Apple Silicon (arm64).
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  # FUSE_CONFIG declares this true (the signed-production target), but macOS asar
+  # integrity validation REQUIRES code signing: on the UNSIGNED v1 build it makes the
+  # renderer fail to load from the asar (ERR_FILE_NOT_FOUND). v1 ships it OFF; the
+  # cofounder re-enables it with Developer ID signing/notarization (ADR-0025, AC-5).
+  enableEmbeddedAsarIntegrityValidation: false
+  grantFileProtocolExtraPrivileges: false
+  enableCookieEncryption: true
+  resetAdHocDarwinSignature: true
 
 mac:
   category: public.app-category.lifestyle
-  identity: null
+  identity: null # unsigned v1 — Gatekeeper one-time prompt; signing deferred (ADR-0007)
   target:
     - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
       arch:
         - arm64
         - x64
@@ -45,6 +79,12 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 
+# Build-time release destination for the HUMAN-REQUIRED publish gate only. The
+# automated/local `pnpm dist` build passes `--publish never`, so a CI or developer
+# build can never upload a release; publishing happens solely via the gated release
+# workflow (protected GitHub Environment, @pedrofuentes approval — ADR-0007, AC-5).
+# Kawsay bundles no electron-updater/autoUpdater, so this adds no runtime network
+# feed and the zero-egress guarantee (AC-4) is untouched.
 publish:
   provider: github
   owner: pedrofuentes
