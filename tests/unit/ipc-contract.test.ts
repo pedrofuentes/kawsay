@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_SEARCH,
+  CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
@@ -41,6 +42,7 @@ const itemCard = {
   width: 480,
   height: 320,
   source: 'whatsapp',
+  hasThumbnail: true,
 };
 
 describe('ipcContract — library:create', () => {
@@ -131,6 +133,7 @@ describe('itemCardSchema — the renderer-safe tile carries its source (AC-7)', 
     isFavourite: false,
     width: 480,
     height: 320,
+    hasThumbnail: false,
   };
 
   it('carries a known connector source, allows null, and rejects an unknown one', () => {
@@ -143,6 +146,55 @@ describe('itemCardSchema — the renderer-safe tile carries its source (AC-7)', 
 
   it('makes the source a required key (no silent omission)', () => {
     expect(itemCardSchema.safeParse(base).success).toBe(false);
+  });
+
+  it('requires a boolean hasThumbnail (the renderer-safe thumbnail hint, U4)', () => {
+    // It is present and boolean on a well-formed tile…
+    expect(itemCardSchema.safeParse({ ...base, source: 'folder' }).success).toBe(true);
+    // …required (a tile that omits it is rejected, never silently defaulted)…
+    const { hasThumbnail, ...withoutHint } = { ...base, source: 'folder' };
+    void hasThumbnail;
+    expect(itemCardSchema.safeParse(withoutHint).success).toBe(false);
+    // …and strictly a boolean, never a path or other smuggled value.
+    expect(itemCardSchema.safeParse({ ...base, source: 'folder', hasThumbnail: 'yes' }).success).toBe(false);
+    expect(
+      itemCardSchema.safeParse({ ...base, source: 'folder', hasThumbnail: '/var/lib/x.webp' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('ipcContract — catalog:thumbnail (U4: bounded data-URL by opaque id)', () => {
+  const dataUrl = `data:image/jpeg;base64,${Buffer.from('a tiny thumbnail').toString('base64')}`;
+
+  it('accepts an opaque uuid id, with an optional bounded size', () => {
+    expect(reqOk(CATALOG_THUMBNAIL, { id: UUID })).toBe(true);
+    expect(reqOk(CATALOG_THUMBNAIL, { id: UUID, size: 320 })).toBe(true);
+    expect(reqOk(CATALOG_THUMBNAIL, { id: UUID, size: 16 })).toBe(true);
+  });
+
+  it('rejects a non-uuid id, an out-of-range size, a path, or extra keys (renderer passes ONLY an id)', () => {
+    expect(reqOk(CATALOG_THUMBNAIL, { id: 'not-a-uuid' })).toBe(false);
+    // Critically: a filesystem path is NOT a valid id — the renderer cannot ask
+    // for an arbitrary file, only a catalog id the main process resolves itself.
+    expect(reqOk(CATALOG_THUMBNAIL, { id: '/etc/passwd' })).toBe(false);
+    expect(reqOk(CATALOG_THUMBNAIL, { id: '../../secret' })).toBe(false);
+    expect(reqOk(CATALOG_THUMBNAIL, { id: UUID, size: 0 })).toBe(false);
+    expect(reqOk(CATALOG_THUMBNAIL, { id: UUID, size: 321 })).toBe(false);
+    expect(reqOk(CATALOG_THUMBNAIL, { id: UUID, size: 1.5 })).toBe(false);
+    expect(reqOk(CATALOG_THUMBNAIL, { id: UUID, path: '/etc/passwd' })).toBe(false);
+    expect(reqOk(CATALOG_THUMBNAIL, {})).toBe(false);
+  });
+
+  it('returns a bounded image data-URL, or null — never a path, remote scheme, or markup', () => {
+    expect(resOk(CATALOG_THUMBNAIL, dataUrl)).toBe(true);
+    expect(resOk(CATALOG_THUMBNAIL, null)).toBe(true);
+    // Only image data URLs ride back — never data:text/html, a remote URL, or a path.
+    expect(resOk(CATALOG_THUMBNAIL, 'data:text/html;base64,PHNjcmlwdD4=')).toBe(false);
+    expect(resOk(CATALOG_THUMBNAIL, 'https://evil.example/x.png')).toBe(false);
+    expect(resOk(CATALOG_THUMBNAIL, '/var/lib/kawsay/derived/x.webp')).toBe(false);
+    expect(resOk(CATALOG_THUMBNAIL, '')).toBe(false);
+    // An unbounded string cannot cross the boundary.
+    expect(resOk(CATALOG_THUMBNAIL, `data:image/png;base64,${'A'.repeat(2_000_000)}`)).toBe(false);
   });
 });
 

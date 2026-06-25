@@ -4,10 +4,13 @@ import {
   NAME_MAX_LENGTH,
   PAGE_LIMIT_MAX,
   QUERY_MAX_LENGTH,
+  THUMBNAIL_MAX_SIZE,
+  THUMBNAIL_MIN_SIZE,
   librarySummarySchema,
   pathSchema,
   searchResultSchema,
   sourceTypeSchema,
+  thumbnailDataUrlSchema,
   timelinePageSchema,
 } from './schemas';
 
@@ -22,6 +25,13 @@ export const LIBRARY_OPEN = 'library:open';
 export const CATALOG_TIMELINE = 'catalog:timeline';
 /** IPC channel: full-text search the open catalog. */
 export const CATALOG_SEARCH = 'catalog:search';
+/**
+ * IPC channel: fetch a bounded thumbnail for ONE catalog item by its opaque id.
+ * The request carries only the id (and an optional size) — never a path — so the
+ * main process does all original-resolution + confinement and answers with a
+ * self-contained image `data:` URL or null (U4).
+ */
+export const CATALOG_THUMBNAIL = 'catalog:thumbnail';
 /** IPC channel: start an off-thread import; resolves with the new job id. */
 export const IMPORT_START = 'import:start';
 /** IPC channel: cooperatively cancel an in-flight import by job id. */
@@ -94,6 +104,16 @@ export const ipcContract = {
       source: sourceTypeSchema.optional(),
     }),
     response: searchResultSchema,
+  },
+  [CATALOG_THUMBNAIL]: {
+    request: z.strictObject({
+      // An opaque catalog id — a uuid, so a path/traversal string never validates.
+      id: z.uuid(),
+      // The desired longest edge in px; the main process clamps, but bound it here
+      // too so junk (0, 321, fractional) is refused at the boundary.
+      size: z.number().int().min(THUMBNAIL_MIN_SIZE).max(THUMBNAIL_MAX_SIZE).optional(),
+    }),
+    response: thumbnailDataUrlSchema,
   },
   [IMPORT_START]: {
     request: z.strictObject({

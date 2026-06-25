@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Real photo & video thumbnails** in the timeline and search (card U4 / #102, **AC-6 emotional core**):
+  memories that can be seen — photos and videos — now show a **real thumbnail** instead of a generic
+  media-type icon, so a grieving person opening Kawsay is met with their loved one's actual faces and
+  moments rather than placeholders. The icon remains the calm fallback while a thumbnail loads, if a file
+  can't be rendered, or for non-visual items (voice notes, documents, messages). Thumbnails fade in gently,
+  and **never** when the system prefers reduced motion (Kawsay's default posture). This is built with a
+  deliberately small, **security-first** surface: the renderer asks for a thumbnail by the memory's
+  **opaque catalog id only** — never a file path — over a new **zod-validated** IPC channel
+  (`catalog:thumbnail`). The **main process** does all the privileged work: it resolves the original
+  through the existing path-confinement boundary (a hostile or escaping reference is **refused**, never
+  read), renders a small, byte-capped image with Electron's built-in **`nativeImage`** (photos) or the
+  existing **ffmpeg** wrapper piping a single file-protocol-pinned frame (videos), and returns a
+  self-contained, bounded image **`data:` URL** (or nothing). No filesystem path and no remote origin ever
+  cross back to the renderer, generated thumbnails are cached so a scrolled-back memory never re-renders,
+  and the app stays **local-only with zero network egress** — the Content-Security-Policy is unchanged
+  (it already allowed `data:` images while keeping `connect-src 'none'`). **No new dependencies** — see
+  ADR-0022.
+
 - **Browse for the folder or file** instead of typing a path (card W2 / #93, **AC-12 usability**):
   onboarding's path fields — the library location and each import source — now offer an accessible
   **Browse…** button that opens the computer's own **folder or file picker** and fills the field with

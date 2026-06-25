@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   APP_GET_VERSION,
   CATALOG_SEARCH,
+  CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
@@ -34,6 +35,7 @@ const otherHandlers = {
   [LIBRARY_OPEN]: () => ({ root: '/x', name: 'x', createdAt: 'x', schemaVersion: 1 }),
   [CATALOG_TIMELINE]: () => ({ items: [], nextCursor: null }),
   [CATALOG_SEARCH]: () => ({ items: [], total: 0 }),
+  [CATALOG_THUMBNAIL]: () => null,
   [IMPORT_START]: () => ({ jobId: '00000000-0000-0000-0000-000000000000' }),
   [IMPORT_CANCEL]: () => ({ cancelled: false }),
   [DIALOG_OPEN_DIRECTORY]: () => null,
