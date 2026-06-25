@@ -60,6 +60,30 @@ function seedItems(catalogPath: string): void {
   db.close();
 }
 
+/** Seed two memories from two different connector sources (whatsapp + folder),
+ *  both matching "familia", so source-filter and source-projection are testable. */
+function seedMultiSource(catalogPath: string): void {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const whatsapp = repo.registerSource({ sourceKey: 'wa', type: 'whatsapp', label: 'WhatsApp' });
+  const folder = repo.registerSource({ sourceKey: 'fold', type: 'folder', label: 'Folder' });
+  const wa = repo.insertItem({
+    mediaType: 'message',
+    contentHash: 'h-wa',
+    title: 'WhatsApp memory',
+    description: 'familia en la playa',
+  });
+  repo.addOccurrence({ itemId: wa, sourceId: whatsapp, sourceRef: 'wa/1' });
+  const fo = repo.insertItem({
+    mediaType: 'photo',
+    contentHash: 'h-fo',
+    title: 'Folder memory',
+    description: 'familia con la abuela',
+  });
+  repo.addOccurrence({ itemId: fo, sourceId: folder, sourceRef: 'fold/1', originalKind: 'in_place' });
+  db.close();
+}
+
 describe('createCatalogSession (the IPC application service)', () => {
   let parent: string;
   let root: string;
@@ -127,6 +151,22 @@ describe('createCatalogSession (the IPC application service)', () => {
     const result = session.search({ query: 'beach', limit: 10, offset: 0 });
     expect(result.total).toBeGreaterThanOrEqual(1);
     expect(result.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
+  });
+
+  it('passes a source filter through to the catalog and projects each tile’s source (AC-7)', () => {
+    session.createLibrary({ path: root });
+    seedMultiSource(join(root, 'catalog.sqlite3'));
+
+    // Unfiltered: every source comes back, each tile carrying its connector source.
+    const all = session.search({ query: 'familia', limit: 10, offset: 0 });
+    expect(all.total).toBe(2);
+    expect(all.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
+    expect(new Set(all.items.map((i) => i.source))).toEqual(new Set(['whatsapp', 'folder']));
+
+    // Filtered to one connector: only that source’s memories survive.
+    const onlyWhatsapp = session.search({ query: 'familia', limit: 10, offset: 0, source: 'whatsapp' });
+    expect(onlyWhatsapp.total).toBe(1);
+    expect(onlyWhatsapp.items.map((i) => i.source)).toEqual(['whatsapp']);
   });
 
   it('beginImport registers a source and starts a well-formed off-thread job', () => {

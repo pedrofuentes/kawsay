@@ -54,7 +54,12 @@ export interface CatalogSession {
   createLibrary(input: { path: string; personName?: string }): LibrarySummaryDTO;
   openLibrary(input: { path: string }): LibrarySummaryDTO;
   getTimeline(input: { limit: number; cursor?: string }): TimelinePageDTO;
-  search(input: { query: string; limit: number; offset: number }): SearchResultDTO;
+  search(input: {
+    query: string;
+    limit: number;
+    offset: number;
+    source?: SourceType;
+  }): SearchResultDTO;
   beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
   /** Close the open library and tear down every in-flight import (window-close). */
@@ -102,6 +107,7 @@ function toItemCard(row: ItemRow): ItemCardDTO {
     isFavourite: row.isFavourite,
     width: row.width,
     height: row.height,
+    source: row.source,
   });
 }
 
@@ -158,7 +164,12 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     },
     search(input) {
       const { repo } = requireOpen();
-      const result = repo.search({ query: input.query, limit: input.limit, offset: input.offset });
+      const result = repo.search({
+        query: input.query,
+        limit: input.limit,
+        offset: input.offset,
+        source: input.source,
+      });
       return { items: result.rows.map(toItemCard), total: result.total };
     },
     beginImport(input) {

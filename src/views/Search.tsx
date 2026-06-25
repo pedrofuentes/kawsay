@@ -1,22 +1,25 @@
 // The Search screen (Journey E; AC-6 search half + AC-7). A calm, forgiving way
-// to find one memory by a few plain words, then narrow by type or date. The query
-// is debounced and run through the typed `searchCatalog` bridge; the returned
-// matches are paged in memory and filtered client-side (the IPC contract exposes
-// no server-side filters, and its result tiles carry `mediaType` + `captureDate`
-// but no source — so type and date are what we can honestly narrow on here).
+// to find one memory by a few plain words, then narrow by type, source or date.
+// The query is debounced and run through the typed `searchCatalog` bridge. The
+// `source` filter is applied SERVER-SIDE — it travels with the request so the
+// catalogue narrows the match set to one connector (AC-7) — while type and date
+// stay client-side filters over the returned page (the result tiles carry
+// `mediaType` + `captureDate`, so those we can narrow on honestly in memory).
 //
 // Everything the catalog returns is UNTRUSTED data (a loved one's words, captions,
 // filenames). It is rendered as escaped React text — never markup — and the match
 // highlight is built from plain string slices wrapped in <mark>, so a caption like
 // "<script>…" can never become a live element (AC-4 posture; USER_FLOWS rubric R12).
+// The `source` value is a validated enum, shown via the shared source set.
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
-import type { ItemCardDTO, MediaType, SearchResultDTO } from '@shared/kawsay-api';
+import type { ItemCardDTO, MediaType, SearchResultDTO, SourceType } from '@shared/kawsay-api';
 import { Button } from '@renderer/components/Button';
 import { EmptyState } from '@renderer/components/EmptyState';
 import { ErrorBanner } from '@renderer/components/ErrorBanner';
 import { Icon } from '@renderer/components/Icon';
 import type { IconName } from '@renderer/components/Icon';
+import { SOURCES, getSource } from '@renderer/onboarding/sources';
 import { cx } from '@renderer/lib/cx';
 import { useKawsayApi } from '@renderer/lib/kawsay-api';
 import { useLibrary } from '@renderer/lib/library';
@@ -132,6 +135,7 @@ export function Search(): ReactElement {
   const query = rawQuery.trim() === '' ? '' : debouncedQuery.trim();
 
   const [activeTypes, setActiveTypes] = useState<ReadonlySet<MediaType>>(() => new Set());
+  const [activeSource, setActiveSource] = useState<SourceType | null>(null);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
@@ -162,7 +166,12 @@ export function Search(): ReactElement {
     const id = (requestId.current += 1);
     setPhase('searching');
     api
-      .searchCatalog({ query, limit: SEARCH_LIMIT })
+      .searchCatalog({
+        query,
+        limit: SEARCH_LIMIT,
+        // The source filter is server-side: send it only when a connector is chosen.
+        ...(activeSource !== null ? { source: activeSource } : {}),
+      })
       .then((page) => {
         if (id !== requestId.current) return;
         setResult(page);
@@ -172,7 +181,7 @@ export function Search(): ReactElement {
         if (id !== requestId.current) return;
         setPhase('error');
       });
-  }, [api, query, retryToken]);
+  }, [api, query, activeSource, retryToken]);
 
   const visibleItems = useMemo<ItemCardDTO[]>(() => {
     if (result === null) return [];
@@ -190,7 +199,8 @@ export function Search(): ReactElement {
 
   const hasQuery = query !== '';
   const hasRawResults = result !== null && result.items.length > 0;
-  const filtersActive = activeTypes.size > 0 || fromDate !== '' || toDate !== '';
+  const filtersActive =
+    activeTypes.size > 0 || activeSource !== null || fromDate !== '' || toDate !== '';
 
   const toggleType = useCallback((type: MediaType) => {
     setActiveTypes((prev) => {
@@ -203,6 +213,7 @@ export function Search(): ReactElement {
 
   const clearFilters = useCallback(() => {
     setActiveTypes(new Set());
+    setActiveSource(null);
     setFromDate('');
     setToDate('');
   }, []);
@@ -289,6 +300,29 @@ export function Search(): ReactElement {
                 </button>
               );
             })}
+          </div>
+
+          <div role="group" aria-label="Filter by source" className="flex flex-col gap-1">
+            <label htmlFor={`${inputId}-source`} className="font-body text-sm text-text-secondary">
+              Source
+            </label>
+            <select
+              id={`${inputId}-source`}
+              value={activeSource ?? ''}
+              onChange={(event) =>
+                setActiveSource(
+                  event.target.value === '' ? null : (event.target.value as SourceType),
+                )
+              }
+              className="min-h-11 w-full max-w-xs rounded-lg border border-border-default bg-surface-raised px-3 font-body text-base text-text-primary"
+            >
+              <option value="">All sources</option>
+              {SOURCES.map((source) => (
+                <option key={source.type} value={source.type}>
+                  {source.title}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div role="group" aria-label="Filter by date" className="flex flex-wrap items-end gap-4">
@@ -404,6 +438,8 @@ export function Search(): ReactElement {
 function ResultCard({ item, term }: { item: ItemCardDTO; term: string }): ReactElement {
   const meta = TYPE_META[item.mediaType];
   const date = formatDate(item.captureDate);
+  // Provenance label, drawn from the shared source set; null when no source survives.
+  const sourceMeta = item.source !== null ? getSource(item.source) : null;
   return (
     <article className="flex h-full flex-col gap-3 rounded-lg border border-border-subtle bg-surface-raised p-6">
       {/* Lazy media affordance: until a local-protocol thumbnail reference exists in
@@ -422,6 +458,12 @@ function ResultCard({ item, term }: { item: ItemCardDTO; term: string }): ReactE
           <>
             <span aria-hidden>·</span>
             <span>{date}</span>
+          </>
+        ) : null}
+        {sourceMeta !== null ? (
+          <>
+            <span aria-hidden>·</span>
+            <span>{sourceMeta.title}</span>
           </>
         ) : null}
       </p>

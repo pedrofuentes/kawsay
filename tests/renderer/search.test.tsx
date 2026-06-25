@@ -281,6 +281,58 @@ describe('Search — filters narrow the matches', () => {
   });
 });
 
+describe('Search — the source filter narrows server-side (AC-7)', () => {
+  it('groups a source filter under an accessible label, defaulting to all sources', () => {
+    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(makeSearchResult())) });
+    renderSearch(api);
+    const sourceFilter = screen.getByRole('combobox', { name: /source/i });
+    expect(sourceFilter).toBeInTheDocument();
+    // "All sources" is the resting state — no connector is pre-selected.
+    expect(sourceFilter).toHaveValue('');
+    expect(screen.getByRole('group', { name: /source/i })).toBeInTheDocument();
+  });
+
+  it('re-runs the search through the bridge for the chosen connector, and "All sources" clears it', async () => {
+    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(makeSearchResult())) });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await waitFor(() => expect(api.searchCatalog).toHaveBeenCalledWith({ query: 'mama', limit: 50 }));
+
+    // Choosing a connector narrows the search server-side (a real searchCatalog param).
+    await user.selectOptions(screen.getByRole('combobox', { name: /source/i }), 'whatsapp');
+    await waitFor(() =>
+      expect(api.searchCatalog).toHaveBeenLastCalledWith({
+        query: 'mama',
+        limit: 50,
+        source: 'whatsapp',
+      }),
+    );
+
+    // Returning to "All sources" drops the filter again.
+    await user.selectOptions(screen.getByRole('combobox', { name: /source/i }), '');
+    await waitFor(() =>
+      expect(api.searchCatalog).toHaveBeenLastCalledWith({ query: 'mama', limit: 50 }),
+    );
+  });
+
+  it('shows where each result came from', async () => {
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(
+          makeSearchResult({ items: [makeItemCard({ title: 'Beach picnic', source: 'whatsapp' })] }),
+        ),
+      ),
+    });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'beach');
+    expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
+    // The result names its connector provenance, drawn from the shared source set.
+    expect(screen.getByRole('article')).toHaveTextContent(/whatsapp/i);
+  });
+});
+
 describe('Search — untrusted catalog data is rendered safely', () => {
   it('renders a caption containing markup as escaped text and highlights matches without injection', async () => {
     const api = makeFakeApi({
