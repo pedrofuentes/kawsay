@@ -16,10 +16,15 @@ const builderYml = readFileSync(repoRoot('electron-builder.yml'), 'utf8');
  * configuration, not the explanatory prose — which legitimately names what we
  * deliberately omit (e.g. the line stating we bundle "no electron-updater/
  * autoUpdater"). `builderConfig` is the comment-free view used by those checks.
+ *
+ * Splits on CRLF *or* LF (`/\r?\n/`) so the strip works on a Windows (CRLF)
+ * checkout too: with a plain `.split('\n')` every line keeps a trailing `\r`,
+ * and the regex (no `m` flag; `.` excludes `\r`; `$` = end-of-string) then
+ * never matches the comment, leaking the prose into the "config" under test.
  */
 function stripYamlComments(yaml: string): string {
   return yaml
-    .split('\n')
+    .split(/\r?\n/)
     .map((line) => line.replace(/(^|\s)#.*$/, '$1'))
     .join('\n');
 }
@@ -32,7 +37,7 @@ const packageJson = JSON.parse(readFileSync(repoRoot('package.json'), 'utf8')) a
 
 /** Return the indented body lines that belong to a top-level YAML key. */
 function topLevelBlock(name: string): string {
-  const lines = builderYml.split('\n');
+  const lines = builderYml.split(/\r?\n/);
   const start = lines.findIndex((l) => l.startsWith(`${name}:`));
   if (start === -1) return '';
   const body: string[] = [];
