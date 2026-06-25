@@ -28,6 +28,131 @@
 
 ---
 
+### ADR-0027: M2 on-device transcription — whisper.cpp via a bundled `whisper-cli` binary + `base` multilingual model on the F3c worker/ffmpeg seam (bundle, never download)
+**Date**: 2026-06-25
+**Status**: Proposed — 🚨 **HUMAN-REQUIRED** (@pedrofuentes sign-off required before any building). This is the
+**M2 architecture gate artifact**; it is research + design only (no product code) and is pending an independent
+red-team. Supersedes nothing; extends ADR-0004 (off-thread ingestion), ADR-0012 (bundled ffmpeg/ffprobe),
+ADR-0003 (catalog/FTS), ADR-0007/0023 (packaging), and ADR-0008 (zero-egress invariant).
+**Tier**: **human-required** (MISSION §9). Two independent triggers fire: (1) a **heavy/unusual dependency** — a
+platform-specific native binary plus a 142 MiB–466 MiB model file that ~doubles-to-triples the installer; and
+(2) **privacy-data capability** design — turning a deceased person's voice into stored, searchable text. Either
+alone gates; both together make this a deliberate, blocking cofounder decision. The **time-boxed** M2 default
+(ROADMAP) holds **only while the design stays fully on-device**; this ADR keeps it on-device, so the gate here is
+the heavy-dep + privacy sign-off, not an egress exception.
+
+**Context**
+ROADMAP **M2** ("the #1 post-v1 candidate", MISSION §4) is approved in principle: transcribe WhatsApp voice notes
+and audio/video **on-device** so a grieving user needn't listen to every recording. The cofounder specifically
+asked about **Whisper** and whether it is **"too heavy?"**. The binding constraints are non-negotiable:
+- **AC-4 zero-egress is load-bearing** (MISSION §5, NEVER list): "a loved one's memories must never leave the
+  machine," surfaced in-product as "your memories never leave this computer." Any cloud STT, or any **model
+  download at install or runtime**, is network egress that breaks AC-4 and is **human-required** (ROADMAP M2).
+- **Off-UI-thread** (AC-9): heavy media work runs in the F3c `worker_threads`/`utilityProcess` harness with
+  `ffmpeg`/`ffprobe` as bounded subprocesses — never on the renderer thread.
+- **Searchable + attached to items** (AC-6/AC-7): the FTS5 index `items_fts` (tokenize `unicode61`, which already
+  handles ES/PT diacritics) over `items(title, description, search_meta)` is the existing search seam; the catalog
+  already reserves the `audio` media-type and the `waveform` asset-kind (`migrations/001_initial.sql`).
+- **Resilience + integrity** (AC-15/AC-14): a failed item is skipped/reported, never aborts the run, and originals
+  are never altered.
+The question this ADR answers: **which engine, which Node integration, which model, and how is it packaged across
+macOS (arm64+x64) + Windows — without breaking AC-4?**
+
+**Decision** *(all subject to the human-required sign-off + red-team)*
+1. **Engine — whisper.cpp** (`ggml-org/whisper.cpp`, **MIT**, stable **v1.9.1**, 2025). It is a dependency-free
+   C/C++ port of OpenAI Whisper (also MIT): **Apple-Silicon first-class** (ARM NEON + Accelerate + **Metal**, with
+   optional **Core ML**/ANE encoder for >3× speed-up), **CPU-only inference** on Windows x64 (MSVC/MinGW), and
+   distributes models in the compact `ggml` format. License is MIT-compatible with Kawsay (MIT).
+2. **Node integration — bundle the per-platform `whisper-cli` binary and invoke it as a sandboxed subprocess from
+   the off-thread worker**, mirroring the bundled-ffmpeg/ffprobe seam (ADR-0004/0012): a discrete **array argv**
+   (never a shell string), **local-file-only inputs**, a hard `timeout`, and **bounded stderr/stdout caps**. This
+   reuses `electron/main/importers/deps/{thumbnail,ffprobe}.ts` patterns almost verbatim and the transport-agnostic
+   F3c coordinator/protocol. We do **not** adopt an in-process N-API addon or `nodejs-whisper` for the first cut
+   (see Alternatives).
+3. **Audio extraction — reuse the bundled `ffmpeg`** to decode any voice note (`.opus`), audio, or video audio
+   track to the **16 kHz mono PCM `s16le` WAV** that `whisper-cli` requires (`ffmpeg -i in -ar 16000 -ac 1 -c:a
+   pcm_s16le out.wav`), via the same hardened `spawn` seam. No new media dependency.
+4. **Model — bundle the `base` multilingual `ggml` model (142 MiB) as the default**, with **`small` (466 MiB)** as
+   the cofounder-selectable quality option; the **exact** choice is finalized empirically by the M2 accuracy
+   harness (increment M2-6) on **real Spanish WhatsApp-style voice notes** before the model is locked. Rationale:
+   - **Must be multilingual** (a model **without** the `.en` suffix) because the audience is international (Spanish
+     **and** others); Whisper performs language-ID + transcription across ~99 languages, with Spanish among its
+     higher-resource, better-performing languages.
+   - **`tiny` (75 MiB)** is rejected as too inaccurate for grief-critical content (multilingual WER ~10–15%).
+   - **`base` (142 MiB)** lands the sweet spot the cofounder's "too heavy?" question targets: ~7% Spanish WER
+     (Common Voice ~6.9% reported for `base`), the **smallest acceptable multilingual** model, ~+142 MB installer.
+   - **`small` (466 MiB)** is meaningfully better on accented/noisy real-world voice notes (WER ~6–9%) at ~3.3× the
+     footprint; offered as the upgrade if the harness shows `base` is insufficient. A **quantized `q5_0`** variant
+     (quantization cut `large-v2` 2.9 GiB→1.1 GiB and `large-v3-turbo` 1.5 GiB→547 MiB upstream) is the middle
+     option to evaluate in the harness rather than asserted here.
+   - **`medium` (1.5 GiB) / `large` (2.9 GiB)** are rejected as the bundled default: installer bloat for a
+     non-technical "in an afternoon" audience, and too slow on Windows CPU.
+5. **Transcript storage + FTS** — transcripts **attach to the existing media item** (audio/video), never create new
+   items; the text is captured into `items_fts` (via `items.description` and/or a dedicated transcript column +
+   trigger) so the **existing** FTS5 search (AC-6/AC-7) and source/type/date filters cover spoken words. The schema
+   change is a **DB migration → HUMAN-REQUIRED** (AGENTS.md) and is dedup-with-provenance aware (ADR-0003).
+6. **Packaging — bundle, do not download.** The `whisper-cli` binary and the chosen `ggml` model ship **inside the
+   installer** via `electron-builder` `extraResources` (the model/binary are data, resolved at runtime through
+   `process.resourcesPath`) and/or `asarUnpack` (consistent with how `ffmpeg-static`/`ffprobe-static`/
+   `better-sqlite3` are unpacked today), built on the **per-arch native runners** already in CI (macOS arm64 +
+   x64, Windows x64). There is **NO model fetch at install or at runtime.**
+7. **AC-4 preservation (by construction).** Because everything is bundled and `whisper-cli` is spawned
+   **local-file-only** (paths, never URLs), the app makes **zero** outbound connections at install or runtime. The
+   runtime network guard (`network-guard.ts`) and renderer CSP (`connect-src 'none'`) are **untouched**. The
+   existing **AC-4 harness already spies on worker-thread and subprocess egress** (`tests/ac4/positive-controls.ts`
+   `attemptEgressFromWorker`/`attemptEgressFromSubprocess`), so it extends directly to assert the transcription
+   worker + the `whisper-cli` subprocess record no egress (new **AC-17**).
+
+**Alternatives considered**
+- **In-process N-API addon (`smart-whisper`, or a thin custom addon over `libwhisper`)** — lower latency, no
+  subprocess to manage, rebuilt for Electron's ABI exactly like `better-sqlite3`. **Rejected for v1** because: (a)
+  **ABI/prebuild fragility** — the addon must be rebuilt (or a matching prebuild downloaded) for every Electron
+  major bump, and prebuild coverage for Electron ABIs is unreliable; (b) **thinner maintenance** than whisper.cpp
+  itself; (c) **weaker crash-isolation** — a native segfault on a malformed/adversarial audio file would crash the
+  worker (and risk the main process), whereas a **subprocess** fault is a typed, contained failure (better AC-15
+  resilience). Revisit for performance once the subprocess baseline ships.
+- **`nodejs-whisper` (CLI wrapper, MIT, v0.3.0)** — ergonomic and CLI-based like our choice, but **rejected**
+  because it **compiles whisper.cpp from source at `npm install`** (toolchain fragility in CI/packaging) and ships
+  a **model auto-download** path (`npx nodejs-whisper download`, `autoDownloadModelName`) that is a **latent egress
+  vector** sitting right next to the privacy boundary. We prefer no network-capable code on that path at all.
+- **Vosk (Kaldi, Apache-2.0)** — genuinely offline, small models (Spanish small ~48 MB, large ~833 MB), mature
+  Node binding. **Rejected** because real-world accuracy on **accented/noisy WhatsApp voice notes** and
+  multilingual breadth are materially below Whisper; grief-critical, one-shot memories warrant the better model
+  even at a larger footprint.
+- **Coqui STT (MPL-2.0)** — **rejected**: the project and company were **archived/shut down in 2024**; unmaintained
+  is a non-starter for a shipped, security-scanned app.
+- **faster-whisper (CTranslate2, Python)** — fast, but **rejected**: it requires a **bundled Python runtime**;
+  Kawsay ships no Python, and embedding one is heavy, fragile to package across macOS+Windows, and contrary to the
+  established "spawn a bundled native binary" pattern (ADR-0012).
+- **Cloud STT (OpenAI / Google / AWS Transcribe)** — **rejected outright**: network egress that **breaks AC-4** and
+  sends a deceased person's voice off-device — squarely on the MISSION §5 / AGENTS.md **NEVER** list.
+- **Runtime/first-run model download (any engine, any size)** — **rejected**: a download is egress; it would move
+  M2 from time-boxed to **human-required** and break the offline guarantee the product promises in copy. Bundling
+  is the deliberate, AC-4-preserving choice.
+
+**Consequences**
+- **Installer size grows, quantified and bounded:** ~200 MB today → **~340 MB** with `base` (+~71%) or **~670 MB**
+  with `small` (+~233%). One-time, shipped offline, no runtime fetch. This is the concrete answer to "too heavy?":
+  `base` is the recommended default; `small` is the data-driven upgrade.
+- **New heavy, platform-specific build artifact** (binary + model) per arch (macOS arm64/x64, Windows x64) → larger
+  CI build/sign/notarize surface (signing still deferred per ADR-0025) and the **human-required** sign-off this ADR
+  flags. Apple **Core ML** acceleration, if adopted later, adds an Apple-only encoder artifact (revisit).
+- **AC-4 is preserved by construction** and newly **bound by AC-17**; the off-thread guarantee (AC-9) extends to
+  **AC-18**; audio/video become first-class **searchable** via **AC-19** (MISSION §4's top candidate realized);
+  resilience/accuracy are bound by **AC-20/AC-21** (PRD addendum).
+- **A DB migration** (transcript storage) is required → **HUMAN-REQUIRED** per AGENTS.md, sequenced behind the
+  engine/packaging work.
+- **Accuracy is model-bound and falsifiable:** AC-21 sets a measurable WER ceiling on a labelled offline fixture
+  set (no telemetry), letting the cofounder trade `base`↔`small` with evidence rather than guesswork.
+- **Performance:** short voice notes transcribe comfortably; on Apple Silicon whisper.cpp runs on the GPU (Metal)
+  multiples faster than realtime, and on Windows CPU `base` is near-realtime — and because it runs **off-thread in
+  the background after import**, even slower-than-realtime inference never blocks the UI.
+- **Open items for the red-team:** finalize `base`-vs-`small`(-vs-`q5_0`) on real Spanish voice notes (M2-6);
+  decide transcript schema (reuse `description` vs a dedicated `transcripts` table); decide whether to also bundle
+  the Core ML encoder for Apple Silicon; confirm whisper-cli binary provenance/build in CI per arch.
+
+---
+
 ### ADR-0026: Release pipeline — GitHub Actions workflow publishing unsigned v1 installers to GitHub Releases
 **Date**: 2026-06-25
 **Status**: Accepted (implements ADR-0007; complements ADR-0023/0024/0025)

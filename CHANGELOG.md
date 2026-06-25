@@ -306,6 +306,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Docs / architecture (no code, no user-facing change):** proposed the **M2 on-device transcription**
+  architecture as a gate artifact for cofounder sign-off — **ADR-0027** (whisper.cpp via a bundled
+  `whisper-cli` binary + the `base` multilingual `ggml` model on the existing off-thread worker + `ffmpeg`
+  seam; **bundle, never download** — preserving the zero-egress guarantee, AC-4), a **PRD acceptance addendum
+  (AC-17 … AC-21)**, and an **M2 increment breakdown** in `ROADMAP.md`. **Proposed / 🚨 HUMAN-REQUIRED**
+  (heavy bundled dependency + privacy-data capability); awaiting red-team + @pedrofuentes approval before any
+  building. No dependencies added, no runtime network egress.
+
 ### Fixed
 
 - Two small moments now stay calm instead of stalling silently. When you pick a folder or file with
