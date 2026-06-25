@@ -102,6 +102,11 @@ pin (no caret) is preserved — native-module ABI builds must stay deterministic
 - ⚠️ A regression-floor test (`tests/unit/packaging-config.test.ts`) pins `better-sqlite3 ≥ 12.11.1`, because
   the Node-ABI prebuilt hides Electron-ABI compile breaks from the ordinary test run — a downgrade would
   otherwise only fail at package time.
+- ⚠️ 12.11.1 (like all ≥ 12.10.1) ships **no Node-20 prebuilt** (only `node-v127`/`v137`/`v141`/`v147` =
+  Node 22/24/25/…). The `ci.yml` Verify job pins **Node 20**, so Windows CI — which can't compile native code
+  from source on the current runner (node-gyp 10.2.0 vs the image's VS 2026) — needs **Node ≥ 22** to pick up
+  the `node-v127` prebuilt. That CI Node bump is a coordinator-owned `.github` change (raised on the P1 PR);
+  see LEARNINGS 2026-06-24.
 - Called out for review per the card's "only electron-builder" constraint: this is a required compatibility
   bump of an existing runtime dependency, not a new package.
 
