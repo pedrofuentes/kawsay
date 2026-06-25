@@ -17,8 +17,35 @@ export const QUERY_MAX_LENGTH = 512;
 export const CURSOR_MAX_LENGTH = 4096;
 export const PAGE_LIMIT_MAX = 200;
 
+/**
+ * Thumbnail bounds (U4). The renderer may only ask for a square edge within
+ * `[MIN, MAX]` px; the main process clamps anything else. `MAX_BYTES` caps a
+ * single rendition so an adversarial original can't balloon the response, and
+ * `DATA_URL_MAX_LENGTH` bounds the base64 data: URL that carries it (a 512 KiB
+ * image is ~699 KB of base64, so 1 MiB leaves headroom while still rejecting a
+ * multi-megabyte payload outright). These are defence-in-depth caps, not UX knobs.
+ */
+export const THUMBNAIL_MIN_SIZE = 16;
+export const THUMBNAIL_MAX_SIZE = 320;
+export const THUMBNAIL_MAX_BYTES = 512 * 1024;
+export const THUMBNAIL_DATA_URL_MAX_LENGTH = 1024 * 1024;
+
 /** A non-empty, bounded absolute path supplied by the renderer. */
 export const pathSchema = z.string().min(1).max(PATH_MAX_LENGTH);
+
+/**
+ * A bounded image `data:` URL (the entire thumbnail payload), or null when no
+ * rendition exists. Only the three raster MIME types the main-side thumbnailers
+ * emit are allowed and the body must be canonical base64 — so a `data:text/html`
+ * smuggling attempt, a remote URL, or a filesystem path is rejected outright,
+ * and no path or remote origin can ever ride back to the renderer (AC-4).
+ */
+export const thumbnailDataUrlSchema = z
+  .string()
+  .regex(/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/u)
+  .max(THUMBNAIL_DATA_URL_MAX_LENGTH)
+  .nullable();
+export type ThumbnailDataUrl = z.infer<typeof thumbnailDataUrlSchema>;
 
 export const sourceTypeSchema = z.enum(SOURCE_TYPES);
 export const mediaTypeSchema = z.enum(MEDIA_TYPES);
@@ -55,6 +82,10 @@ export const itemCardSchema = z.strictObject({
   // The connector this memory came from (AC-7). Null only for a deduped item
   // whose every provenance occurrence has been undone — normally a known source.
   source: sourceTypeSchema.nullable(),
+  // Whether this memory is visually renderable (a photo or video) and so worth
+  // asking `catalog:thumbnail` for. A pure hint — NOT a path or asset URL; the
+  // renderer still receives only an opaque id and the bytes come back separately.
+  hasThumbnail: z.boolean(),
 });
 export type ItemCardDTO = z.infer<typeof itemCardSchema>;
 

@@ -19,6 +19,7 @@ import { EmptyState } from '@renderer/components/EmptyState';
 import { ErrorBanner } from '@renderer/components/ErrorBanner';
 import { Icon } from '@renderer/components/Icon';
 import type { IconName } from '@renderer/components/Icon';
+import { MediaThumbnail } from '@renderer/components/MediaThumbnail';
 import { SOURCES, getSource } from '@renderer/onboarding/sources';
 import { cx } from '@renderer/lib/cx';
 import { useKawsayApi } from '@renderer/lib/kawsay-api';
@@ -442,15 +443,16 @@ function ResultCard({ item, term }: { item: ItemCardDTO; term: string }): ReactE
   const sourceMeta = item.source !== null ? getSource(item.source) : null;
   return (
     <article className="flex h-full flex-col gap-3 rounded-lg border border-border-subtle bg-surface-raised p-6">
-      {/* Lazy media affordance: until a local-protocol thumbnail reference exists in
-          the catalog DTO, results show a calm type tile rather than reaching out for
-          a file — keeping the renderer free of any network or filesystem coupling. */}
-      <div
-        aria-hidden
-        className="flex aspect-[4/3] items-center justify-center rounded-md bg-surface-sunken text-sage-600"
-      >
-        <Icon name={meta.icon} className="h-9 w-9" />
-      </div>
+      {/* Lazy media tile: a real thumbnail for a renderable result, fetched by
+          OPAQUE id over the zero-egress `catalog:thumbnail` channel, with the calm
+          type icon as the fallback while loading, on error, or for non-visual items
+          — so the renderer still reaches for no file path and no network. */}
+      <MediaThumbnail
+        item={item}
+        icon={meta.icon}
+        className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
+        iconClassName="h-9 w-9"
+      />
       <p className="font-body text-base text-text-primary">{highlight(captionOf(item), term)}</p>
       <p className="flex flex-wrap items-center gap-x-2 font-body text-sm text-text-secondary">
         <span>{meta.label}</span>

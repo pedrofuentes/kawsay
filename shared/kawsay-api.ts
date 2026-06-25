@@ -32,6 +32,15 @@ export interface KawsayAPI {
     source?: SourceType;
   }): Promise<SearchResultDTO>;
 
+  /**
+   * Fetch a bounded thumbnail for ONE memory by its opaque catalog id (U4).
+   * Resolves with a self-contained image `data:` URL, or null when the item is
+   * non-visual or can't be rendered. The renderer passes only the id (never a
+   * path); the main process resolves + confines the original and caps the bytes,
+   * so nothing filesystem- or network-bound crosses the bridge (AC-4).
+   */
+  getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
+
   /** Start an off-thread import; resolves with the new job id. */
   startImport(input: { sourceType: SourceType; inputPath: string }): Promise<{ jobId: string }>;
   /** Cooperatively cancel an in-flight import. */

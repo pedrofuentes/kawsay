@@ -32,6 +32,12 @@ import {
   type ItemRow,
   type TimelineCursor,
 } from '../db/catalog-repo';
+import {
+  createThumbnailService,
+  type ImageThumbnailer,
+  type ThumbnailService,
+  type VideoThumbnailer,
+} from '../library/thumbnail-service';
 import { importers } from '../importers/registry';
 import type { IngestionCoordinator } from '../importers/ingestion/coordinator';
 import type { IngestionJobSpec } from '../importers/ingestion/protocol';
@@ -44,10 +50,29 @@ export class CatalogSessionError extends Error {
   }
 }
 
+/**
+ * The decoders the per-library {@link ThumbnailService} uses to turn a confined
+ * original into bounded bytes. Injected so the catalog session (and its tests)
+ * stay free of Electron/ffmpeg; production wires `nativeImage` + an ffmpeg frame.
+ */
+export interface CatalogThumbnailers {
+  image: ImageThumbnailer;
+  video: VideoThumbnailer;
+}
+
+/** Default when no thumbnailers are injected: nothing renders (icons everywhere),
+ *  so a headless/test session needs no decoders to function. */
+const NOOP_THUMBNAILERS: CatalogThumbnailers = {
+  image: async () => null,
+  video: async () => null,
+};
+
 export interface CatalogSessionOptions {
   coordinator: IngestionCoordinator;
   /** Job-id factory (injectable for deterministic tests). */
   newId?: () => string;
+  /** Photo/video decoders for the thumbnail service (default: no-op). */
+  thumbnailers?: CatalogThumbnailers;
 }
 
 export interface CatalogSession {
@@ -60,6 +85,8 @@ export interface CatalogSession {
     offset: number;
     source?: SourceType;
   }): SearchResultDTO;
+  /** Render one memory's bounded thumbnail by opaque id (U4), or null. */
+  getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
   beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
   /** Close the open library and tear down every in-flight import (window-close). */
@@ -70,6 +97,7 @@ interface OpenLibrary {
   summary: LibrarySummary;
   db: CatalogDatabase;
   repo: CatalogRepo;
+  thumbnails: ThumbnailService;
 }
 
 const timelineCursorSchema = z.strictObject({
@@ -108,6 +136,9 @@ function toItemCard(row: ItemRow): ItemCardDTO {
     width: row.width,
     height: row.height,
     source: row.source,
+    // A pure render-ability hint — photos and videos can be shown as a real
+    // thumbnail; everything else stays an icon. No path/asset URL leaks here.
+    hasThumbnail: row.mediaType === 'photo' || row.mediaType === 'video',
   });
 }
 
@@ -124,6 +155,7 @@ function toLibraryDto(summary: LibrarySummary): LibrarySummaryDTO {
 export function createCatalogSession(options: CatalogSessionOptions): CatalogSession {
   const { coordinator } = options;
   const newId = options.newId ?? (() => randomUUID());
+  const thumbnailers = options.thumbnailers ?? NOOP_THUMBNAILERS;
   let current: OpenLibrary | undefined;
 
   function closeCurrent(): void {
@@ -135,7 +167,13 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
   function adopt(summary: LibrarySummary): LibrarySummaryDTO {
     closeCurrent();
     const db = openCatalog(summary.catalogPath);
-    current = { summary, db, repo: createCatalogRepo(db) };
+    const thumbnails = createThumbnailService({
+      db,
+      root: summary.root,
+      image: thumbnailers.image,
+      video: thumbnailers.video,
+    });
+    current = { summary, db, repo: createCatalogRepo(db), thumbnails };
     return toLibraryDto(summary);
   }
 
@@ -171,6 +209,12 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         source: input.source,
       });
       return { items: result.rows.map(toItemCard), total: result.total };
+    },
+    async getThumbnail(input) {
+      // requireOpen throws synchronously; `async` turns that into a rejected
+      // promise so the IPC layer surfaces it as a normal rejected invoke.
+      const { thumbnails } = requireOpen();
+      return thumbnails.getThumbnail(input.id, input.size);
     },
     beginImport(input) {
       const library = requireOpen();
