@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Search by **source** (card U2b, **completing AC-7**): the search filters gain the one way of
+  narrowing that U2 could not yet offer. U2 shipped **type** and **date** as in-memory filters and noted
+  that the catalogue's result tiles carried no source — so **source** could not be one of them. This closes
+  that gap as a small **vertical slice**, repo → contract → UI. The catalogue's full-text search now takes
+  an optional **source** filter (the connector a memory came from — WhatsApp · a folder · Google Takeout ·
+  Facebook · LinkedIn), composed with the existing query and paging and a no-op when absent, so every prior
+  caller is unaffected; each result tile now also carries its **source** (the connector of its first, earliest
+  occurrence, chosen deterministically; null only for a deduped item whose every provenance has been undone).
+  The IPC `CATALOG_SEARCH` request gains an optional, **zod-validated** `source`, and the item DTO a required,
+  nullable `source` enum — both back-compatible. The **Search** view gains a calm **Source** select (_All
+  sources_, then the shared source set) that narrows the matches **server-side** through `searchCatalog`,
+  while type and date stay the in-memory filters they were; each result quietly shows where it came from. The
+  source list reuses the app's shared `SOURCES` set rather than a divergent hardcoded copy. No new
+  dependencies; the renderer still talks **only** through `window.kawsayAPI`, and untrusted catalogue data
+  stays **escaped** React text.
 - Accessibility pass across the whole app (card X2, AC-13 · WCAG 2.1 AA): a holistic, cross-screen audit
   and the fixes that only surface when the onboarding, timeline, search and app-shell screens are taken
   together. A **skip-to-content** link is now the first thing keyboard and switch users reach on every
