@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new
+  `.github/workflows/release.yml` builds Kawsay on native **macOS** and **Windows** runners and uploads the
+  installers — the macOS `.dmg`/`.zip` (Apple Silicon + Intel) and the Windows `.exe` (NSIS) — as assets of a
+  **GitHub Release** for a pushed `v*` tag (e.g. `v0.1.0`). It reuses CI's exact toolchain (Node 22, the
+  SHA-pinned pnpm/Node setup) and electron-builder's own GitHub publishing, rebuilding the native
+  `better-sqlite3` for Electron's ABI just as `pnpm dist` does. **v1 publishes UNSIGNED** (ADR-0025):
+  code-signing auto-discovery is turned off so the build produces unsigned artifacts instead of failing to
+  sign — the one-time "unidentified developer" prompt and deferred signing/notarization are unchanged. The
+  publish runs in a protected `release` environment that **blocks on a required reviewer** (@pedrofuentes),
+  keeping the first production publish a deliberate human act; the workflow token is scoped to
+  `contents: write` (create the release + upload assets) and nothing more, every action is pinned to a full
+  commit SHA, and `package.json`'s `dist*` scripts stay `--publish never` so no local/automated build can
+  ever publish. No new dependencies and no runtime network egress are added (AC-4 untouched) — see ADR-0026.
 - Packaged, installable app (card P1, AC-5): Kawsay can now be built into real installers — a **macOS
   `.dmg`** (and `.zip`) for Apple Silicon and Intel, and a **Windows `.exe`** (NSIS) — with one command,
   `pnpm dist`. The native catalogue engine (`better-sqlite3`, bumped to **12.11.1** for Electron 42
