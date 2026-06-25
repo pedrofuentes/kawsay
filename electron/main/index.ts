@@ -1,10 +1,13 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, session } from 'electron';
 import {
   APP_GET_VERSION,
   CATALOG_SEARCH,
+  CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  DIALOG_OPEN_DIRECTORY,
+  DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
   IMPORT_START,
   LIBRARY_CREATE,
@@ -12,12 +15,15 @@ import {
 } from '@shared/ipc/contract';
 import { IMPORT_PROGRESS } from '@shared/ipc/events';
 import { handleGetVersion } from './ipc/handlers/app';
+import { handleOpenDirectory, handleOpenFile, type ShowOpenDialog } from './ipc/handlers/dialog';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
 import { createCatalogSession } from './app/catalog-session';
 import { createIngestionCoordinator } from './importers/ingestion/coordinator';
 import { createWorkerThreadsSpawner } from './importers/ingestion/worker-threads-transport';
+import { createFfmpegVideoFrameThumbnailer } from './importers/deps/thumbnail';
+import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-service';
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
 import { installNetworkGuard } from './security/network-guard';
 import {
@@ -60,7 +66,51 @@ const ingestionCoordinator = createIngestionCoordinator({
   spawn: createWorkerThreadsSpawner({ scriptPath: join(moduleDir, 'ingestion-worker.js') }),
   emitProgress: (event) => emitEvent(IMPORT_PROGRESS, event),
 });
-const catalogSession = createCatalogSession({ coordinator: ingestionCoordinator });
+
+// The thumbnail decoders (U4), injected into the catalog session so it stays
+// Electron-free and unit-testable. Photos use Electron's built-in `nativeImage`
+// (NO new dependency); videos reuse the existing ffmpeg wrapper to pipe a single
+// frame. Both only ever receive a path the session resolved + confined itself.
+const imageThumbnailer: ImageThumbnailer = async (absPath, maxDimension) => {
+  const image = nativeImage.createFromPath(absPath);
+  if (image.isEmpty()) return null;
+  const { width, height } = image.getSize();
+  const longest = Math.max(width, height);
+  // Downscale only — never upscale — bounding the LONGEST edge to maxDimension
+  // while preserving aspect ratio. A JPEG keeps the data: URL small and calm.
+  const bounded =
+    longest > maxDimension
+      ? image.resize(width >= height ? { width: maxDimension } : { height: maxDimension })
+      : image;
+  return { data: bounded.toJPEG(80), mimeType: 'image/jpeg' };
+};
+
+// ffmpeg-static may not resolve a binary on every platform; if it can't, videos
+// simply fall back to their type icon rather than crashing the boot path.
+function buildVideoThumbnailer(): VideoThumbnailer {
+  try {
+    const frame = createFfmpegVideoFrameThumbnailer();
+    return (absPath, maxDimension) => frame(absPath, maxDimension);
+  } catch {
+    return async () => null;
+  }
+}
+
+const catalogSession = createCatalogSession({
+  coordinator: ingestionCoordinator,
+  thumbnailers: { image: imageThumbnailer, video: buildVideoThumbnailer() },
+});
+
+// The native open-dialog capability (W2): always parented to the focused window
+// (falling back to the current main window) so it appears as a sheet/modal, and
+// only ever invoked with the handler's hardcoded `properties` — the renderer can
+// influence nothing but a title/defaultPath.
+const showOpenDialog: ShowOpenDialog = (options) => {
+  const parent = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  return parent !== undefined
+    ? dialog.showOpenDialog(parent, options)
+    : dialog.showOpenDialog(options);
+};
 
 // The single source of truth for the renderer's capabilities. Each handler is a
 // pure, separately-tested function; the registrar adds the sender + zod guards.
@@ -70,8 +120,11 @@ const ipcHandlers: IpcHandlerMap = {
   [LIBRARY_OPEN]: (request) => catalogSession.openLibrary(request),
   [CATALOG_TIMELINE]: (request) => catalogSession.getTimeline(request),
   [CATALOG_SEARCH]: (request) => catalogSession.search(request),
+  [CATALOG_THUMBNAIL]: (request) => catalogSession.getThumbnail(request),
   [IMPORT_START]: (request) => catalogSession.beginImport(request),
   [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
+  [DIALOG_OPEN_DIRECTORY]: (request) => handleOpenDirectory({ showOpenDialog }, request),
+  [DIALOG_OPEN_FILE]: (request) => handleOpenFile({ showOpenDialog }, request),
 };
 
 function createMainWindow(): void {

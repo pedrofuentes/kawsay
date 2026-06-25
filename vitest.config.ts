@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vitest/config';
+import { coverageConfigDefaults, defineConfig } from 'vitest/config';
 
 const shared = fileURLToPath(new URL('./shared', import.meta.url));
 const renderer = fileURLToPath(new URL('./src', import.meta.url));
@@ -18,6 +18,33 @@ export default defineConfig({
     },
   },
   test: {
+    // Coverage aggregates across both projects below. The DoD bar is ≥80%
+    // (AGENTS.md Ratchet, docs/SENTINEL.md §Coverage); thresholds fail the run
+    // if it regresses. v8 is the native, zero-instrumentation provider.
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'json-summary'],
+      // The shipped TypeScript: main-process, preload, shared contract, renderer.
+      include: ['electron/**/*.{ts,tsx}', 'shared/**/*.{ts,tsx}', 'src/**/*.{ts,tsx}'],
+      exclude: [
+        ...coverageConfigDefaults.exclude,
+        // Ambient/type-only declarations carry no executable lines.
+        '**/*.d.ts',
+        // Process entry/bootstrap glue: imports Electron/DOM globals and wires
+        // singletons at module load, so it cannot run under vitest/jsdom. Each
+        // collaborator it composes is unit-tested in isolation.
+        'electron/main/index.ts', // main-process entry (app/BrowserWindow bootstrap)
+        'electron/preload/index.ts', // preload bootstrap (contextBridge.exposeInMainWorld)
+        'electron/main/importers/workers/ingestion-worker.ts', // worker_threads entry
+        'src/main.tsx', // React renderer bootstrap (createRoot)
+      ],
+      thresholds: {
+        statements: 80,
+        branches: 80,
+        functions: 80,
+        lines: 80,
+      },
+    },
     projects: [
       {
         extends: true,

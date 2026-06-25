@@ -1,12 +1,16 @@
 import { z } from 'zod';
 import {
   CURSOR_MAX_LENGTH,
+  NAME_MAX_LENGTH,
   PAGE_LIMIT_MAX,
   QUERY_MAX_LENGTH,
+  THUMBNAIL_MAX_SIZE,
+  THUMBNAIL_MIN_SIZE,
   librarySummarySchema,
   pathSchema,
   searchResultSchema,
   sourceTypeSchema,
+  thumbnailDataUrlSchema,
   timelinePageSchema,
 } from './schemas';
 
@@ -21,10 +25,42 @@ export const LIBRARY_OPEN = 'library:open';
 export const CATALOG_TIMELINE = 'catalog:timeline';
 /** IPC channel: full-text search the open catalog. */
 export const CATALOG_SEARCH = 'catalog:search';
+/**
+ * IPC channel: fetch a bounded thumbnail for ONE catalog item by its opaque id.
+ * The request carries only the id (and an optional size) — never a path — so the
+ * main process does all original-resolution + confinement and answers with a
+ * self-contained image `data:` URL or null (U4).
+ */
+export const CATALOG_THUMBNAIL = 'catalog:thumbnail';
 /** IPC channel: start an off-thread import; resolves with the new job id. */
 export const IMPORT_START = 'import:start';
 /** IPC channel: cooperatively cancel an in-flight import by job id. */
 export const IMPORT_CANCEL = 'import:cancel';
+
+/** IPC channel: open a native folder picker; resolves the chosen path or null. */
+export const DIALOG_OPEN_DIRECTORY = 'dialog:openDirectory';
+/** IPC channel: open a native single-file picker; resolves the chosen path or null. */
+export const DIALOG_OPEN_FILE = 'dialog:openFile';
+
+/**
+ * The renderer-controllable options for a native open dialog (W2). This is the
+ * ENTIRE surface the sandboxed renderer may influence: a friendly title and an
+ * optional starting directory — nothing else. `properties` (file vs directory),
+ * `filters`, `securityScopedBookmarks`, and every other privileged Electron
+ * dialog option are deliberately absent and, because this is a `strictObject`,
+ * are rejected outright rather than forwarded (no arbitrary main-side passthrough).
+ */
+const dialogOpenRequestSchema = z.strictObject({
+  title: z.string().min(1).max(NAME_MAX_LENGTH).optional(),
+  defaultPath: pathSchema.optional(),
+});
+
+/**
+ * The result of an open dialog: the single absolute path the user explicitly
+ * chose, or `null` when they cancelled. A bare, bounded string — never an object
+ * — so no extra filesystem detail can ride along to the renderer.
+ */
+const dialogOpenResponseSchema = pathSchema.nullable();
 
 /**
  * The complete IPC contract. Every channel declares a zod schema for its
@@ -63,8 +99,21 @@ export const ipcContract = {
       query: z.string().min(1).max(QUERY_MAX_LENGTH),
       limit: z.number().int().min(1).max(PAGE_LIMIT_MAX).default(50),
       offset: z.number().int().nonnegative().default(0),
+      // Optional connector filter (AC-7) — narrows the match set to one source.
+      // Omitted ⇒ every source, so the channel stays backward-compatible.
+      source: sourceTypeSchema.optional(),
     }),
     response: searchResultSchema,
+  },
+  [CATALOG_THUMBNAIL]: {
+    request: z.strictObject({
+      // An opaque catalog id — a uuid, so a path/traversal string never validates.
+      id: z.uuid(),
+      // The desired longest edge in px; the main process clamps, but bound it here
+      // too so junk (0, 321, fractional) is refused at the boundary.
+      size: z.number().int().min(THUMBNAIL_MIN_SIZE).max(THUMBNAIL_MAX_SIZE).optional(),
+    }),
+    response: thumbnailDataUrlSchema,
   },
   [IMPORT_START]: {
     request: z.strictObject({
@@ -76,6 +125,14 @@ export const ipcContract = {
   [IMPORT_CANCEL]: {
     request: z.strictObject({ jobId: z.uuid() }),
     response: z.strictObject({ cancelled: z.boolean() }),
+  },
+  [DIALOG_OPEN_DIRECTORY]: {
+    request: dialogOpenRequestSchema,
+    response: dialogOpenResponseSchema,
+  },
+  [DIALOG_OPEN_FILE]: {
+    request: dialogOpenRequestSchema,
+    response: dialogOpenResponseSchema,
   },
 } as const;
 

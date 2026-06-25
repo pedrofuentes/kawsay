@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCatalogSession } from '../../electron/main/app/catalog-session';
 import { openCatalog } from '../../electron/main/db/connection';
@@ -58,6 +59,42 @@ function seedItems(catalogPath: string): void {
     repo.addOccurrence({ itemId, sourceId, sourceRef: `ref-${i}`, originalKind: 'in_place' });
   });
   db.close();
+}
+
+/** Seed two memories from two different connector sources (whatsapp + folder),
+ *  both matching "familia", so source-filter and source-projection are testable. */
+function seedMultiSource(catalogPath: string): void {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const whatsapp = repo.registerSource({ sourceKey: 'wa', type: 'whatsapp', label: 'WhatsApp' });
+  const folder = repo.registerSource({ sourceKey: 'fold', type: 'folder', label: 'Folder' });
+  const wa = repo.insertItem({
+    mediaType: 'message',
+    contentHash: 'h-wa',
+    title: 'WhatsApp memory',
+    description: 'familia en la playa',
+  });
+  repo.addOccurrence({ itemId: wa, sourceId: whatsapp, sourceRef: 'wa/1' });
+  const fo = repo.insertItem({
+    mediaType: 'photo',
+    contentHash: 'h-fo',
+    title: 'Folder memory',
+    description: 'familia con la abuela',
+  });
+  repo.addOccurrence({ itemId: fo, sourceId: folder, sourceRef: 'fold/1', originalKind: 'in_place' });
+  db.close();
+}
+
+/** Seed one photo whose original is a real local file (in_place), returning its
+ *  opaque id so a thumbnail call can be resolved through the session. */
+function seedPhotoWithLocalOriginal(catalogPath: string, originalPath: string): string {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const src = repo.registerSource({ sourceKey: 'photos', type: 'folder', label: 'Photos' });
+  const id = repo.insertItem({ mediaType: 'photo', contentHash: 'h-real', originalExt: '.jpg' });
+  repo.addOccurrence({ itemId: id, sourceId: src, sourceRef: 'p/1', originalKind: 'in_place', originalPath });
+  db.close();
+  return id;
 }
 
 describe('createCatalogSession (the IPC application service)', () => {
@@ -129,6 +166,22 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(result.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
   });
 
+  it('passes a source filter through to the catalog and projects each tile’s source (AC-7)', () => {
+    session.createLibrary({ path: root });
+    seedMultiSource(join(root, 'catalog.sqlite3'));
+
+    // Unfiltered: every source comes back, each tile carrying its connector source.
+    const all = session.search({ query: 'familia', limit: 10, offset: 0 });
+    expect(all.total).toBe(2);
+    expect(all.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
+    expect(new Set(all.items.map((i) => i.source))).toEqual(new Set(['whatsapp', 'folder']));
+
+    // Filtered to one connector: only that source’s memories survive.
+    const onlyWhatsapp = session.search({ query: 'familia', limit: 10, offset: 0, source: 'whatsapp' });
+    expect(onlyWhatsapp.total).toBe(1);
+    expect(onlyWhatsapp.items.map((i) => i.source)).toEqual(['whatsapp']);
+  });
+
   it('beginImport registers a source and starts a well-formed off-thread job', () => {
     session.createLibrary({ path: root });
     const { jobId } = session.beginImport({ sourceType: 'folder', inputPath: root });
@@ -180,5 +233,45 @@ describe('createCatalogSession (the IPC application service)', () => {
     session.createLibrary({ path: root });
     session.dispose();
     expect(coordinator.disposed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('marks photo/video tiles renderable (hasThumbnail) and non-visual tiles not (U4)', () => {
+    session.createLibrary({ path: root });
+    seedMultiSource(join(root, 'catalog.sqlite3'));
+
+    const result = session.search({ query: 'familia', limit: 10, offset: 0 });
+    const byType = new Map(result.items.map((item) => [item.mediaType, item.hasThumbnail]));
+    expect(byType.get('photo')).toBe(true);
+    expect(byType.get('message')).toBe(false);
+  });
+
+  it('getThumbnail resolves a memory by id through the injected thumbnailer (data URL, no path leak)', async () => {
+    const image = vi.fn<(absPath: string, maxDimension: number) => Promise<{ data: Buffer; mimeType: 'image/jpeg' }>>(
+      async () => ({ data: Buffer.from('IMG'), mimeType: 'image/jpeg' }),
+    );
+    const s = createCatalogSession({
+      coordinator: coordinator.coordinator,
+      thumbnailers: { image, video: vi.fn(async () => null) },
+    });
+    try {
+      s.createLibrary({ path: root });
+      const userFile = join(parent, 'photo.jpg');
+      writeFileSync(userFile, 'JPEG-BYTES');
+      const id = seedPhotoWithLocalOriginal(join(root, 'catalog.sqlite3'), userFile);
+
+      const url = await s.getThumbnail({ id });
+
+      expect(url).toBe(`data:image/jpeg;base64,${Buffer.from('IMG').toString('base64')}`);
+      expect(image).toHaveBeenCalledTimes(1);
+      // The renderer passed only the id; the session resolved the local original.
+      expect(image.mock.calls[0]?.[0]).toBe(userFile);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('getThumbnail refuses when no library is open', async () => {
+    const s = createCatalogSession({ coordinator: coordinator.coordinator });
+    await expect(s.getThumbnail({ id: JOB_ID })).rejects.toThrow();
   });
 });

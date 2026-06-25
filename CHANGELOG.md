@@ -22,6 +22,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the unsigned v1. There is **no auto-updater, no update feed, and no telemetry** — the installer adds no
   network egress, preserving the local-only promise (AC-4). The automated build never publishes; releasing
   to GitHub Releases is a deliberate, human-approved step.
+- **Real photo & video thumbnails** in the timeline and search (card U4 / #102, **AC-6 emotional core**):
+  memories that can be seen — photos and videos — now show a **real thumbnail** instead of a generic
+  media-type icon, so a grieving person opening Kawsay is met with their loved one's actual faces and
+  moments rather than placeholders. The icon remains the calm fallback while a thumbnail loads, if a file
+  can't be rendered, or for non-visual items (voice notes, documents, messages). Thumbnails fade in gently,
+  and **never** when the system prefers reduced motion (Kawsay's default posture). This is built with a
+  deliberately small, **security-first** surface: the renderer asks for a thumbnail by the memory's
+  **opaque catalog id only** — never a file path — over a new **zod-validated** IPC channel
+  (`catalog:thumbnail`). The **main process** does all the privileged work: it resolves the original
+  through the existing path-confinement boundary (a hostile or escaping reference is **refused**, never
+  read), renders a small, byte-capped image with Electron's built-in **`nativeImage`** (photos) or the
+  existing **ffmpeg** wrapper piping a single file-protocol-pinned frame (videos), and returns a
+  self-contained, bounded image **`data:` URL** (or nothing). No filesystem path and no remote origin ever
+  cross back to the renderer, generated thumbnails are cached so a scrolled-back memory never re-renders,
+  and the app stays **local-only with zero network egress** — the Content-Security-Policy is unchanged
+  (it already allowed `data:` images while keeping `connect-src 'none'`). **No new dependencies** — see
+  ADR-0022.
+
+- **Browse for the folder or file** instead of typing a path (card W2 / #93, **AC-12 usability**):
+  onboarding's path fields — the library location and each import source — now offer an accessible
+  **Browse…** button that opens the computer's own **folder or file picker** and fills the field with
+  whatever you choose. Typing or pasting a path still works as a fallback, so nothing is taken away; the
+  picker simply removes the biggest hurdle for non-technical users, who no longer have to know or spell out
+  a filesystem path. The picker is wired through a new, **zod-validated** IPC capability
+  (`dialog:openDirectory` / `dialog:openFile`) that runs the native dialog **entirely in the main process**
+  and returns **only** the single absolute path the user picked (or nothing, on cancel) — the renderer
+  gains this one typed `window.kawsayAPI.openDirectory()` / `openFile()` method and **no** new filesystem
+  or Node access. For safety the renderer may influence only a dialog **title** and starting folder; every
+  privileged option (file-vs-folder mode, filters, …) is fixed in the main process and **rejected** if a
+  request tries to smuggle it across (strict option whitelist). No new dependencies (Electron's `dialog` is
+  built in); the app stays **local-only** with zero network egress.
+- Test-coverage measurement is now wired up and enforced (card #109). Running `pnpm coverage` measures the
+  whole Vitest suite with the **v8** provider and prints a text table plus a browsable HTML report and a
+  machine-readable `coverage-summary.json`, and the run now **fails** if statements, branches, functions or
+  lines fall below the **80%** Definition-of-Done bar that AGENTS.md and the Sentinel checklist always
+  specified but which was never enforceable without a provider installed. The current suite already clears
+  it comfortably — **statements 94.64%, branches 84.35%, functions 95.57%, lines 94.64%** across 525 tests —
+  so no behaviour changed; the gate simply pins that posture against regressions. Only the four process
+  entry/bootstrap files that cannot run under the test runner (the Electron main entry, the preload bridge
+  bootstrap, the ingestion worker entry, and the React root) are excluded; every piece of testable logic is
+  measured. A new dev-only dependency, `@vitest/coverage-v8` — see ADR-0021. No runtime dependencies were
+  added and the local-only / zero-egress posture is untouched.
+- Search by **source** (card U2b, **completing AC-7**): the search filters gain the one way of
+  narrowing that U2 could not yet offer. U2 shipped **type** and **date** as in-memory filters and noted
+  that the catalogue's result tiles carried no source — so **source** could not be one of them. This closes
+  that gap as a small **vertical slice**, repo → contract → UI. The catalogue's full-text search now takes
+  an optional **source** filter (the connector a memory came from — WhatsApp · a folder · Google Takeout ·
+  Facebook · LinkedIn), composed with the existing query and paging and a no-op when absent, so every prior
+  caller is unaffected; each result tile now also carries its **source** (the connector of its first, earliest
+  occurrence, chosen deterministically; null only for a deduped item whose every provenance has been undone).
+  The IPC `CATALOG_SEARCH` request gains an optional, **zod-validated** `source`, and the item DTO a required,
+  nullable `source` enum — both back-compatible. The **Search** view gains a calm **Source** select (_All
+  sources_, then the shared source set) that narrows the matches **server-side** through `searchCatalog`,
+  while type and date stay the in-memory filters they were; each result quietly shows where it came from. The
+  source list reuses the app's shared `SOURCES` set rather than a divergent hardcoded copy. No new
+  dependencies; the renderer still talks **only** through `window.kawsayAPI`, and untrusted catalogue data
+  stays **escaped** React text.
+- Accessibility pass across the whole app (card X2, AC-13 · WCAG 2.1 AA): a holistic, cross-screen audit
+  and the fixes that only surface when the onboarding, timeline, search and app-shell screens are taken
+  together. A **skip-to-content** link is now the first thing keyboard and switch users reach on every
+  screen — hidden until focused, it jumps straight past the sidebar to the main content (WCAG 2.4.1).
+  Landmarks are unique and complete app-wide: the sidebar is named distinctly from the in-app navigation so
+  assistive tech never sees two "Sections" regions (WCAG 1.3.1). Moving between the lighter main views
+  (add memories, settings) now moves focus to the new screen's heading, matching the timeline, search and
+  onboarding steps, so the keyboard and screen-reader cursor is never stranded on a stale control
+  (WCAG 2.4.3). When a library folder can't be created or opened, the gentle error is now tied to the path
+  field itself (`aria-invalid` + `aria-describedby`), so it is announced the moment focus lands there
+  (WCAG 3.3.1). And the last sub-AA item is closed: placeholder text in the path and search fields moves
+  from `text-tertiary` (3.98:1) to `text-secondary` (7.77:1), bringing it to AA contrast (issue #104,
+  WCAG 1.4.3). Every primary screen and state is now also swept through **axe-core** (WCAG 2.1 A/AA) in the
+  test suite as a standing regression ratchet — a new dev-only dependency, see ADR-0020. No runtime
+  dependencies were added and the renderer still talks **only** through `window.kawsayAPI`.
 - Search across the library (card U2, AC-6 · AC-7): a calm way to find one memory by a few plain words.
   The renderer's `search` section is now a working **Search** view — a labelled search box whose query is
   **debounced** before it reaches `searchCatalog` (so the catalogue is queried once for the final words, not
@@ -236,9 +308,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - WhatsApp importer now treats a corrupt, locked, or unreadable export — a `.zip` that cannot be
   extracted, or a discovered `_chat.txt` that cannot be read — as a reported skip and finishes with
   whatever it has already gathered, instead of throwing and aborting the whole import (AC-15).
+- Google Takeout importer no longer lets a single unreadable Gmail mailbox abort the whole import. If
+  setting up the streaming reader for an `.mbox` faults, that one mailbox is now reported as a skipped
+  item and the run keeps going — every other email, attachment and photo in the export is still brought
+  in — and the reader is always closed afterwards so nothing is left open in the background. Previously
+  such a fault could escape and stop the entire import, losing everything else it would have gathered
+  (AC-15).
 
 ### Security
 
+- Cleared every open dev-dependency security alert ahead of the M1 sign-off (DoD §4, card #31): 14
+  Dependabot alerts — 8 high + 6 medium — across **vite**, **esbuild** and **tar**. All were
+  **development / build-scope only**: none reaches the shipped Electron bundle, which loads built static
+  files and the native better-sqlite3 binary with no dev server, so `pnpm audit --prod` was — and stays —
+  clean. The vite dev-server advisories have no Vite-5 backport, so **Vite** moves `5.4 → 6.4.3` (its first
+  patched release, within every tool's supported range — the pinned `electron-vite@4` toolchain is
+  unchanged), and `pnpm.overrides` now pin the two transitive offenders to patched releases: **esbuild**
+  `≥ 0.25.0` (dev server cross-site request acceptance) and **tar** `≥ 7.5.16` (the `@electron/rebuild`
+  native-rebuild header-extraction chain). No runtime dependency changed and the full toolchain
+  (`install`, `typecheck`, `lint`, 506 tests, `build`) stays green. See ADR-0017.
 - The bundled video tools (ffmpeg/ffprobe) are now locked to reading local files only. Even if a
   crafted photo or video on disk embedded a hidden reference to a remote address, these tools can no
   longer be tricked into reaching out over the network, preserving Kawsay's promise that your

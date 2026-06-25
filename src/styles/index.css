@@ -25,6 +25,31 @@ body {
   outline-offset: 3px;
 }
 
+/* Skip-to-content link (WCAG 2.4.1 Bypass Blocks, AC-13): the first focusable
+ * element on the page, visually hidden until it receives keyboard focus, then a
+ * clearly-visible on-brand chip. The :focus-visible rule above still draws the
+ * standard ring on top, so it matches every other focus affordance. */
+.skip-link {
+  position: fixed;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 100;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-base);
+  background-color: var(--color-sage-600);
+  color: var(--color-text-on-primary);
+  font-family: var(--font-body);
+  font-weight: var(--font-semibold);
+  text-decoration: none;
+  box-shadow: var(--shadow-md);
+  transform: translateY(calc(-100% - var(--space-4)));
+  transition: transform var(--duration-fast) var(--ease-default);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 /* Reduced motion is the default posture and honored globally (USER_FLOWS §5.6,
  * rubric R11): collapse every animation/transition to effectively instant. */
 @media (prefers-reduced-motion: reduce) {
@@ -36,4 +61,20 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* A gentle settle as a real thumbnail resolves (U4). <MediaThumbnail> only adds
+ * `.thumb-fade-in` when motion is welcome, and the reduced-motion query above is
+ * the backstop — so a grieving viewer never gets a jarring flash either way. */
+@keyframes kawsay-thumb-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.thumb-fade-in {
+  animation: kawsay-thumb-in var(--duration-normal) var(--ease-gentle) both;
 }

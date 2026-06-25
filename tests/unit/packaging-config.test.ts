@@ -90,7 +90,7 @@ describe('electron-builder packaging contract (AC-5, ADR-0007)', () => {
     // deliberate v1 exception. enableEmbeddedAsarIntegrityValidation requires macOS code
     // signing to work; on the UNSIGNED v1 build it makes the renderer fail to load from
     // the asar (ERR_FILE_NOT_FOUND). v1 ships it OFF and the cofounder re-enables it with
-    // Developer ID signing/notarization (ADR-0019).
+    // Developer ID signing/notarization (ADR-0025).
     const flipped = parseFlatBooleanBlock('electronFuses');
     const SIGNING_GATED = 'enableEmbeddedAsarIntegrityValidation';
     for (const [key, value] of Object.entries(FUSE_CONFIG)) {

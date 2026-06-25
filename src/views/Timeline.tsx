@@ -4,13 +4,15 @@
 // `window.kawsayAPI` bridge only (no network — AC-4) and renders untrusted
 // catalog text (a loved one's captions, filenames) as escaped data, never markup.
 //
-// Thumbnails: the renderer-facing `ItemCardDTO` is a deliberately sanitised
-// projection that exposes no filesystem path or asset URL, so the renderer cannot
-// (and must not) load original bytes. Until a dedicated, zero-egress thumbnail
-// protocol is added to the contract, each memory shows a gentle per-type
-// affordance placeholder — which is also the documented thumb-error state
-// (USER_FLOWS Journey D). Virtualization provides the "lazy, bounded" mounting
-// AC-8 requires: only the on-screen window is ever in the DOM.
+// Thumbnails: the renderer-facing `ItemCardDTO` still exposes no filesystem path
+// or asset URL. Instead, a renderable memory (photo/video) carries a `hasThumbnail`
+// hint, and the card asks the main process for the bytes by OPAQUE id through the
+// zero-egress `catalog:thumbnail` channel (which returns a bounded image data: URL
+// or null). The shared <MediaThumbnail> renders that <img> lazily and falls back
+// to the gentle per-type icon while loading, on error, or for non-visual items —
+// which is also the documented thumb-error state (USER_FLOWS Journey D).
+// Virtualization provides the "lazy, bounded" mounting AC-8 requires: only the
+// on-screen window is ever in the DOM (so only it ever requests a thumbnail).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
@@ -18,6 +20,7 @@ import { EmptyState } from '@renderer/components/EmptyState';
 import { ErrorBanner } from '@renderer/components/ErrorBanner';
 import { Icon } from '@renderer/components/Icon';
 import type { IconName } from '@renderer/components/Icon';
+import { MediaThumbnail } from '@renderer/components/MediaThumbnail';
 import { cx } from '@renderer/lib/cx';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
@@ -263,12 +266,12 @@ function MemoryCard({ item }: { item: ItemCardDTO }): ReactElement {
       aria-label={accessibleName}
       className="flex h-full items-center gap-4 rounded-lg border border-border-subtle bg-surface-raised p-4 shadow-sm"
     >
-      <span
-        aria-hidden
-        className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-sage-600"
-      >
-        <Icon name={MEDIA_ICON[item.mediaType]} className="h-7 w-7" />
-      </span>
+      <MediaThumbnail
+        item={item}
+        icon={MEDIA_ICON[item.mediaType]}
+        className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
+        iconClassName="h-7 w-7"
+      />
       <div className="flex min-w-0 flex-col gap-1">
         <p className="truncate font-body text-md text-text-primary">{caption.length > 0 ? caption : typeLabel}</p>
         <p className="flex items-center gap-2 font-body text-sm text-text-secondary">

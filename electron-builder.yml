@@ -50,7 +50,7 @@ electronFuses:
   # FUSE_CONFIG declares this true (the signed-production target), but macOS asar
   # integrity validation REQUIRES code signing: on the UNSIGNED v1 build it makes the
   # renderer fail to load from the asar (ERR_FILE_NOT_FOUND). v1 ships it OFF; the
-  # cofounder re-enables it with Developer ID signing/notarization (ADR-0019, AC-5).
+  # cofounder re-enables it with Developer ID signing/notarization (ADR-0025, AC-5).
   enableEmbeddedAsarIntegrityValidation: false
   grantFileProtocolExtraPrivileges: false
   enableCookieEncryption: true

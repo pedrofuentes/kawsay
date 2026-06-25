@@ -28,7 +28,7 @@
 
 ---
 
-### ADR-0019: Defer enableEmbeddedAsarIntegrityValidation to the signed build
+### ADR-0025: Defer enableEmbeddedAsarIntegrityValidation to the signed build
 **Date**: 2026-06-24
 **Status**: Accepted (refines ADR-0007; v1 exception to ARCHITECTURE §2.5)
 **Tier**: auto-with-audit (adjusts the declared security posture for the *unsigned* v1 build). This ADR is
@@ -68,7 +68,7 @@ integrity asserted `false` for v1 against the `true` FUSE_CONFIG target). The co
 
 ---
 
-### ADR-0018: Bump better-sqlite3 12.9.0 → 12.11.1 for Electron 42 native compatibility
+### ADR-0024: Bump better-sqlite3 12.9.0 → 12.11.1 for Electron 42 native compatibility
 **Date**: 2026-06-24
 **Status**: Accepted (enables ADR-0007 / card P1, AC-5)
 **Tier**: auto-with-audit (the one dependency change in P1). This ADR is the audit note.
@@ -112,12 +112,12 @@ pin (no caret) is preserved — native-module ABI builds must stay deterministic
 
 ---
 
-### ADR-0017: Packaging finalization (card P1) — fuse-flip mechanism, non-publishing auto-builds, ABI ordering
+### ADR-0023: Packaging finalization (card P1) — fuse-flip mechanism, non-publishing auto-builds, ABI ordering
 **Date**: 2026-06-24
 **Status**: Accepted (refines ADR-0007)
 **Tier**: auto-with-audit. No new *package* is added (electron-builder + @electron/rebuild already present);
 the one dependency change is a patch-level bump of the existing `better-sqlite3` for Electron-42 native
-compatibility (ADR-0018). Every choice here is reversible config + dev assets, and the local-only runtime
+compatibility (ADR-0024). Every choice here is reversible config + dev assets, and the local-only runtime
 (ADR-0008, AC-4) is untouched. This ADR is the audit note.
 
 **Context**
@@ -135,7 +135,7 @@ turns that skeleton into a `pnpm dist` that actually builds and launches, which 
    fuse rewrites the binary and invalidates its signature, and Apple Silicon refuses to launch a binary
    with a broken signature — without the re-sign the *unsigned* v1 build would not start on arm64. Net:
    **zero new packages** (no direct `@electron/fuses`, no hook module). One fuse is the exception —
-   `enableEmbeddedAsarIntegrityValidation` is deferred on the unsigned v1 build (ADR-0019).
+   `enableEmbeddedAsarIntegrityValidation` is deferred on the unsigned v1 build (ADR-0025).
 2. **The automated/local build never publishes.** `dist`/`dist:mac`/`dist:win` pass `--publish never`, so
    a developer or CI build can never upload a GitHub Release. The `publish: github` block exists *only* for
    the human-gated release workflow (protected GitHub Environment, @pedrofuentes approval). This makes the
@@ -160,18 +160,253 @@ turns that skeleton into a `pnpm dist` that actually builds and launches, which 
   rejected: `--publish never` is explicit and cannot be defeated by CI env heuristics.
 - *Ship `enableEmbeddedAsarIntegrityValidation` active in v1* — rejected: macOS asar-integrity validation
   requires code signing, so on the unsigned v1 build the renderer fails to load from the asar
-  (ERR_FILE_NOT_FOUND). It is deferred to the signing step (ADR-0019).
+  (ERR_FILE_NOT_FOUND). It is deferred to the signing step (ADR-0025).
 
 **Consequences**
 - ✅ `pnpm dist` builds the macOS dmg/zip (arm64 + x64) locally with the native catalog engine loading under
   Electron's ABI and the hardening fuses active — verified by launching the packaged app (the renderer and
   the eagerly-loaded `better-sqlite3` 12.11.1 both come up clean).
-- ✅ The only dependency change is the `better-sqlite3` patch bump (ADR-0018); no new package is added.
+- ✅ The only dependency change is the `better-sqlite3` patch bump (ADR-0024); no new package is added.
 - ✅ An automated build cannot publish a release; publishing remains a deliberate human act.
 - ⚠️ Running `pnpm test` immediately after `pnpm dist` fails until `pnpm rebuild better-sqlite3` restores
   the Node ABI — documented in LEARNINGS and handled by ordering in the release workflow.
 - ⚠️ Windows `.exe` cannot be cross-built on macOS (native module + NSIS); it is produced on the Windows CI
   runner. The config is verified correct; the artifact itself is built/smoke-launched on `windows-latest`.
+
+---
+
+### ADR-0022: Thumbnails travel as bounded `data:` URLs over a zod-validated `catalog:thumbnail` IPC channel
+**Date**: 2026-06-25
+**Status**: Accepted
+**Tier**: auto-with-audit. The change adds **no dependency** (Electron's `nativeImage` is built in; the
+ffmpeg wrapper already ships), opens **no network or external origin**, requires **no CSP change**, and
+preserves the local-only runtime (ADR-0008, AC-4) and the path-confinement boundary (ADR-0008/AC-14); this
+ADR is the required audit note.
+
+**Context**
+The timeline and search (U1–U3) render every memory as a generic media-type **icon** because the
+renderer-facing `ItemCardDTO` is a sanitised projection that deliberately exposes **no filesystem path and
+no asset URL** — the renderer cannot (and must not) reach for original bytes. But the product's emotional
+core (AC-6) is *seeing* a loved one's photos and videos. Card U4 (#102) must show **real thumbnails** while
+keeping three invariants intact: **zero network egress** (AC-4), **path confinement** (a renderer must
+never name a file, and an escaping content-address must be refused), and **no new heavy/native dependency**
+(an image library such as `sharp` would be HUMAN-REQUIRED).
+
+**Decision**
+Add one channel to the IPC contract: **`catalog:thumbnail`**, request `{ id: uuid, size?: 16–320 }`,
+response a **bounded image `data:` URL or `null`**. The renderer passes **only the opaque catalog id**; the
+main process does everything privileged:
+1. look up the item's `media_type` — non-visual types (audio/document/message) short-circuit to `null`
+   without touching disk;
+2. resolve the original through the existing **`resolveOriginal`** confinement boundary, which **throws**
+   on a malformed/escaping content-address rather than reading outside the originals store;
+3. render a small thumbnail via an **injected** thumbnailer — Electron's built-in **`nativeImage`** for
+   photos (downscale-only, longest edge ≤ the clamped size, re-encoded JPEG) and the **existing ffmpeg
+   wrapper** for videos (one frame, `-protocol_whitelist file`, piped to `pipe:1` in memory) — so the
+   service module itself stays free of Electron/ffmpeg and is fully unit-tested by dependency injection;
+4. **cap the bytes** (≤512 KiB), base64 it into a `data:` URL whose schema admits only
+   `image/{jpeg,png,webp}`, and memoise it in a small **LRU** so a scrolled-back tile never re-renders.
+
+The DTO gains a single boolean **`hasThumbnail`** hint (photo/video) — *not* a path — so the UI knows which
+memories are worth fetching. The renderer sets `<img src={dataUrl}>` lazily and falls back to the
+media-type icon on loading/error/non-visual. Because the bytes ride **inline as a `data:` URL**, the
+existing CSP already permits them (`img-src 'self' data:`) and **`connect-src 'none'` is untouched — the
+CSP delta is exactly zero**.
+
+**Alternatives considered**
+- **A custom `kawsay-thumb://` protocol** serving confined thumbnails by id (registered main-side). Workable
+  and arguably more efficient for very large libraries (the bytes stream outside the IPC channel), but it
+  **adds a new scheme to the CSP `img-src`**, a new privileged surface to register/validate, and another
+  place to get confinement wrong. The `data:`-URL/IPC route reuses the *already-validated* invoke path, needs
+  **no CSP change**, and keeps the entire trust boundary in one schema. Chosen for the smaller security
+  surface; the protocol remains a clean future optimisation if profiling demands it.
+- **Adding a `thumbnailPath`/asset URL to `ItemCardDTO`.** Rejected outright: it would leak a filesystem path
+  to the sandboxed renderer and reintroduce exactly the egress/traversal risk the DTO projection exists to
+  prevent. The renderer gets a boolean hint and an opaque id, nothing more.
+- **An image dependency (`sharp`, `jimp`, …).** Rejected. `sharp` is a heavy native module (HUMAN-REQUIRED per
+  the kickoff), and `nativeImage` already ships with Electron and covers the common raster formats; videos
+  reuse the ffmpeg wrapper we already depend on. **No new dependency** was needed.
+- **Pre-generating thumbnails to disk at import time** (a `derived/thumbnails/` tree already exists for the
+  importer's posters). Deferred: on-demand rendering with an in-memory LRU keeps U4 self-contained, avoids a
+  migration/backfill for already-imported libraries, and never writes new files for a feature that is purely
+  about *display*. The import-time generator and this on-demand service can converge later.
+
+**Consequences**
+- The renderer can finally *show* memories (AC-6) while the security posture is unchanged: **id-only in,
+  bytes-only out**, all resolution + confinement main-side, **CSP delta zero**, **zero egress** (asserted by
+  a unit egress-spy on the service path plus the existing AC-4 firewall test).
+- Thumbnails are bounded (≤320 px, ≤512 KiB) and cached, so memory and CPU stay flat as the user scrolls.
+- `nativeImage` decodes the common still formats but not every exotic codec; an undecodable original simply
+  falls back to its icon (one bad file never breaks the view). If broader format/perf needs emerge, the
+  `kawsay-thumb://` protocol and/or disk pre-generation above are the documented next steps.
+
+---
+
+### ADR-0021: `@vitest/coverage-v8` (dev-only) wires the ≥80% coverage gate the DoD already required
+**Date**: 2026-06-24
+**Status**: Accepted
+**Tier**: auto-with-audit. The addition is a single **devDependency** — it ships in no production bundle,
+opens no network or external origin, and leaves the local-only runtime (ADR-0008, AC-4) untouched; this
+ADR is the required audit note.
+
+**Context**
+AGENTS.md (§Ratchet) and `docs/SENTINEL.md` (§Coverage, check 6) have always specified a **≥80%** coverage
+bar as part of the Definition of Done, and `docs/TESTING-STRATEGY.md` documents `pnpm test --coverage` — but
+no coverage **provider** was ever installed, so that command errored and the threshold was unenforceable
+(SENTINEL treats an unset threshold as N/A, "do not invent"). Card #109 wires the measurement up so the bar
+is real, reported, and regression-protected, with no other behaviour change.
+
+**Decision**
+Add the dev-only **`@vitest/coverage-v8`** (`^3.2.6`, pinned to the installed Vitest 3 major so the provider
+and runner never skew) and a `coverage` block in `vitest.config.ts`: provider `v8`, reporters
+`['text','html','json-summary']` (console table for humans, HTML for drill-down, `coverage-summary.json` for
+a future CI/Sentinel parse), `include` scoped to the three shipped source roots (`electron/`, `shared/`,
+`src/`), and `thresholds` of **80** on statements/branches/functions/lines. A `pnpm coverage` script runs it.
+The only exclusions beyond the v8 defaults and ambient `**/*.d.ts` declarations are the four **process
+entry/bootstrap glue** files that import Electron/DOM globals and wire singletons at module load, so they
+cannot execute under vitest/jsdom: `electron/main/index.ts` (main entry), `electron/preload/index.ts`
+(preload `contextBridge` bootstrap), `electron/main/importers/workers/ingestion-worker.ts` (`worker_threads`
+entry), and `src/main.tsx` (React `createRoot` bootstrap). Every collaborator those four compose is
+unit-tested in isolation. The generated `coverage/` report is git-, prettier-, and eslint-ignored.
+
+Measured baseline across the existing 525-test suite (no gap-filling tests were needed): **statements 94.64%,
+branches 84.35%, functions 95.57%, lines 94.64%** — already over 80 on every metric — so the threshold pins
+the *existing* posture rather than chasing it.
+
+**Alternatives considered**
+- **`@vitest/coverage-istanbul`**: the other first-party provider, but it instruments source via Babel (slower,
+  an extra transform on top of our esbuild pipeline) and reports the transpiled, not authored, shape less
+  faithfully. `v8` is Vitest's default, uses the engine's native coverage with no instrumentation step, and is
+  the lower-friction fit for an esbuild/jsx-automatic two-project setup. Istanbul's finer per-statement
+  accounting buys nothing at this bar.
+- **Standalone `c8` / `nyc`**: redundant — Vitest's `v8` provider *is* c8 under the hood, already integrated
+  with the runner and the `node` + `renderer` projects, so a separate tool would only duplicate config.
+- **Ratcheting the thresholds up to the achieved ~94/84/95/94**: rejected. The DoD contract is **80**; pinning
+  at the achieved number makes unrelated future PRs brittle (a legitimate refactor that drops a few covered
+  lines would red-line the gate). 80 is the hard floor; the AGENTS.md ratchet separately guards the achieved
+  baseline against regression. The branch floor is held at 80 (achieved 84.35%) deliberately — branches is the
+  metric most sensitive to defensive `if`/`??` paths, so a notch of headroom avoids flapping.
+- **Excluding the type-only contracts (`types.ts`, `protocol.ts`, `shared/kawsay-api.ts`) or the worker
+  composition root (`ingestion-context.ts`) to inflate the number**: rejected as coverage-gaming. They stay
+  *in* the measurement; the suite clears 80 with them included, which keeps the number honest and conservative.
+- **Adding the CI `coverage` gate in the same PR**: deferred. A `.github/workflows` change is harness-integrity
+  (coordinator/cofounder-gated). This PR ships only the local tooling and proposes the CI step for later.
+
+**Consequences**
+- `pnpm coverage` now produces a text table, a browsable `coverage/` HTML report, and `coverage-summary.json`;
+  the run **fails** if any of the four metrics drops below 80, turning the long-documented bar into an enforced
+  gate that runs inside the normal `pnpm test` inner loop.
+- Only true bootstrap glue is excluded; all testable logic (importers, catalog repo, ingest, IPC validation,
+  hooks, security helpers, the worker job driver) remains measured, so the number reflects real behaviour.
+- One small, well-known, dev-only package enters the lockfile; it never reaches production or the network,
+  consistent with the dev-tooling tier of ADR-0020 (`axe-core`) and ADR-0017.
+- A follow-up is needed to add the `coverage` step to CI branch protection so the gate is enforced on every PR,
+  not only locally — called out in the #109 PR for the coordinator.
+
+---
+
+### ADR-0020: `axe-core` (dev-only) as the holistic accessibility assertion for AC-13
+**Date**: 2026-06-24
+**Status**: Accepted
+**Tier**: auto-with-audit. The addition is a single **devDependency** — it ships in no production bundle,
+opens no network or external origin, and leaves the local-only runtime (ADR-0008, AC-4) untouched; this
+ADR is the required audit note.
+
+**Context**
+Card X2 is the cross-screen accessibility pass for **AC-13 (WCAG 2.1 AA)**. Prior cards verified each
+screen in isolation (per-screen contrast, focus rings, role/label assertions). AC-13 itself is specified
+"e2e (axe + Playwright)", but the full Electron e2e harness is not yet wired (`tests/e2e` is empty;
+`playwright.config.ts` is a skeleton). A fast, TDD-friendly way was needed to assert **"no serious/critical
+axe violations"** holistically — on every primary screen and state — inside the existing `pnpm test` inner
+loop, so the AA posture is locked in and cannot silently regress as the UI grows.
+
+**Decision**
+Add the dev-only **`axe-core`** engine (pinned `4.12.1`) and a thin helper, `tests/renderer/support/axe.ts`,
+that runs axe over a rendered Testing-Library container and fails on any **WCAG 2.1 A/AA** violation
+(`runOnly` tags `wcag2a wcag2aa wcag21a wcag21aa`). The new `tests/renderer/accessibility.test.tsx` sweeps
+the onboarding wizard (welcome → locate → import progress/complete) and every main view/state (timeline,
+search, add-memories, settings) through this helper, alongside targeted assertions for the affordances axe
+cannot see under jsdom (skip link, landmark uniqueness, placeholder contrast token, form-error association,
+app-wide focus management).
+
+**Alternatives considered**
+- **`vitest-axe` / `jest-axe` wrappers**: the obvious ergonomic choice, but `vitest-axe@0.1.0` is stale and
+  pulls extra transitive deps (`chalk`, `lodash-es`, `redent`, `aria-query`, `dom-accessibility-api`). This
+  repo has a strong, documented pattern of taking the minimal, well-known core and hand-rolling the thin glue
+  (ADR-0014 CSV, ADR-0015 router, the U2 debounce). `axe-core` **is** the engine inside both wrappers; adding
+  only it keeps the lockfile to one ubiquitous package and the matcher to ~10 lines.
+- **Playwright + `@axe-core/playwright` only**: the eventual AC-13 e2e home, but heavy and slow for a TDD
+  inner loop and blocked on the not-yet-wired Electron e2e harness. axe-core under jsdom complements (does
+  not replace) that future e2e pass.
+- **Hand-written role/label assertions only**: already present per-screen; they do not give a single,
+  comprehensive "no AA violations" guarantee across every screen, which is exactly AC-13's bar.
+
+**Consequences**
+- The renderer suite now fails on any WCAG 2.1 A/AA regression on any covered screen — a durable AC-13 ratchet.
+- **jsdom caveat**: axe cannot compute colour-contrast without real layout/canvas, so it reports contrast as
+  *incomplete*, never *violation*. Token-pair contrast therefore stays verified against the USER_FLOWS §6.1
+  table and is asserted at the class/token level (e.g. the placeholder-contrast test). The future Playwright
+  pass will add the real-pixel contrast check.
+- **Pinned exact** (not `^`) on purpose: a minor axe bump can introduce new rules that turn a green suite red
+  unexpectedly; the version is bumped deliberately, with the new rules reviewed.
+- One small, well-known, dev-only package enters the lockfile; it never reaches production or the network.
+
+---
+
+### ADR-0017: Clear the dev-dependency CVEs via `pnpm.overrides` (patched `tar`/`esbuild`) + a Vite 5→6 bump
+**Date**: 2026-06-24
+**Status**: Accepted
+**Tier**: auto-with-audit. Every package touched is a **devDependency or a build-time transitive** — none
+ships in the production Electron bundle, opens a network/external origin, or alters the local-only runtime
+(ADR-0008, AC-4); this is the audit note for the security fix (issue #31 — auto-tier, no milestone gate).
+
+**Context**
+Dependabot flagged 14 open alerts (**8 high + 6 medium**), **all `development`-scope**, that M1 DoD §4
+requires cleared before sign-off (issue #31). None reaches the shipped bundle (it loads built static files +
+the native better-sqlite3 binary; there is no dev server), so `pnpm audit --prod` was already clean — but the
+alerts must still go:
+- **vite** (2 high + 4 medium) — dev-server `server.fs.deny` bypass, optimized-deps `.map` path traversal,
+  `launch-editor` NTLMv2 disclosure. Vulnerable range `<= 6.4.2`, **first patched `6.4.3` — no Vite-5
+  backport exists**.
+- **esbuild** (1 medium) — dev server accepts cross-site requests. Needs `>= 0.25.0`; pulled transitively by
+  Vite (5.4 → 0.21.5).
+- **tar** (6 high + 1 medium) — transitive of `@electron/rebuild@3.7.2` (the Node-20 pin) via
+  `@electron/node-gyp`, used by `pnpm rebuild:native` to extract trusted, lockfile-pinned, integrity-verified
+  Electron headers. Needs `>= 7.5.16`; `@electron/rebuild@3.7.2` declares `tar@^6`.
+
+**Decision**
+- Bump the direct **`vite`** devDependency `^5.4.21 → ^6.4.3` — the minimal patched version (`^6.4.3`
+  resolves deterministically to `6.4.3`, the last 6.x). This is the Vite-major move ADR-0010 deferred to "its
+  own ADR"; it does **not** disturb the pinned `electron-vite@^4` toolchain, whose peer range is
+  `vite ^5 || ^6 || ^7` and which (with `@vitejs/plugin-react@^4`, `@tailwindcss/vite@^4`, `vitest@3`) already
+  declares Vite-6 support. Vite 6 pulls `esbuild ^0.25.0`, which alone clears the esbuild advisory.
+- Add **`pnpm.overrides`** forcing the two purely-transitive offenders to patched releases: `tar: ^7.5.16`
+  and `esbuild: ^0.25.0`. tar 7.5.16 already coexists in-tree under electron-builder's
+  `@electron/rebuild@4 → node-gyp@12`, and the electron node-gyp fork calls only the API stable across tar
+  6→7 (`tar.extract({ file, strip, filter, onwarn, cwd })`), so the override is safe for the native rebuild;
+  the esbuild pin is belt-and-suspenders so no path can reintroduce a pre-0.25 esbuild.
+
+**Alternatives considered**
+- **Bump `@electron/rebuild` 3.7.2 → 4.x for a natively-patched tar** (issue #31's stated fallback) —
+  rejected as the primary fix: `@electron/rebuild@4` requires Node `>= 22.12`, forcing a raise of the
+  `engines.node >= 20` baseline (ADR-0010's deliberate Node-20 pin). Held in reserve **only if** the tar
+  override ever breaks the native rebuild.
+- **Stay on Vite 5, override only esbuild/tar** — impossible: the vite advisories have no Vite-5 fix, so
+  Vite 6 is mandatory to clear the 2 high + 4 medium vite alerts.
+- **Jump to the latest Vite 7/8** — rejected: a larger, riskier major bump than the CVEs require; 6.4.3 is
+  the minimal clearing version and sits inside every tool's peer range.
+- **Accept-risk / suppress the alerts** — rejected: all are cleanly patchable without breaking the build;
+  DoD §4 wants them gone, not waived.
+
+**Consequences**
+- All 14 alerts clear: `pnpm audit` goes **11 → 0** and `pnpm audit --prod` stays clean (dev-scope only).
+  `pnpm typecheck` / `lint` / `test` (506 passing) / `build` (now `vite v6.4.3`) are green; the native
+  `better-sqlite3` rebuild still extracts the Electron headers via tar 7.5.16 unchanged.
+- The project is now on the Vite 6 line (the move ADR-0010 anticipated); a later `electron-vite@5` bump
+  (which needs Vite 6+) is unblocked should it ever be wanted.
+- Two `pnpm.overrides` are now load-bearing for security: if a future dependency legitimately needs an older
+  `tar`/`esbuild`, the override must be revisited (revert is a one-line change). No runtime `dependencies`
+  semantics changed and no feature dependency was removed.
 
 ---
 
