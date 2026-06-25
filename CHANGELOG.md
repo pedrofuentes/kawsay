@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Browse for the folder or file** instead of typing a path (card W2 / #93, **AC-12 usability**):
+  onboarding's path fields — the library location and each import source — now offer an accessible
+  **Browse…** button that opens the computer's own **folder or file picker** and fills the field with
+  whatever you choose. Typing or pasting a path still works as a fallback, so nothing is taken away; the
+  picker simply removes the biggest hurdle for non-technical users, who no longer have to know or spell out
+  a filesystem path. The picker is wired through a new, **zod-validated** IPC capability
+  (`dialog:openDirectory` / `dialog:openFile`) that runs the native dialog **entirely in the main process**
+  and returns **only** the single absolute path the user picked (or nothing, on cancel) — the renderer
+  gains this one typed `window.kawsayAPI.openDirectory()` / `openFile()` method and **no** new filesystem
+  or Node access. For safety the renderer may influence only a dialog **title** and starting folder; every
+  privileged option (file-vs-folder mode, filters, …) is fixed in the main process and **rejected** if a
+  request tries to smuggle it across (strict option whitelist). No new dependencies (Electron's `dialog` is
+  built in); the app stays **local-only** with zero network egress.
 - Search by **source** (card U2b, **completing AC-7**): the search filters gain the one way of
   narrowing that U2 could not yet offer. U2 shipped **type** and **date** as in-memory filters and noted
   that the catalogue's result tiles carried no source — so **source** could not be one of them. This closes
