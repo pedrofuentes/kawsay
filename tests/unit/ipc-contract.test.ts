@@ -38,6 +38,7 @@ const itemCard = {
   isFavourite: false,
   width: 480,
   height: 320,
+  source: 'whatsapp',
 };
 
 describe('ipcContract — library:create', () => {

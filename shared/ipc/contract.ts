@@ -63,6 +63,9 @@ export const ipcContract = {
       query: z.string().min(1).max(QUERY_MAX_LENGTH),
       limit: z.number().int().min(1).max(PAGE_LIMIT_MAX).default(50),
       offset: z.number().int().nonnegative().default(0),
+      // Optional connector filter (AC-7) — narrows the match set to one source.
+      // Omitted ⇒ every source, so the channel stays backward-compatible.
+      source: sourceTypeSchema.optional(),
     }),
     response: searchResultSchema,
   },

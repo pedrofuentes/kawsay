@@ -34,6 +34,7 @@ export function makeItemCard(over: Partial<ItemCardDTO> = {}): ItemCardDTO {
     isFavourite: false,
     width: 1600,
     height: 1200,
+    source: 'folder',
     ...over,
   };
 }
