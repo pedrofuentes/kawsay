@@ -3,6 +3,8 @@ import {
   APP_GET_VERSION,
   CATALOG_SEARCH,
   CATALOG_TIMELINE,
+  DIALOG_OPEN_DIRECTORY,
+  DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
   IMPORT_START,
   LIBRARY_CREATE,
@@ -34,6 +36,8 @@ const otherHandlers = {
   [CATALOG_SEARCH]: () => ({ items: [], total: 0 }),
   [IMPORT_START]: () => ({ jobId: '00000000-0000-0000-0000-000000000000' }),
   [IMPORT_CANCEL]: () => ({ cancelled: false }),
+  [DIALOG_OPEN_DIRECTORY]: () => null,
+  [DIALOG_OPEN_FILE]: () => null,
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   CURSOR_MAX_LENGTH,
+  NAME_MAX_LENGTH,
   PAGE_LIMIT_MAX,
   QUERY_MAX_LENGTH,
   librarySummarySchema,
@@ -25,6 +26,31 @@ export const CATALOG_SEARCH = 'catalog:search';
 export const IMPORT_START = 'import:start';
 /** IPC channel: cooperatively cancel an in-flight import by job id. */
 export const IMPORT_CANCEL = 'import:cancel';
+
+/** IPC channel: open a native folder picker; resolves the chosen path or null. */
+export const DIALOG_OPEN_DIRECTORY = 'dialog:openDirectory';
+/** IPC channel: open a native single-file picker; resolves the chosen path or null. */
+export const DIALOG_OPEN_FILE = 'dialog:openFile';
+
+/**
+ * The renderer-controllable options for a native open dialog (W2). This is the
+ * ENTIRE surface the sandboxed renderer may influence: a friendly title and an
+ * optional starting directory — nothing else. `properties` (file vs directory),
+ * `filters`, `securityScopedBookmarks`, and every other privileged Electron
+ * dialog option are deliberately absent and, because this is a `strictObject`,
+ * are rejected outright rather than forwarded (no arbitrary main-side passthrough).
+ */
+const dialogOpenRequestSchema = z.strictObject({
+  title: z.string().min(1).max(NAME_MAX_LENGTH).optional(),
+  defaultPath: pathSchema.optional(),
+});
+
+/**
+ * The result of an open dialog: the single absolute path the user explicitly
+ * chose, or `null` when they cancelled. A bare, bounded string — never an object
+ * — so no extra filesystem detail can ride along to the renderer.
+ */
+const dialogOpenResponseSchema = pathSchema.nullable();
 
 /**
  * The complete IPC contract. Every channel declares a zod schema for its
@@ -79,6 +105,14 @@ export const ipcContract = {
   [IMPORT_CANCEL]: {
     request: z.strictObject({ jobId: z.uuid() }),
     response: z.strictObject({ cancelled: z.boolean() }),
+  },
+  [DIALOG_OPEN_DIRECTORY]: {
+    request: dialogOpenRequestSchema,
+    response: dialogOpenResponseSchema,
+  },
+  [DIALOG_OPEN_FILE]: {
+    request: dialogOpenRequestSchema,
+    response: dialogOpenResponseSchema,
   },
 } as const;
 

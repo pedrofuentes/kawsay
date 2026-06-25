@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CATALOG_SEARCH,
   CATALOG_TIMELINE,
+  DIALOG_OPEN_DIRECTORY,
+  DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
   IMPORT_START,
   LIBRARY_CREATE,
@@ -163,6 +165,47 @@ describe('ipcContract — import:start / import:cancel', () => {
     expect(resOk(IMPORT_CANCEL, { cancelled: true })).toBe(true);
     expect(resOk(IMPORT_CANCEL, { cancelled: 'yes' })).toBe(false);
   });
+});
+
+describe('ipcContract — dialog:openDirectory / dialog:openFile (W2 native picker)', () => {
+  // Both channels share the same renderer-facing option whitelist and the same
+  // nullable-path response shape, so the assertions run against each in turn.
+  for (const channel of [DIALOG_OPEN_DIRECTORY, DIALOG_OPEN_FILE] as const) {
+    describe(channel, () => {
+      it('accepts no options, or only a whitelisted title and/or defaultPath', () => {
+        expect(reqOk(channel, {})).toBe(true);
+        expect(reqOk(channel, { title: 'Choose a folder' })).toBe(true);
+        expect(reqOk(channel, { title: 'Choose', defaultPath: '/Users/mateo' })).toBe(true);
+        expect(reqOk(channel, { defaultPath: '/Users/mateo' })).toBe(true);
+      });
+
+      it('rejects an empty or oversized title or defaultPath', () => {
+        expect(reqOk(channel, { title: '' })).toBe(false);
+        expect(reqOk(channel, { title: 'x'.repeat(201) })).toBe(false);
+        expect(reqOk(channel, { defaultPath: '' })).toBe(false);
+        expect(reqOk(channel, { defaultPath: 'x'.repeat(4097) })).toBe(false);
+      });
+
+      it('refuses to pass through arbitrary main-side dialog options (strict whitelist)', () => {
+        // The renderer must NOT be able to smuggle privileged Electron dialog
+        // options across the boundary — `properties`, `filters`, `message`, etc.
+        // are rejected outright, not silently stripped.
+        expect(reqOk(channel, { properties: ['openFile'] })).toBe(false);
+        expect(reqOk(channel, { title: 'ok', message: 'evil' })).toBe(false);
+        expect(reqOk(channel, { title: 'ok', filters: [{ name: 'all', extensions: ['*'] }] })).toBe(false);
+        expect(reqOk(channel, { rogue: true })).toBe(false);
+      });
+
+      it('returns a non-empty absolute path string, or null when the user cancels', () => {
+        expect(resOk(channel, '/Users/mateo/Pictures')).toBe(true);
+        expect(resOk(channel, null)).toBe(true);
+        expect(resOk(channel, '')).toBe(false);
+        expect(resOk(channel, 123)).toBe(false);
+        // The response is a bare string|null — never an object that could leak more.
+        expect(resOk(channel, { path: '/Users/mateo' })).toBe(false);
+      });
+    });
+  }
 });
 
 describe('ipcEventContract — import:progress', () => {

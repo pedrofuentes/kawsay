@@ -37,8 +37,27 @@ export interface KawsayAPI {
   /** Cooperatively cancel an in-flight import. */
   cancelImport(input: { jobId: string }): Promise<{ cancelled: boolean }>;
 
+  /**
+   * Open a native folder picker (W2). Resolves with the absolute path the user
+   * chose, or `null` if they cancelled. The dialog runs entirely in the main
+   * process; only the chosen path string crosses back.
+   */
+  openDirectory(options?: DialogOpenOptions): Promise<string | null>;
+  /** Open a native single-file picker (e.g. an export archive); see openDirectory. */
+  openFile(options?: DialogOpenOptions): Promise<string | null>;
+
   /** Subscribe to the import progress stream; returns an unsubscribe function. */
   onImportProgress(listener: (event: ImportProgressEvent) => void): () => void;
+}
+
+/**
+ * The only options a renderer may influence on a native open dialog: a friendly
+ * title and an optional starting directory. Everything else (file-vs-folder mode,
+ * filters, …) is fixed in the main process and never accepted from the renderer.
+ */
+export interface DialogOpenOptions {
+  title?: string;
+  defaultPath?: string;
 }
 
 // Re-exported for the renderer (U1/U2/U3), which imports these DTOs by name.

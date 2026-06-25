@@ -97,6 +97,8 @@ export interface FakeApiOptions {
   searchCatalog?: KawsayAPI['searchCatalog'];
   startImport?: KawsayAPI['startImport'];
   cancelImport?: KawsayAPI['cancelImport'];
+  openDirectory?: KawsayAPI['openDirectory'];
+  openFile?: KawsayAPI['openFile'];
 }
 
 /** Build a fully typed fake KawsayAPI whose methods are spies (vi.fn). */
@@ -120,6 +122,10 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
     searchCatalog: opts.searchCatalog ?? vi.fn(() => Promise.resolve({ items: [], total: 0 })),
     startImport: opts.startImport ?? vi.fn(() => Promise.resolve({ jobId })),
     cancelImport: opts.cancelImport ?? vi.fn(() => Promise.resolve({ cancelled: true })),
+    // Default to "cancelled" (null) so existing flows that never click Browse are
+    // unaffected; tests that exercise the picker pass their own resolved path.
+    openDirectory: opts.openDirectory ?? vi.fn(() => Promise.resolve(null)),
+    openFile: opts.openFile ?? vi.fn(() => Promise.resolve(null)),
     onImportProgress: (listener) => {
       listeners.add(listener);
       return () => {

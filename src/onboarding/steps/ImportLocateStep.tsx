@@ -1,6 +1,7 @@
 // Step 4b — Point at the saved file or folder ("Step 2 of 2" of the source flow).
-// We only ever copy from here; the reassurance says so plainly. There is no native
-// picker over the bridge yet, so the path is typed or pasted (see PR follow-up).
+// We only ever copy from here; the reassurance says so plainly. The path can be
+// chosen with the native picker (Browse…) — a file or folder picker depending on
+// the source — or typed/pasted as a fallback.
 import { useState } from 'react';
 import type { FormEvent, ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
@@ -54,6 +55,7 @@ export function ImportLocateStep({
           label={source.locateLabel}
           value={path}
           onChange={setPath}
+          browseFor={source.pickerKind === 'file' ? 'file' : 'directory'}
           helper={source.locateHelper}
           placeholder={source.locatePlaceholder}
         />
