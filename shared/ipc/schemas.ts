@@ -52,6 +52,9 @@ export const itemCardSchema = z.strictObject({
   isFavourite: z.boolean(),
   width: z.number().int().nonnegative().nullable(),
   height: z.number().int().nonnegative().nullable(),
+  // The connector this memory came from (AC-7). Null only for a deduped item
+  // whose every provenance occurrence has been undone — normally a known source.
+  source: sourceTypeSchema.nullable(),
 });
 export type ItemCardDTO = z.infer<typeof itemCardSchema>;
 

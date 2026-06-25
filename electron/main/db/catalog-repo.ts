@@ -103,6 +103,9 @@ export interface ItemRow {
   thumbStatus: string;
   createdAt: string;
   updatedAt: string;
+  /** Connector this item came from (its first occurrence's source); null if no
+   *  occurrence survives (AC-7). Derived at read time, not a column on `items`. */
+  source: SourceType | null;
 }
 
 /** Opaque keyset position: the last row's (capture_date, id). */
@@ -125,6 +128,9 @@ export interface SearchQuery {
   query: string;
   limit: number;
   offset: number;
+  /** Optional connector filter (AC-7): keep only items with an occurrence from
+   *  this source. Omitted ⇒ every source (back-compatible). */
+  source?: SourceType | null;
 }
 
 export interface SearchResult {
@@ -213,6 +219,37 @@ const ITEM_COLUMNS = [
 const ITEM_SELECT = ITEM_COLUMNS.join(', ');
 const ITEM_SELECT_I = ITEM_COLUMNS.map((column) => `i.${column}`).join(', ');
 
+/**
+ * A correlated subquery projecting each item's connector source — the `type` of
+ * its first (earliest-imported) occurrence, deterministic via the `id` tiebreak.
+ * An item with no surviving occurrence projects NULL. `itemRef` is a trusted
+ * table alias literal (`items` or `i`), never user input. (AC-7)
+ */
+function sourceProjection(itemRef: string): string {
+  return `(
+    SELECT s.type
+      FROM item_occurrences o
+      JOIN sources s ON s.id = o.source_id
+     WHERE o.item_id = ${itemRef}.id
+     ORDER BY o.created_at, o.id
+     LIMIT 1
+  ) AS source`;
+}
+
+/**
+ * A WHERE predicate that, when `@source` is bound non-null, keeps only items
+ * having at least one occurrence from a source of that type; when `@source` is
+ * NULL it is a no-op (every source passes), so the search stays back-compatible.
+ */
+function sourceFilter(itemRef: string): string {
+  return `(@source IS NULL OR EXISTS (
+    SELECT 1
+      FROM item_occurrences o
+      JOIN sources s ON s.id = o.source_id
+     WHERE o.item_id = ${itemRef}.id AND s.type = @source
+  ))`;
+}
+
 interface RawItemRow {
   id: string;
   media_type: MediaType;
@@ -233,6 +270,7 @@ interface RawItemRow {
   thumb_status: string;
   created_at: string;
   updated_at: string;
+  source: SourceType | null;
 }
 
 function mapItemRow(row: RawItemRow): ItemRow {
@@ -256,6 +294,7 @@ function mapItemRow(row: RawItemRow): ItemRow {
     thumbStatus: row.thumb_status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    source: row.source,
   };
 }
 
@@ -354,13 +393,13 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
   `);
 
   const timelineFirstStmt = db.prepare(`
-    SELECT ${ITEM_SELECT} FROM items
+    SELECT ${ITEM_SELECT}, ${sourceProjection('items')} FROM items
     ORDER BY capture_date DESC NULLS LAST, id DESC
     LIMIT @limit
   `);
   // Dated cursor: earlier dates, ties broken by id, then the undated tail.
   const timelineDatedStmt = db.prepare(`
-    SELECT ${ITEM_SELECT} FROM items
+    SELECT ${ITEM_SELECT}, ${sourceProjection('items')} FROM items
     WHERE capture_date < @cd
        OR (capture_date = @cd AND id < @id)
        OR capture_date IS NULL
@@ -369,21 +408,25 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
   `);
   // Null-tail cursor: paging within the undated rows, ordered by id DESC.
   const timelineNullTailStmt = db.prepare(`
-    SELECT ${ITEM_SELECT} FROM items
+    SELECT ${ITEM_SELECT}, ${sourceProjection('items')} FROM items
     WHERE capture_date IS NULL AND id < @id
     ORDER BY id DESC
     LIMIT @limit
   `);
 
   const searchStmt = db.prepare(`
-    SELECT ${ITEM_SELECT_I} FROM items_fts
+    SELECT ${ITEM_SELECT_I}, ${sourceProjection('i')} FROM items_fts
     JOIN items i ON i.rowid = items_fts.rowid
     WHERE items_fts MATCH @match
+      AND ${sourceFilter('i')}
     ORDER BY rank
     LIMIT @limit OFFSET @offset
   `);
   const searchCountStmt = db.prepare(`
-    SELECT COUNT(*) AS n FROM items_fts WHERE items_fts MATCH @match
+    SELECT COUNT(*) AS n FROM items_fts
+    JOIN items i ON i.rowid = items_fts.rowid
+    WHERE items_fts MATCH @match
+      AND ${sourceFilter('i')}
   `);
 
   return {
@@ -479,11 +522,14 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
       return { rows, nextCursor };
     },
 
-    search({ query, limit, offset }) {
+    search({ query, limit, offset, source }) {
       const match = toFtsMatchQuery(query);
       if (match === null) return { rows: [], total: 0 };
-      const total = Number(searchCountStmt.get<{ n: number }>({ match })?.n ?? 0);
-      const raws = searchStmt.all<RawItemRow>({ match, limit, offset });
+      const sourceParam = source ?? null;
+      const total = Number(
+        searchCountStmt.get<{ n: number }>({ match, source: sourceParam })?.n ?? 0,
+      );
+      const raws = searchStmt.all<RawItemRow>({ match, limit, offset, source: sourceParam });
       return { rows: raws.map(mapItemRow), total };
     },
   };

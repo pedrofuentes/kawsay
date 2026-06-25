@@ -24,8 +24,13 @@ export interface KawsayAPI {
 
   /** Fetch one keyset page of the timeline (newest first). */
   getTimeline(input: { limit: number; cursor?: string }): Promise<TimelinePageDTO>;
-  /** Full-text search the open catalog. */
-  searchCatalog(input: { query: string; limit?: number; offset?: number }): Promise<SearchResultDTO>;
+  /** Full-text search the open catalog, optionally narrowed to one connector source. */
+  searchCatalog(input: {
+    query: string;
+    limit?: number;
+    offset?: number;
+    source?: SourceType;
+  }): Promise<SearchResultDTO>;
 
   /** Start an off-thread import; resolves with the new job id. */
   startImport(input: { sourceType: SourceType; inputPath: string }): Promise<{ jobId: string }>;
