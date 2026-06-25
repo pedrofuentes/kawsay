@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (WCAG 3.3.1). And the last sub-AA item is closed: placeholder text in the path and search fields moves
   from `text-tertiary` (3.98:1) to `text-secondary` (7.77:1), bringing it to AA contrast (issue #104,
   WCAG 1.4.3). Every primary screen and state is now also swept through **axe-core** (WCAG 2.1 A/AA) in the
-  test suite as a standing regression ratchet — a new dev-only dependency, see ADR-0017. No runtime
+  test suite as a standing regression ratchet — a new dev-only dependency, see ADR-0020. No runtime
   dependencies were added and the renderer still talks **only** through `window.kawsayAPI`.
 - Search across the library (card U2, AC-6 · AC-7): a calm way to find one memory by a few plain words.
   The renderer's `search` section is now a working **Search** view — a labelled search box whose query is
@@ -241,6 +241,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- Cleared every open dev-dependency security alert ahead of the M1 sign-off (DoD §4, card #31): 14
+  Dependabot alerts — 8 high + 6 medium — across **vite**, **esbuild** and **tar**. All were
+  **development / build-scope only**: none reaches the shipped Electron bundle, which loads built static
+  files and the native better-sqlite3 binary with no dev server, so `pnpm audit --prod` was — and stays —
+  clean. The vite dev-server advisories have no Vite-5 backport, so **Vite** moves `5.4 → 6.4.3` (its first
+  patched release, within every tool's supported range — the pinned `electron-vite@4` toolchain is
+  unchanged), and `pnpm.overrides` now pin the two transitive offenders to patched releases: **esbuild**
+  `≥ 0.25.0` (dev server cross-site request acceptance) and **tar** `≥ 7.5.16` (the `@electron/rebuild`
+  native-rebuild header-extraction chain). No runtime dependency changed and the full toolchain
+  (`install`, `typecheck`, `lint`, 506 tests, `build`) stays green. See ADR-0017.
 - The bundled video tools (ffmpeg/ffprobe) are now locked to reading local files only. Even if a
   crafted photo or video on disk embedded a hidden reference to a remote address, these tools can no
   longer be tricked into reaching out over the network, preserving Kawsay's promise that your
