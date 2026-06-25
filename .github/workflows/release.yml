@@ -1,0 +1,94 @@
+name: Release
+
+# Build the v1 installers on native runners and publish them to GitHub Releases
+# (AC-5 · ADR-0007/0023/0026). Each runner builds with electron-builder and
+# publishes via its native GitHub provider (`--publish always`, configured in
+# electron-builder.yml): macOS .dmg + .zip (arm64 + x64) and Windows NSIS .exe
+# (x64). The native catalog engine (better-sqlite3) is rebuilt from source for
+# the Electron ABI during packaging — node-gyp needs Python (see below).
+#
+# v1 ships UNSIGNED (ADR-0025): macOS code-signing/notarization is a deferred,
+# human-gated step, so signing auto-discovery is turned OFF and electron-builder
+# produces unsigned artifacts instead of failing while trying to sign.
+#
+# The publish job runs in the protected `release` GitHub Environment, so the
+# first production publish blocks on a required reviewer (@pedrofuentes) — the
+# HUMAN-REQUIRED gate from MISSION §9 / PRD AC-5. The workflow token is scoped to
+# `contents: write` (create the release + upload assets) and nothing more.
+
+on:
+  # Publish on a pushed release tag, e.g. `v0.1.0`.
+  push:
+    tags:
+      - 'v*'
+  # Manual fallback (electron-builder derives the tag from package.json version).
+  workflow_dispatch:
+
+# Never cancel an in-progress release, and serialize runs that target the same
+# ref so a tag push and a manual dispatch can't publish the same release at once.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Least privilege at the top level; the publish job widens to contents: write.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build & publish (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    # Required-reviewer gate for the first production publish (ADR-0007, AC-5).
+    environment: release
+    # Create the GitHub Release + upload the installers as assets — nothing more.
+    permissions:
+      contents: write
+    strategy:
+      # Build/publish every OS even if one fails, so a partial release is visible.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        # Version is read from the `packageManager` field in package.json.
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Python 3.11
+        # electron-builder rebuilds better-sqlite3 from source for the Electron ABI
+        # at package time (npmRebuild + buildDependenciesFromSource); node-gyp needs
+        # distutils, removed in Python 3.12, so pin 3.11 (ADR-0007, ARCHITECTURE §8).
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build app bundles
+        # electron-vite build → out/** (main + preload + renderer) for packaging.
+        run: pnpm build
+
+      - name: Package & publish to GitHub Releases
+        # electron-builder reads electron-builder.yml: it builds the per-OS targets,
+        # rebuilds the native module for Electron's ABI, and uploads the installers
+        # as assets of the GitHub Release for the tag via its `github` provider.
+        run: pnpm exec electron-builder --publish always
+        env:
+          # GitHub Releases publish token (the repo-scoped Actions token).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # UNSIGNED v1 (ADR-0025): do NOT auto-discover a macOS signing identity.
+          # Without this, electron-builder would try to sign and fail the build;
+          # v1 deliberately ships unsigned — signing/notarization is deferred.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
