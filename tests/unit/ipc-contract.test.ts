@@ -9,6 +9,7 @@ import {
   ipcContract,
 } from '@shared/ipc/contract';
 import { IMPORT_PROGRESS, ipcEventContract } from '@shared/ipc/events';
+import { itemCardSchema } from '@shared/ipc/schemas';
 
 const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
@@ -100,9 +101,45 @@ describe('ipcContract — catalog:search', () => {
     expect(reqOk(CATALOG_SEARCH, { query: 'q', limit: 0 })).toBe(false);
     expect(reqOk(CATALOG_SEARCH, { query: 'q', offset: -1 })).toBe(false);
   });
+  it('accepts an optional source filter (a known connector) and rejects an unknown one', () => {
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', source: 'whatsapp' })).toBe(true);
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', source: 'folder' })).toBe(true);
+    // Omitting the filter stays valid — the source filter is backward-compatible.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach' })).toBe(true);
+    // An unknown connector (or wrong type) is rejected by the enum.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', source: 'myspace' })).toBe(false);
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', source: 123 })).toBe(false);
+  });
   it('validates a SearchResult response', () => {
     expect(resOk(CATALOG_SEARCH, { items: [itemCard], total: 1 })).toBe(true);
     expect(resOk(CATALOG_SEARCH, { items: [], total: -1 })).toBe(false);
+  });
+});
+
+describe('itemCardSchema — the renderer-safe tile carries its source (AC-7)', () => {
+  const base = {
+    id: UUID,
+    mediaType: 'photo',
+    mimeType: 'image/jpeg',
+    captureDate: '2020-05-01T10:00:00.000Z',
+    durationSec: null,
+    title: null,
+    description: null,
+    isFavourite: false,
+    width: 480,
+    height: 320,
+  };
+
+  it('carries a known connector source, allows null, and rejects an unknown one', () => {
+    expect(itemCardSchema.safeParse({ ...base, source: 'whatsapp' }).success).toBe(true);
+    expect(itemCardSchema.safeParse({ ...base, source: 'google_takeout' }).success).toBe(true);
+    // A deduped item with no resolvable occurrence projects a null source.
+    expect(itemCardSchema.safeParse({ ...base, source: null }).success).toBe(true);
+    expect(itemCardSchema.safeParse({ ...base, source: 'myspace' }).success).toBe(false);
+  });
+
+  it('makes the source a required key (no silent omission)', () => {
+    expect(itemCardSchema.safeParse(base).success).toBe(false);
   });
 });
 

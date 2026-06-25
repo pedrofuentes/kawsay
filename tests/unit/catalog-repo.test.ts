@@ -238,4 +238,80 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
       );
     });
   });
+
+  describe('search — source filter (AC-7)', () => {
+    let whatsapp: string;
+    let folder: string;
+
+    // Seed a message-shaped memory matching "familia" and pin it to one source.
+    function seedFrom(description: string, sourceId: string, ref: string, hash: string): string {
+      const itemId = repo.insertItem({ mediaType: 'message', description, contentHash: hash });
+      repo.addOccurrence({ itemId, sourceId, sourceRef: ref });
+      return itemId;
+    }
+
+    beforeEach(() => {
+      whatsapp = repo.registerSource({ sourceKey: 'wa', type: 'whatsapp', label: 'Mum WhatsApp' });
+      folder = repo.registerSource({ sourceKey: 'fold', type: 'folder', label: 'Photos folder' });
+      // Two WhatsApp-sourced memories and one folder-sourced memory — every one matches "familia".
+      seedFrom('familia en la playa', whatsapp, 'wa/1', 'h-wa-1');
+      seedFrom('familia en la montaña', whatsapp, 'wa/2', 'h-wa-2');
+      seedFrom('familia con la abuela', folder, 'fold/1', 'h-fold-1');
+    });
+
+    it('narrows a query to a single connector source, leaving every other source out', () => {
+      const res = repo.search({ query: 'familia', limit: 10, offset: 0, source: 'whatsapp' });
+      expect(res.total).toBe(2);
+      expect(res.rows).toHaveLength(2);
+      expect(res.rows.every((r) => r.source === 'whatsapp')).toBe(true);
+    });
+
+    it('returns memories from every source when no source filter is given (back-compat)', () => {
+      const res = repo.search({ query: 'familia', limit: 10, offset: 0 });
+      expect(res.total).toBe(3);
+      expect(new Set(res.rows.map((r) => r.source))).toEqual(new Set(['whatsapp', 'folder']));
+    });
+
+    it('composes the source filter with limit/offset paging over the filtered set', () => {
+      const all = repo.search({ query: 'familia', limit: 10, offset: 0, source: 'whatsapp' });
+      expect(all.total).toBe(2);
+      const page0 = repo.search({ query: 'familia', limit: 1, offset: 0, source: 'whatsapp' });
+      const page1 = repo.search({ query: 'familia', limit: 1, offset: 1, source: 'whatsapp' });
+      expect(page0.rows).toHaveLength(1);
+      expect(page1.rows).toHaveLength(1);
+      expect(page0.total).toBe(2);
+      expect(page1.total).toBe(2);
+      expect(page0.rows[0]?.source).toBe('whatsapp');
+      expect(page0.rows[0]?.id).not.toBe(page1.rows[0]?.id);
+      expect(new Set([page0.rows[0]?.id, page1.rows[0]?.id])).toEqual(
+        new Set(all.rows.map((r) => r.id)),
+      );
+    });
+
+    it('finds a memory shared across sources from either side, and never invents an out-of-filter row', () => {
+      // One deduped logical item with occurrences in BOTH whatsapp and folder (but not linkedin).
+      const shared = repo.insertItem({
+        mediaType: 'photo',
+        description: 'familia reunion',
+        contentHash: 'h-shared',
+      });
+      repo.addOccurrence({ itemId: shared, sourceId: whatsapp, sourceRef: 'wa/shared' });
+      repo.addOccurrence({ itemId: shared, sourceId: folder, sourceRef: 'fold/shared' });
+
+      const fromWhatsapp = repo.search({ query: 'reunion', limit: 10, offset: 0, source: 'whatsapp' });
+      const fromFolder = repo.search({ query: 'reunion', limit: 10, offset: 0, source: 'folder' });
+      const fromLinkedin = repo.search({ query: 'reunion', limit: 10, offset: 0, source: 'linkedin' });
+      expect(fromWhatsapp.rows.map((r) => r.id)).toEqual([shared]);
+      expect(fromFolder.rows.map((r) => r.id)).toEqual([shared]);
+      // No occurrence from LinkedIn → the shared item must never surface under that filter.
+      expect(fromLinkedin.rows).toHaveLength(0);
+      expect(fromLinkedin.total).toBe(0);
+    });
+
+    it("projects each result row's connector source for display", () => {
+      const res = repo.search({ query: 'playa', limit: 10, offset: 0 });
+      expect(res.rows).toHaveLength(1);
+      expect(res.rows[0]?.source).toBe('whatsapp');
+    });
+  });
 });
