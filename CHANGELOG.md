@@ -308,11 +308,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Docs / architecture (no code, no user-facing change):** proposed the **M2 on-device transcription**
   architecture as a gate artifact for cofounder sign-off — **ADR-0027** (whisper.cpp via a bundled
-  `whisper-cli` binary + the `base` multilingual `ggml` model on the existing off-thread worker + `ffmpeg`
-  seam; **bundle, never download** — preserving the zero-egress guarantee, AC-4), a **PRD acceptance addendum
-  (AC-17 … AC-21)**, and an **M2 increment breakdown** in `ROADMAP.md`. **Proposed / 🚨 HUMAN-REQUIRED**
-  (heavy bundled dependency + privacy-data capability); awaiting red-team + @pedrofuentes approval before any
-  building. No dependencies added, no runtime network egress.
+  `whisper-cli` binary + a bundled multilingual `ggml` model — **`base` vs `small` an open, M2-0-pending
+  decision** — on the existing off-thread `worker_threads` + `ffmpeg` seam; **bundle, never download** —
+  preserving the zero-egress guarantee, AC-4 **by construction**), a **PRD acceptance addendum (AC-17 … AC-23)**
+  incl. **user opt-in/consent (AC-22)** and **NOTICES/attribution (AC-23)**, and an **M2 increment breakdown**
+  in `ROADMAP.md`. Incorporates an independent **red-team** pass: removed fabricated Spanish WER figures (real
+  `base` ≈15–17% on clean Common Voice, worse on real audio; accuracy rises with model size), scoped the native
+  subprocess zero-egress **proof** to a **net-new macOS/Windows OS-deny harness (M2-7)** rather than the existing
+  main-process spies, and surfaced binary-provenance, long-media-queue, and FTS-rebuild work. **Proposed / 🚨
+  HUMAN-REQUIRED** (heavy bundled dependency + privacy-data capability); awaiting @pedrofuentes approval before
+  any building. No dependencies added, no runtime network egress.
 
 ### Fixed
 

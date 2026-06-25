@@ -289,7 +289,7 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   counts and field values** against the fixtures (research: `formats.md` §3–§4).
 - **Test kind:** integration.
 
-### M2 acceptance addendum (AC-17 … AC-21 — on-device transcription, **post-v1 / proposed**)
+### M2 acceptance addendum (AC-17 … AC-23 — on-device transcription, **post-v1 / proposed**)
 
 > **Scope:** these criteria belong to ROADMAP **M2 (audio & video transcription)**, not the M1 MVP. They are
 > **proposed**, bound to the M2 architecture gate (**ADR-0027**), and **🚨 HUMAN-REQUIRED** (heavy bundled
@@ -298,22 +298,32 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 > regression). The zero-egress promise (**AC-4**) is **extended, not weakened** by **AC-17**.
 
 **AC-17 — Voice notes / audio / video transcribed fully on-device (no network).**
-- **Given** a WhatsApp voice note (`.opus`), an audio file, or a video with an audio track, and a transcription
-  model + binary **bundled in the installer** (never downloaded),
-- **When** transcription runs — at install time **and** at runtime,
-- **Then** a transcript is produced **entirely on-device** and the action records **zero** outbound network
-  connections — asserted by the **existing AC-4 harness extended to the transcription worker and the `whisper-cli`
-  subprocess** (the `net`/`dgram`/`dns` spies + `nock.disableNetConnect()` already cover worker-thread and
-  subprocess egress), with the runtime network guard and CSP unchanged.
-- **Test kind:** integration **+** the AC-4 egress harness. *(Extends AC-4 — a core, tested promise that may never
-  be weakened; MISSION §5, NEVER list. A cloud-STT or model-download approach fails this AC by definition.)*
+- **Given** a WhatsApp voice note (`.opus`), an audio file, or a video with an audio track, with the transcription
+  model + `whisper-cli` binary **bundled in the installer** (never downloaded),
+- **When** the app is installed (model + binary are *bundled*, not fetched) **and** transcription later runs **at
+  runtime** on the user's audio,
+- **Then** the transcript is produced **entirely on-device** with **zero** outbound network — asserted in **two
+  parts**:
+  - **(a) Static / packaging guarantee (provable now):** the binary + model ship in the installer; there is **no
+    network-capable code and no model-download path anywhere on the transcription path**; the runtime network guard
+    (`network-guard.ts`) and renderer CSP (`connect-src 'none'`) are **unchanged**.
+  - **(b) Runtime egress assertion (net-new harness):** the **real** `whisper-cli` subprocess is exercised under an
+    **OS-level deny firewall** and records **zero** egress. The existing in-process `net`/`dgram`/`dns` spies prove
+    the **main process only** and **cannot observe a separate OS process**, and the existing OS-deny firewall is
+    **Linux-only** (`ac4-egress.yml` is `runs-on: ubuntu-latest`) while Kawsay ships **macOS arm64/x64 + Windows
+    x64** — so a macOS/Windows OS-deny harness around the real binary is **net-new work** (M2-7, HUMAN-REQUIRED: it
+    edits the AC-4 CI workflow). *(The prior claim that the existing harness "already covers the subprocess and
+    extends directly" is withdrawn.)*
+- **Test kind:** integration (static packaging checks) **+** the net-new OS-deny egress harness. *(Extends AC-4 — a
+  core, tested promise that may never be weakened; MISSION §5, NEVER list. A cloud-STT or model-download approach
+  fails this AC by definition.)*
 
 **AC-18 — Transcription runs off the UI thread (performance).**
 - **Given** a batch of recordings queued for transcription,
 - **When** audio extraction (`ffmpeg`) and inference (`whisper-cli`) run,
-- **Then** that work executes **off the UI thread** (the F3c `worker_threads`/`utilityProcess` harness + a bounded
-  subprocess) — asserted by observing the work occurs **off-main-thread** — and **no main-thread task exceeds
-  50 ms** for the duration, keeping the renderer responsive while progress is streamed.
+- **Then** that work executes **off the UI thread** (the F3c `worker_threads` harness + a bounded subprocess) —
+  asserted by observing the work occurs **off-main-thread** — and **no main-thread task exceeds 50 ms** for the
+  duration, keeping the renderer responsive while progress is streamed.
 - **Test kind:** integration / performance. *(Extends AC-9.)*
 
 **AC-19 — Transcript text is searchable via FTS.**
@@ -321,27 +331,53 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 - **When** the user searches a word or phrase **spoken** in a recording, optionally filtered by type / source /
   date,
 - **Then** the matching item is returned by the **existing FTS5 search** (the transcript is indexed into
-  `items_fts`), ranked, with filters narrowing **exactly** to matching items — and the transcript is **attached to
-  the existing media item**, never a duplicate item.
+  `items_fts` via the FTS-synced `search_meta` column — or a dedicated FTS-synced column — **not** the
+  message-body `description`), ranked, with filters narrowing **exactly** to matching items — and the transcript is
+  **attached to the existing media item**, never a duplicate item.
 - **Test kind:** integration. *(Extends AC-6 / AC-7.)*
 
-**AC-20 — Resilient, non-destructive transcription (never silently drop; originals untouched).**
+**AC-20 — Resilient, non-destructive transcription incl. long media (never silently drop; originals untouched).**
 - **Given** a transcription run where some recordings are unreadable, corrupt, silent, or in an unsupported
-  language, and where the run may be **cancelled** or **re-run**,
+  language — **and where some are multi-minute (long)** — and where the run may be **cancelled** or **re-run**,
 - **When** transcription proceeds,
 - **Then** each failed/empty item is **skipped and reported with a status** (the user sees a count), the run **does
   not abort**, remaining items still transcribe, **re-running does not duplicate** transcripts, and **no original
-  media file is ever altered or deleted** (transcripts and any derived audio are Kawsay-generated only).
-- **Test kind:** integration. *(Mirrors AC-15; honours AC-14.)*
+  media file is ever altered or deleted** (transcripts and any derived audio are Kawsay-generated only); **long
+  recordings are not killed by the 30 s import-spawn cap** — they use a **duration-scaled timeout or chunking** with
+  **partial/checkpoint** output — and **cancelling a single in-flight transcription kills the `whisper-cli` child**
+  (the import worker's cooperative *between-records* cancel does not stop a long child mid-file).
+- **Test kind:** integration. *(Mirrors AC-15; honours AC-14. The transcription queue is a **net-new** per-item
+  drain analogous to `thumb_status`, not a verbatim reuse of the import worker — ADR-0027.)*
 
 **AC-21 — Multilingual coverage + accuracy floor (Spanish + others).**
 - **Given** a labelled offline fixture set of short, WhatsApp-style voice notes in **Spanish and other languages**,
 - **When** transcribed with the **bundled multilingual model** (no `.en` variant),
 - **Then** the spoken language is **auto-detected** and the transcript meets a **defined word-error-rate ceiling**
-  on the fixture set (the concrete WER threshold and the chosen model — `base` vs `small` — are fixed by the M2
-  accuracy harness on real Spanish samples, ADR-0027), measured **offline** (CI fixtures, **no telemetry**).
+  on the fixture set — where the concrete WER threshold and the chosen model (**`base` vs `small`**, an open
+  decision) are **fixed empirically on real Spanish samples by the M2-0 spike / M2-6 harness, not asserted from
+  clean published benchmarks** (real WhatsApp-voice-note WER runs materially worse than clean Common Voice figures,
+  and accuracy rises monotonically with model size) — measured **offline** (CI fixtures, **no telemetry**).
 - **Test kind:** integration / performance (offline fixtures). *(New M2 quality bar; the falsifiable answer to the
   "too heavy?" / model-size question.)*
+
+**AC-22 — User control / opt-in over transcription (consent).**
+- **Given** a grief-sensitive library in which transcription would turn a deceased person's voice into stored,
+  searchable text,
+- **When** the user reaches the transcription capability,
+- **Then** **no audio is transcribed without an explicit user choice**: there is a clear **first-run / global
+  toggle** (and, ideally, **per-item** control), the current state is visible, and **nothing auto-transcribes
+  silently** in the background.
+- **Test kind:** integration / e2e. *(New M2 privacy capability; honours MISSION §5. Whether the default is opt-in
+  or automatic-with-toggle is a @pedrofuentes sign-off decision — ADR-0027 Decisions block; this AC only requires
+  that user control exists.)*
+
+**AC-23 — Attribution / NOTICES for bundled third-party artifacts.**
+- **Given** a shipped installer bundling the `whisper-cli` binary (whisper.cpp, **MIT**) and the `ggml` model
+  weights (derived from OpenAI Whisper, **MIT**),
+- **When** the app is packaged,
+- **Then** the build includes **license attribution / NOTICES** for the bundled binary **and** model weights, each
+  with recorded **provenance** (source + version + checksum).
+- **Test kind:** integration / packaging-config. *(New M2 compliance bar; sequenced in packaging increment M2-1.)*
 
 ### 4.1 AC traceability table (AC-id → feature → test kind)
 
@@ -363,13 +399,15 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 | **AC-14** | added | (d) Originals preserved on disk + undo without data loss | integration |
 | **AC-15** | added | (a)/(b)/(c) Resilient partial import | integration |
 | **AC-16** | added | (c) Facebook DYI + LinkedIn content correctness — text/timestamps/media linkage | integration |
-| **AC-17** | M2 · ADR-0027 | On-device transcription — bundled model, **zero egress** (extends AC-4) | integration + AC-4 harness |
+| **AC-17** | M2 · ADR-0027 | On-device transcription — static packaging guarantee **+** real-binary OS-deny egress (extends AC-4; runtime half = net-new M2-7) | integration + net-new OS-deny harness |
 | **AC-18** | M2 · ADR-0027 | Transcription off the UI thread (extends AC-9) | integration / perf |
-| **AC-19** | M2 · ADR-0027 | Transcripts searchable via FTS5, attached to items (extends AC-6/AC-7) | integration |
-| **AC-20** | M2 · ADR-0027 | Resilient, non-destructive transcription (mirrors AC-15; honours AC-14) | integration |
-| **AC-21** | M2 · ADR-0027 | Multilingual coverage + WER floor (Spanish + others), offline-measured | integration / perf |
+| **AC-19** | M2 · ADR-0027 | Transcripts searchable via FTS5 (`search_meta`/dedicated column), attached to items (extends AC-6/AC-7) | integration |
+| **AC-20** | M2 · ADR-0027 | Resilient, non-destructive transcription incl. **long media** (child-kill on cancel; net-new per-item queue) | integration |
+| **AC-21** | M2 · ADR-0027 | Multilingual coverage + WER floor (Spanish + others), empirically set on real samples, offline-measured | integration / perf |
+| **AC-22** | M2 · ADR-0027 | User control / opt-in over transcription (consent; privacy) | integration / e2e |
+| **AC-23** | M2 · ADR-0027 | NOTICES / attribution for bundled binary + model weights (provenance) | integration / packaging |
 
-> **AC-17 … AC-21 are M2 (post-v1), proposed, and HUMAN-REQUIRED** — they activate only on @pedrofuentes sign-off of
+> **AC-17 … AC-23 are M2 (post-v1), proposed, and HUMAN-REQUIRED** — they activate only on @pedrofuentes sign-off of
 > ADR-0027 and must keep AC-1 … AC-16 green (cumulative regression). AC-4 is **extended** by AC-17, never weakened.
 
 **Coverage check — every MVP capability maps to ≥1 AC:** (a) → AC-2, AC-9, AC-14, AC-15; (b) → AC-1,

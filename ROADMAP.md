@@ -46,11 +46,12 @@ or watch every recording — searchable, readable transcripts attached to each m
 **Acceptance direction:** transcripts generated **fully offline** (bundled/on-device model — **no
 cloud STT**, preserving **AC-4**); transcription runs **off the UI thread** (extends AC-9); transcript
 text is **searchable** via the existing FTS index (extends AC-6/AC-7); resilient + non-destructive
-(mirrors AC-15 / AC-14); multilingual coverage + a WER floor for Spanish and others. Now bound to the
-concrete suite **AC-17 … AC-21** (PRD §4 M2 addendum).
-**Architecture gate:** **ADR-0027** (whisper.cpp via a bundled `whisper-cli` binary + the `base`
-multilingual `ggml` model on the F3c worker/ffmpeg seam; **bundle, never download**) — **status:
-proposed, awaiting red-team + @pedrofuentes sign-off.**
+incl. long media (mirrors AC-15 / AC-14); multilingual coverage + a WER floor; **explicit user opt-in**
+over transcription; **NOTICES/attribution** for bundled artifacts. Now bound to the concrete suite
+**AC-17 … AC-23** (PRD §4 M2 addendum).
+**Architecture gate:** **ADR-0027** (whisper.cpp via a bundled `whisper-cli` binary + a bundled
+multilingual `ggml` model — `base` vs `small` is an **open** M2-0 decision — on the F3c worker/ffmpeg
+seam; **bundle, never download**) — **status: proposed, awaiting red-team + @pedrofuentes sign-off.**
 **Authorization:** time-boxed **only while it stays on-device** — but ADR-0027 is **🚨 HUMAN-REQUIRED**
 on two independent triggers: a **heavy bundled dependency** (a native binary + a 142–466 MiB model that
 ~doubles–triples the installer) **and** **privacy-data capability** (a deceased person's voice → stored,
@@ -61,24 +62,37 @@ searchable text). Any approach needing a network model download or cloud inferen
 1. **M2-0 · Model-choice spike (red-team input).** Validate `base` (142 MiB) vs `small` (466 MiB) vs a
    quantized `q5_0` variant on **real Spanish WhatsApp-style voice notes**; recommend the bundled model
    + WER ceiling. *Answers the cofounder's "too heavy?" empirically; gates M2-1's model pick.*
-2. **M2-1 · Engine + model packaging.** Bundle the per-arch `whisper-cli` binary + chosen `ggml` model
-   via `electron-builder` `extraResources`/`asarUnpack` (macOS arm64+x64, Windows x64), resolved through
-   `process.resourcesPath`; **no download path**; packaging-config drift test (mirrors
+2. **M2-1 · Engine + model packaging (+ provenance/NOTICES).** Bundle the per-arch `whisper-cli` binary +
+   chosen `ggml` model via `electron-builder` `extraResources`/`asarUnpack` (macOS arm64+x64, Windows x64),
+   resolved through `process.resourcesPath`; **no download path**; decide binary provenance (**P1**
+   build-from-source-in-CI vs **P2** pinned-checksum download, ADR-0027); ship **license attribution/NOTICES**
+   for the bundled binary + weights with provenance → **AC-23**; packaging-config drift test (mirrors
    `tests/unit/packaging-config.test.ts`). *(Extends ADR-0007/0023.)*
 3. **M2-2 · Audio-extraction pipeline.** Extend the bundled-`ffmpeg` seam to decode any voice note/
    audio/video to **16 kHz mono PCM WAV** (array argv, `-protocol_whitelist file`, timeout, caps).
    *(Extends ADR-0004/0012.)*
-4. **M2-3 · Transcription worker (off-thread).** A transcription job in the F3c harness
-   (`worker_threads`/`utilityProcess`) that spawns `whisper-cli` as a sandboxed, fault-isolated
-   subprocess; cooperative cancel + streamed progress. → **AC-18**. *(Reuses the coordinator/protocol.)*
-5. **M2-4 · Transcript storage + FTS indexing.** Persist transcripts **attached to media items**, indexed
-   into `items_fts`; **DB migration = HUMAN-REQUIRED**; dedup-with-provenance aware. → **AC-19**.
-6. **M2-5 · UI: surface transcripts + search.** Read-only transcript on the audio/video item view (no
-   auto-play, accessible), "transcribing…" status, search highlighting, non-technical copy. → **AC-13**.
+4. **M2-3 · Transcription worker (off-thread) + long-media.** A transcription job in the F3c
+   `worker_threads` harness that spawns `whisper-cli` as a sandboxed, fault-isolated subprocess; streamed
+   progress; **duration-scaled timeout/chunking with partial/checkpoint** (the reused spawn seam hard-caps
+   children at 30 s) and **child-kill on cancel** (the import worker's *between-records* cancel does not stop
+   a long child mid-file). → **AC-18/AC-20**. *(Reuses the *seam*, not the import queue.)*
+5. **M2-4 · Transcript storage + FTS indexing (net-new queue).** A **net-new** per-item drain — a
+   `transcript_status` column on `items` analogous to `thumb_status` — persisting transcripts **attached to
+   media items** and feeding the FTS-synced `search_meta` (or a dedicated FTS column); the external-content
+   `items_fts` column change is a **drop+rebuild over the catalog** (not a cheap `ALTER`). **DB migration =
+   HUMAN-REQUIRED**; dedup-with-provenance aware. → **AC-19**.
+6. **M2-5 · UI: consent + surface transcripts + search.** A clear **first-run/global opt-in toggle (and
+   ideally per-item control)** so **nothing auto-transcribes silently** → **AC-22**; read-only transcript on
+   the audio/video item view (no auto-play, accessible), "transcribing…" status, search highlighting,
+   non-technical copy. → **AC-13/AC-22**.
 7. **M2-6 · Perf/accuracy harness.** Offline labelled fixtures (Spanish + others); WER + RTF/throughput
    on macOS + Windows; lock **AC-21**/**AC-18** thresholds. *(No telemetry; CI fixtures.)*
-8. **M2-7 · Zero-egress proof.** Extend the AC-4 harness to the transcription worker + `whisper-cli`
-   subprocess; assert zero egress at install and runtime. → **AC-17**.
+8. **M2-7 · Zero-egress proof for the native subprocess (net-new harness · 🚨 HUMAN-REQUIRED).** Stand up a
+   **macOS + Windows OS-deny egress harness that exercises the *real* `whisper-cli` binary** (the in-process
+   spies cover the **main process only**; the existing OS-deny firewall is **Linux-only** and Kawsay ships no
+   Linux target). Because it **edits `.github/workflows/ac4-egress.yml`**, it is **🚨 HUMAN-REQUIRED**
+   (harness integrity, MISSION §9) — the same gate as M2-4's DB migration. The static/packaging half of
+   AC-17 lands earlier (M2-1). → **AC-17**.
 
 ### M3 — More sources (new connectors) · **P2 · proposed**
 **Scope:** Additional export/file connectors behind the same importer interface — **Telegram,
