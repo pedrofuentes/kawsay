@@ -367,6 +367,32 @@ describe('transcription orchestrator — persist outcomes + stream progress (AC-
 
     expect(orchestrator.status().state).toBe('complete');
   });
+
+  it('still reaches complete when an item settles despite a persist throw (#160)', async () => {
+    const saveTranscript = vi.fn(() => {
+      throw new Error('disk full');
+    });
+    const { orchestrator } = harness({
+      items: [{ id: ITEM_A, sourcePath: '/a.m4a', durationSec: 10 }],
+      library: { saveTranscript },
+    });
+    await orchestrator.start();
+    orchestrator.handleWorkerEvent(
+      itemDone(ITEM_A, { id: ITEM_A, status: 'transcribed', transcript: transcript() }),
+    );
+    orchestrator.handleWorkerEvent({
+      jobId: JOB_ID,
+      kind: 'done',
+      summary: { total: 1, transcribed: 1, skipped: 0, cancelled: 0, outcomes: [] },
+    });
+
+    // The lone item's persist threw, but it must still be COUNTED as settled so
+    // the terminal snapshot reaches 'complete' (every enumerated item accounted
+    // for) instead of being stuck one short at 'idle'. The unpersisted item is
+    // retried idempotently on the next run.
+    expect(orchestrator.status().state).toBe('complete');
+    expect(orchestrator.status().counts.transcribed).toBe(1);
+  });
 });
 
 describe('transcription orchestrator — cancel (AC-20: stop + persist partial)', () => {
