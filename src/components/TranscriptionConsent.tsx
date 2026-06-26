@@ -6,19 +6,20 @@
 // and the one global toggle reflects + controls the current state. Progress is
 // announced politely and failures surface as calm, plain-language retries — never
 // a raw code or stack trace. Per-item transcript display/search is issue #136.
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from './Button';
 import { ErrorBanner } from './ErrorBanner';
 import { Icon } from './Icon';
 import { ProgressBar } from './ProgressBar';
 import { cx } from '@renderer/lib/cx';
+import { MODEL_SIZE_BYTES } from '@shared/transcription';
 import { useModelDownload } from '@renderer/lib/use-model-download';
 import type { ModelDownloadError } from '@renderer/lib/use-model-download';
 
 const MIB = 1024 * 1024;
 
-/** Whole megabytes, the unit the ~466 MB model size is quoted in (ADR-0027). */
+/** Whole megabytes, the unit the ~465 MB model size is quoted in (ADR-0027). */
 function toMB(bytes: number): number {
   return Math.round(bytes / MIB);
 }
@@ -51,6 +52,20 @@ export function TranscriptionConsent(): ReactElement {
 
   const face = faceOf();
   const on = model.ready && enabled;
+
+  const readyRef = useRef<HTMLDivElement>(null);
+  const prevFaceRef = useRef<Face | null>(null);
+
+  // Announce + re-orient on success: when the download finishes and the "Enable"
+  // button unmounts, move focus to the ready confirmation (a polite status region)
+  // so a screen-reader user actually hears it (WCAG 2.1 AA SC 4.1.3). Arriving
+  // already-ready on mount (previous face was not 'downloading') must NOT steal focus.
+  useEffect(() => {
+    if (face === 'ready' && prevFaceRef.current === 'downloading') {
+      readyRef.current?.focus();
+    }
+    prevFaceRef.current = face;
+  }, [face]);
 
   return (
     <section
@@ -158,16 +173,17 @@ export function TranscriptionConsent(): ReactElement {
               read and search, so you can find a moment again without listening through everything.
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
-              It all happens here, on this computer. A loved one&apos;s recordings and memories never
-              leave this computer — there&apos;s no account, and nothing is ever uploaded.
+              It all happens here, on this computer. A loved one&apos;s recordings and memories
+              never leave this computer — there&apos;s no account, and nothing is ever uploaded.
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
-              To set it up, Kawsay makes a one-time download of about 466 MB — the language model
-              that does the listening. This is the only time the app uses the internet.
+              To set it up, Kawsay makes a one-time download of about {toMB(MODEL_SIZE_BYTES)} MB —
+              the language model that does the listening. This is the only time the app uses the
+              internet.
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
-              Nothing is transcribed until you turn it on, and you can turn it off again whenever you
-              like.
+              Nothing is transcribed until you turn it on, and you can turn it off again whenever
+              you like.
             </p>
             <div>
               <Button variant="primary" onClick={() => void model.enable()}>
@@ -202,19 +218,36 @@ export function TranscriptionConsent(): ReactElement {
         );
       }
 
-      case 'error':
-        return (
+      case 'error': {
+        // Honour the typed `retryable` flag: a permanent failure (e.g. 403/404, or a
+        // permission / cross-device / read-only install) would deterministically fail
+        // every retry, so we drop "Try again" and offer calm alternate guidance rather
+        // than trapping a grieving user in an endless, hopeless loop. Unknown failures
+        // default to retryable — better to let them try than to dead-end them.
+        const retryable = model.error?.retryable ?? true;
+        return retryable ? (
           <ErrorBanner
             title="We couldn't finish setting up"
             message={errorMessage(model.error)}
             onRetry={() => void model.retry()}
             retryLabel="Try again"
           />
+        ) : (
+          <ErrorBanner
+            title="Transcription can't be set up here"
+            message="Kawsay can't set up transcription on this computer right now. You can keep using everything else, and a loved one's memories stay safe on this computer."
+          />
         );
+      }
 
       case 'ready':
         return (
-          <div className="flex flex-col gap-3">
+          <div
+            ref={readyRef}
+            role="status"
+            tabIndex={-1}
+            className="flex flex-col gap-3 outline-none"
+          >
             <p className="inline-flex items-center gap-2 font-body text-base font-medium text-text-primary">
               <span
                 aria-hidden

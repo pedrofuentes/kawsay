@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { UserEvent } from '@testing-library/user-event';
 import { TranscriptionConsent } from '@renderer/components/TranscriptionConsent';
@@ -10,7 +10,11 @@ import { expectNoAxeViolations } from './support/axe';
 
 const started = () => Promise.resolve({ status: 'started' as const });
 
-function setup(api: FakeApi = makeFakeApi()): { api: FakeApi; user: UserEvent; container: HTMLElement } {
+function setup(api: FakeApi = makeFakeApi()): {
+  api: FakeApi;
+  user: UserEvent;
+  container: HTMLElement;
+} {
   const user = userEvent.setup();
   const { container } = render(wrapInProviders(<TranscriptionConsent />, api));
   return { api, user, container };
@@ -28,8 +32,8 @@ describe('TranscriptionConsent — explains and asks before anything downloads (
     expect(screen.getByText(/read and search|searchable/i)).toBeInTheDocument();
     // 100% on-device + memories never leave.
     expect(screen.getByText(/never leave this computer/i)).toBeInTheDocument();
-    // One-time ~466 MB download that is the only network the app makes.
-    expect(screen.getByText(/466 MB/)).toBeInTheDocument();
+    // One-time ~465 MB download (derived from MODEL_SIZE_BYTES) — the only network the app makes.
+    expect(screen.getByText(/465 MB/)).toBeInTheDocument();
     expect(screen.getByText(/only time .* uses the internet/i)).toBeInTheDocument();
   });
 
@@ -45,6 +49,29 @@ describe('TranscriptionConsent — explains and asks before anything downloads (
 
     await startDownloading(user);
 
+    expect(api.downloadTranscriptionModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('quotes the one-time download size derived from the model constant — 465 MB, not a stale 466', async () => {
+    setup();
+    await screen.findByRole('button', { name: /enable transcription/i });
+
+    // 465 = Math.round(MODEL_SIZE_BYTES 487,601,967 / 1 MiB); in production the progress
+    // reads the same 465 MB, so the intro must agree with it (it was hardcoded "466 MB").
+    expect(screen.getByText(/about 465 MB/i)).toBeInTheDocument();
+    expect(screen.queryByText(/466 MB/)).not.toBeInTheDocument();
+  });
+
+  it('starts the download exactly once even on a rapid double-click (no double opt-in)', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    setup(api);
+    const button = await screen.findByRole('button', { name: /enable transcription/i });
+
+    // A grieving, non-technical user may double-tap; the opt-in must fire exactly once.
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.downloadTranscriptionModel).toHaveBeenCalledTimes(1));
     expect(api.downloadTranscriptionModel).toHaveBeenCalledTimes(1);
   });
 });
@@ -97,6 +124,33 @@ describe('TranscriptionConsent — calm progress while the model downloads', () 
   });
 });
 
+describe('TranscriptionConsent — the ready state is announced to assistive tech (WCAG 2.1 AA SC 4.1.3)', () => {
+  it('wraps the ready confirmation in a status live region and moves focus to it when the download finishes', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    const { user } = setup(api);
+    await startDownloading(user);
+
+    api.emitModelDownloadProgress(makeModelDownloadProgressEvent({ phase: 'done' }));
+
+    // A polite status region — so a screen reader still hears "ready" even though the
+    // downloading live region has unmounted — holding the confirmation copy.
+    const status = await screen.findByRole('status');
+    expect(within(status).getByText(/transcription is ready/i)).toBeInTheDocument();
+    // Focus follows to the confirmation as the now-gone "Enable" button unmounts.
+    await waitFor(() => expect(status).toHaveFocus());
+  });
+
+  it('does not steal focus when the model is already present on mount (no opt-in just happened)', async () => {
+    const api = makeFakeApi({ isTranscriptionModelReady: vi.fn(() => Promise.resolve(true)) });
+    setup(api);
+
+    const status = await screen.findByRole('status');
+    expect(within(status).getByText(/transcription is ready/i)).toBeInTheDocument();
+    // Opening Settings to an already-ready card must not yank focus away from the user.
+    expect(status).not.toHaveFocus();
+  });
+});
+
 describe('TranscriptionConsent — graceful offline / error handling (never a scary stack trace)', () => {
   it('shows a gentle, plain-language error with a retry — no raw codes', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
@@ -106,7 +160,11 @@ describe('TranscriptionConsent — graceful offline / error handling (never a sc
     api.emitModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
-        error: { kind: 'network', message: 'getaddrinfo ENOTFOUND release-assets', retryable: true },
+        error: {
+          kind: 'network',
+          message: 'getaddrinfo ENOTFOUND release-assets',
+          retryable: true,
+        },
       }),
     );
 
@@ -132,6 +190,45 @@ describe('TranscriptionConsent — graceful offline / error handling (never a sc
     await user.click(await screen.findByRole('button', { name: /try again/i }));
 
     expect(download).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the gentle "Try again" while the failure is retryable', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    const { user } = setup(api);
+    await startDownloading(user);
+
+    api.emitModelDownloadProgress(
+      makeModelDownloadProgressEvent({
+        phase: 'error',
+        error: { kind: 'network', message: 'offline', retryable: true },
+      }),
+    );
+
+    expect(await screen.findByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('does NOT offer an endless retry on a permanent failure — shows calm alternate guidance', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    const { user } = setup(api);
+    await startDownloading(user);
+
+    // The backend marks 403/404 and permission/cross-device/read-only-install failures
+    // non-retryable; retrying would deterministically fail, so we must not invite it.
+    api.emitModelDownloadProgress(
+      makeModelDownloadProgressEvent({
+        phase: 'error',
+        error: { kind: 'http', message: 'HTTP 403 Forbidden', retryable: false },
+      }),
+    );
+
+    const alert = await screen.findByRole('alert');
+    expect(
+      within(alert).getByText(/can't set up transcription on this computer/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+    // Still calm: no raw codes or stack traces leak through.
+    expect(screen.queryByText(/403/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Forbidden/)).not.toBeInTheDocument();
   });
 
   it('translates a disk-full failure into calm, non-technical guidance', async () => {
@@ -227,7 +324,11 @@ describe('TranscriptionConsent — accessibility (WCAG 2.1 AA)', () => {
     const { user, container } = setup(api);
     await startDownloading(user);
     api.emitModelDownloadProgress(
-      makeModelDownloadProgressEvent({ phase: 'downloading', bytesDownloaded: 1_000_000, totalBytes: 488_636_416 }),
+      makeModelDownloadProgressEvent({
+        phase: 'downloading',
+        bytesDownloaded: 1_000_000,
+        totalBytes: 488_636_416,
+      }),
     );
     await screen.findByRole('progressbar');
     await expectNoAxeViolations(container);
@@ -241,6 +342,20 @@ describe('TranscriptionConsent — accessibility (WCAG 2.1 AA)', () => {
       makeModelDownloadProgressEvent({
         phase: 'error',
         error: { kind: 'network', message: 'offline', retryable: true },
+      }),
+    );
+    await screen.findByRole('alert');
+    await expectNoAxeViolations(container);
+  });
+
+  it('error (non-retryable, no retry) has no axe violations', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    const { user, container } = setup(api);
+    await startDownloading(user);
+    api.emitModelDownloadProgress(
+      makeModelDownloadProgressEvent({
+        phase: 'error',
+        error: { kind: 'http', message: 'HTTP 404 Not Found', retryable: false },
       }),
     );
     await screen.findByRole('alert');

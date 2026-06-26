@@ -126,6 +126,11 @@ export function useModelDownload(): UseModelDownloadResult {
         }
       })
       .catch(() => {
+        // Intentional silent fallback: a failed readiness probe is treated as
+        // "not ready" rather than surfaced as an alarming error. There is no renderer
+        // logger to route a diagnostic to, and it self-heals — the next enable() runs
+        // the real download + verification regardless of this probe (covered by
+        // use-model-download.test.tsx "self-heals after a readiness-check rejection").
         if (active) {
           dispatch({ type: 'checked', ready: false });
         }
