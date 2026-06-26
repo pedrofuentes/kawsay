@@ -51,3 +51,55 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  # Compile whisper.cpp's `whisper-cli` from source on each shipped platform
+  # (ADR-0027 · #129): macOS arm64 + x64 and Windows x64. This is the same
+  # build release.yml runs before packaging, exercised on every PR/push as an
+  # independent compile gate. The `verify` job does NOT need the real binary
+  # (its tests assert the packaging contract + resolver, not a spawned binary),
+  # so this job stands alone — cmake + git are preinstalled on the runners.
+  whisper-cli:
+    name: Build whisper-cli (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    # Pin whisper.cpp here so the workflow YAML is the single source of truth;
+    # build-whisper-cli.sh reads these and asserts the cloned HEAD == COMMIT.
+    env:
+      WHISPER_CPP_REPO: ggml-org/whisper.cpp
+      WHISPER_CPP_REF: v1.9.1
+      WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Cache compiled whisper-cli
+        id: whisper-cache
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: resources/whisper
+          key: whisper-cli-v1-${{ runner.os }}-${{ env.WHISPER_CPP_REF }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}
+
+      - name: Build whisper-cli from source
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: ./scripts/build-whisper-cli.sh
+
+      - name: Verify staged binaries
+        # Assert the expected per-arch binaries exist even on a cache hit, so a
+        # corrupt/partial cache fails here instead of silently shipping nothing.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            expected=("resources/whisper/mac-arm64/whisper-cli" "resources/whisper/mac-x64/whisper-cli")
+          else
+            expected=("resources/whisper/win-x64/whisper-cli.exe")
+          fi
+          for f in "${expected[@]}"; do
+            [ -s "$f" ] || { echo "missing/empty: $f" >&2; exit 1; }
+            echo "ok: $f ($(wc -c <"$f") bytes)"
+          done
