@@ -80,6 +80,12 @@ describe('parseFixtureManifest', () => {
     expect(() => parseFixtureManifest(JSON.stringify(bad))).toThrow();
   });
 
+  it('throws on a clip whose file is not a safe basename (path-traversal guard)', () => {
+    const bad = JSON.parse(VALID_MANIFEST) as { clips: { file: string }[] };
+    bad.clips[0].file = '../../etc/passwd';
+    expect(() => parseFixtureManifest(JSON.stringify(bad))).toThrow();
+  });
+
   it('throws on a clip with an empty ground-truth transcript', () => {
     const bad = JSON.parse(VALID_MANIFEST) as { clips: { transcript: string }[] };
     bad.clips[0].transcript = '';
