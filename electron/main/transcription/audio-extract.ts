@@ -110,7 +110,7 @@ export function buildAudioExtractArgs(inputPath: string, outputPath: string): st
 }
 
 /** Why an extraction was skipped (a typed, reportable reason — AC-20). */
-export type AudioExtractReason = 'no-audio-stream' | 'decode-failed' | 'timed-out';
+export type AudioExtractReason = 'no-audio-stream' | 'decode-failed' | 'timed-out' | 'scratch-io';
 
 /** A successful decode: the caller now OWNS `wavPath` (see {@link removeExtractedWav}). */
 export interface AudioExtractOk {
@@ -302,10 +302,11 @@ export type AudioExtractor = (request: AudioExtractRequest) => Promise<AudioExtr
  * Build an {@link AudioExtractor} over injected collaborators. A NON-LOCAL (URL)
  * source or an escaping key throws LOUDLY (a programming/contract violation that
  * must never reach this seam, mirroring the importer-deps convention), but a
- * genuine MEDIA failure — corrupt, no audio stream, or a timeout on huge media —
- * is caught and returned as a typed {@link AudioExtractSkip} so one bad item is
- * reported and never aborts a batch (AC-20). Originals are never written; on
- * failure any partial output is cleaned up. On success the caller OWNS the WAV.
+ * genuine runtime failure — a corrupt input, no audio stream, a timeout on huge
+ * media, or a scratch-dir I/O error — is caught and returned as a typed
+ * {@link AudioExtractSkip} so one bad item is reported and never aborts a batch
+ * (AC-20). Originals are never written; on failure any partial output is cleaned
+ * up. On success the caller OWNS the WAV.
  */
 export function createAudioExtractor(options: AudioExtractorOptions): AudioExtractor {
   const run = options.run ?? defaultRunFfmpegToFile;
@@ -315,7 +316,19 @@ export function createAudioExtractor(options: AudioExtractorOptions): AudioExtra
     // Contract violations (URL input / escaping key) throw before any spawn.
     const wavPath = confinedWavPath(options.scratchDir, request.key ?? makeKey());
     const args = buildAudioExtractArgs(request.sourcePath, wavPath);
-    await mkdir(dirname(wavPath), { recursive: true });
+    try {
+      // Creating the confined scratch sub-directory is itself I/O that can fail
+      // (EACCES/EROFS/ENOTDIR/ENOSPC). A failure here is a typed skip, never a
+      // thrown rejection — so one unwritable item can't abort a Promise.all
+      // batch the way a reject would (AC-20). No partial output exists to clean up.
+      await mkdir(dirname(wavPath), { recursive: true });
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'scratch-io',
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
     const timeoutMs = audioExtractTimeoutMs(request.durationSec);
     try {
       await run(options.ffmpegPath, args, { timeoutMs });
