@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **On-device transcription engine — voices turned to text, off the main thread** (card #134, M2 · ADR-0027,
+  **AC-18 / AC-20 / AC-24**): the engine that actually transcribes now exists — it composes the on-device
+  model (#131), the 16 kHz audio extraction (#133), and the bundled `whisper-cli` engine (#129) into one
+  resilient, fully-local pipeline. For a media item it re-verifies the model's checksum before use (AC-24),
+  extracts the audio, then runs `whisper-cli` to produce a typed transcript (full text, per-segment
+  timestamps, and the detected language) — **with no network access whatsoever** (AC-4). Crucially it runs
+  **off the UI thread** on a real worker thread (AC-18), so even a long recording never freezes the window,
+  and whisper is given a duration-scaled time budget so long media finishes instead of being cut off. A batch
+  of recordings is processed one at a time with streamed progress, and it is **resilient by design** (AC-20):
+  a silent, corrupt, unsupported, or unreadable item is quietly skipped with a typed status and the batch
+  carries on rather than aborting, re-running is safe (already-done items are skipped), and **cancelling
+  stops the file in progress immediately** by ending the running `whisper-cli` — not just between files. Your
+  original files are never touched (AC-14). This is the internal engine only: saving transcripts to the
+  catalog and the searchable index (#135) and the opt-in controls and on-screen results (#136) arrive next.
 - **Opt-in transcription model download manager + integrity verification + a scoped egress allowlist**
   (card #131, ADR-0027 Decision 6, **AC-17 / AC-24**): Kawsay can now fetch the on-device transcription
   model (`ggml-small.bin`) **once, on opt-in, over a single checksum-verified download** — and nothing else.

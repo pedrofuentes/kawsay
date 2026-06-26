@@ -19,6 +19,26 @@
 
 <!-- Add new learnings below this line, most recent first -->
 
+### [2026-06-25] whisper.cpp v1.9.1 `-oj` writes a JSON *sidecar file* (not stdout), offsets are ms, and CPU transcription can run slower than realtime
+**Context**: Card #134 (ADR-0027) — building the off-thread `whisper-cli` transcription executor + resilient
+batch that turns an extracted 16 kHz WAV into a typed transcript.
+**Learning**:
+- `whisper-cli -oj -of <prefix>` writes the JSON to **`<prefix>.json` on disk**, *not* to stdout. The parser
+  must read that sidecar file; stdout is only progress/log chatter. Its shape is
+  `{ result: { language }, transcription: [ { offsets: { from, to }, text }, … ] }`, and **offsets are in
+  milliseconds** (the `timestamps` strings are `HH:MM:SS,mmm`). Segment `text` carries a leading space, so
+  trim it; an empty `transcription` array is the natural **no-speech** signal.
+- whisper still emits a lot on stdout/stderr; if you pipe those and never read them, a long file can **dead-lock
+  on a full pipe buffer**. The bounded-spawn seam must actively drain stdout (`child.stdout?.resume()`) and cap
+  stderr, exactly like the ffprobe/thumbnail seams.
+- CPU-only transcription is frequently **slower than realtime**, so the import pipeline's flat 30 s cap is
+  wrong here. #134 uses a duration-scaled budget (`BASE 60 s + 10× media-seconds`, capped at 6 h, 1 h fallback
+  for unknown duration) — deliberately looser than audio-extract's 1× decode budget, so long media is never
+  false-killed (AC-20). The same SIGKILL-on-timeout / SIGKILL-on-cancel logic doubles as the cancel path.
+**Impact**: #135/#136 consume the typed transcript (text + ms segments + language) as-is — no stdout parsing.
+Any future bundled-subprocess that emits structured output to a file should follow the same read-the-sidecar +
+drain-the-pipes pattern, and any CPU-bound subprocess needs a realtime-multiple timeout, not a flat cap.
+
 ### [2026-06-25] Electron `net.request` is the only guard-respecting downloader, and its `IncomingMessage` is event-based (not a Node `Readable`)
 **Context**: Card #131 (ADR-0027 Decision 6) — building the opt-in, checksum-verified model download manager
 that must not bypass the AC-4 zero-egress guard.
