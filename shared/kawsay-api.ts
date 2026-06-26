@@ -9,8 +9,14 @@ import type {
   LibrarySummaryDTO,
   SearchResultDTO,
   TimelinePageDTO,
+  TranscriptionSnapshotDTO,
+  TranscriptionStartResultDTO,
 } from '@shared/ipc/schemas';
-import type { ImportProgressEvent, ModelDownloadProgressEvent } from '@shared/ipc/events';
+import type {
+  ImportProgressEvent,
+  ModelDownloadProgressEvent,
+  TranscriptionProgressEvent,
+} from '@shared/ipc/events';
 import type { SourceType } from '@shared/catalog';
 
 export interface KawsayAPI {
@@ -80,6 +86,36 @@ export interface KawsayAPI {
    * unsubscribe function. Mirrors {@link onImportProgress}.
    */
   onModelDownloadProgress(listener: (event: ModelDownloadProgressEvent) => void): () => void;
+
+  /**
+   * Start the gated transcription run over the library's audio/video (#157). This
+   * is the CALLER-INITIATED capability only — it is DOUBLY gated (refuses unless
+   * the user opted in AND the model is present-and-verified) and never auto-runs.
+   * Idempotent: items already transcribed are skipped. Resolves with whether a run
+   * `started`, there was nothing to do (`idle`), or it was `refused` (with a typed
+   * reason) plus the corpus counts. Per-item progress arrives via
+   * {@link onTranscriptionProgress}; originals are never touched (AC-14) and the
+   * whole run makes no network call (AC-4).
+   */
+  startTranscription(): Promise<TranscriptionStartResultDTO>;
+
+  /**
+   * Query the overall transcription run state (idle/running/complete + counts +
+   * the last settled item), so the UI can reflect it on launch.
+   */
+  getTranscriptionStatus(): Promise<TranscriptionSnapshotDTO>;
+
+  /**
+   * Cooperatively cancel the in-flight transcription run; resolves whether one was
+   * running. Whatever already completed stays persisted.
+   */
+  cancelTranscription(): Promise<{ cancelled: boolean }>;
+
+  /**
+   * Subscribe to the per-item transcription progress stream; returns an
+   * unsubscribe function. Mirrors {@link onImportProgress}.
+   */
+  onTranscriptionProgress(listener: (event: TranscriptionProgressEvent) => void): () => void;
 }
 
 /**
@@ -99,7 +135,14 @@ export type {
   SearchResultDTO,
   TimelinePageDTO,
   ImportSummaryDTO,
+  TranscriptionSnapshotDTO,
+  TranscriptionStartResultDTO,
+  TranscriptionCountsDTO,
+  TranscriptionRunStateDTO,
+  TranscriptionItemStatusDTO,
+  TranscriptionRefusalReasonDTO,
 } from '@shared/ipc/schemas';
 export type { ImportProgressEvent } from '@shared/ipc/events';
 export type { ModelDownloadProgressEvent } from '@shared/ipc/events';
+export type { TranscriptionProgressEvent } from '@shared/ipc/events';
 export type { SourceType, MediaType } from '@shared/catalog';
