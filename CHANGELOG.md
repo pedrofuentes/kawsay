@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Opt-in transcription model download manager + integrity verification + a scoped egress allowlist**
+  (card #131, ADR-0027 Decision 6, **AC-17 / AC-24**): Kawsay can now fetch the on-device transcription
+  model (`ggml-small.bin`) **once, on opt-in, over a single checksum-verified download** — and nothing else.
+  The download runs in the **main process through Electron's `net.request` on the guarded session**, so it
+  flows through the very same `webRequest` kill-switch that denies all other egress (a Node `http`/`https`
+  downloader would have silently bypassed it). The model is **streamed to a temp file**, is **resumable**
+  (HTTP `Range`; it re-resolves the pinned origin URL when the signed CDN link expires mid-resume), reports
+  typed progress and terminal states, and fails **calmly and retryably** when offline, on a network error,
+  or when the disk is full — never crashing. After download it is **SHA-256- and size-verified against
+  pinned values** and only then **atomically renamed** into place; a mismatch deletes the file and allows a
+  clean refetch, and a `verifyModelOnDisk()` re-check guards against on-disk tampering before each use
+  (AC-24). The **network guard's egress allowlist** is extended **narrowly and centrally** to permit
+  **exactly** the pinned model `GET` (the origin URL plus the `release-assets.githubusercontent.com`
+  redirect host, `GET` only, empty upload body) and to **deny everything else** — a `POST` to the same host,
+  a `GET` to a different path/host, and every non-model URL all stay denied; the renderer CSP
+  (`connect-src 'none'`) is untouched. The capability is exposed over a gated main↔renderer IPC channel
+  (start the download, stream progress, query `isModelReady`) but is **never auto-triggered** — the opt-in
+  consent UI is card #132 and the worker that consumes the verified model is card #134. **AC-4 (zero egress)
+  is preserved**: with no opt-in, the app still makes no network connections.
 - **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new
   `.github/workflows/release.yml` builds Kawsay on native **macOS** and **Windows** runners and uploads the
   installers — the macOS `.dmg`/`.zip` (Apple Silicon + Intel) and the Windows `.exe` (NSIS) — as assets of a
