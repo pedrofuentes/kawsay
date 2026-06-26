@@ -12,6 +12,12 @@ out/
 /.whisper-build/
 /resources/whisper/*/
 
+# AC-4 OS-deny whisper harness (ADR-0027 / #138): the real-binary run output is
+# ephemeral and the downloaded jfk.wav + tiny model fixtures are cached in CI,
+# never committed.
+/.ac4-whisper-*/
+/.harness-fixtures/
+
 # Test coverage reports
 coverage/
 

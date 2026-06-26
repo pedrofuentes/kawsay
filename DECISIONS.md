@@ -248,17 +248,34 @@ across macOS (arm64+x64) + Windows — without ever moving the user's memories o
    is gated by opt-in (AC-22), verified by hard-coded SHA-256 (AC-24), and confined to the **exact pinned URL(s)**
    (GET + empty body) by the `network-guard` `webRequest` allowlist (Decision 6d). **Net statement: user-data egress
    = 0, forever; app-model egress = at most one optional, data-free fetch.**
-   **(c) Proof status for the native subprocess (unchanged red-team finding — still a gap to close):** the existing
-   in-process `net`/`dgram`/`dns` spies + `nock` (`tests/ac4/egress-spies.ts`) prove the **main process only** and
-   **cannot observe a separate OS process** (`tests/ac4/egress-subprocess.mjs`). By the same token they observe only
-   **Node** outbound (they patch `net.Socket.prototype`/`dgram`/`node:dns`/`nock`): the opt-in model download
-   deliberately uses **Electron `net.request` over Chromium's stack** (Decision 6d), so it too is **invisible to
-   these spies** and is asserted instead at the `webRequest` allowlist + the OS firewall — not the Node spies. The
-   **OS-level deny firewall** is authoritative for subprocesses but is **Linux-only**
-   (`.github/workflows/ac4-egress.yml` is `runs-on: ubuntu-latest`), while Kawsay ships **macOS arm64/x64 + Windows
-   x64** — so a macOS/Windows OS-deny harness exercising the **real** `whisper-cli` binary is **net-new** work
-   (**M2-7**, HUMAN-REQUIRED). **AC-17** is split into a static/packaging guarantee (provable now) + a runtime
-   OS-deny assertion (gated on M2-7).
+   **(c) Proof status for the native subprocess — net-new OS-deny harness now DELIVERED (M2-7), with one documented
+   residual gap.** The existing in-process `net`/`dgram`/`dns` spies + `nock` (`tests/ac4/egress-spies.ts`) prove the
+   **main process only** and **cannot observe a separate OS process** (`tests/ac4/egress-subprocess.mjs`). By the same
+   token they observe only **Node** outbound (they patch `net.Socket.prototype`/`dgram`/`node:dns`/`nock`): the opt-in
+   model download deliberately uses **Electron `net.request` over Chromium's stack** (Decision 6d), so it too is
+   **invisible to these spies** and is asserted instead at the `webRequest` allowlist + the OS firewall — not the Node
+   spies. The **OS-level deny firewall** is authoritative for subprocesses; it was previously **Linux-only**
+   (`.github/workflows/ac4-egress.yml` was `runs-on: ubuntu-latest`) while Kawsay ships **macOS arm64/x64 + Windows
+   x64**. **M2-7 closes that gap:** `ac4-egress.yml` now runs a **real OS-level outbound DENY on all three platforms**
+   and, on macOS + Windows, runs the **real, shipped `whisper-cli`** on a fixture WAV+model **under the deny** and
+   asserts it **still transcribes** (JFK's sample) — proof the on-device transcription subprocess **needs, and makes,
+   zero egress**:
+   - **Linux** — `iptables`/`ip6tables` default-DROP `OUTPUT` (loopback only), driving the main/worker/subprocess
+     positive controls at a routable target (unchanged).
+   - **macOS** — a kernel **Seatbelt** sandbox (`sandbox-exec -f tests/ac4/macos-deny.sb`, `(deny network*)`) wraps the
+     whole process tree; a routable probe is asserted blocked, then the real `whisper-cli` transcribes with all network
+     denied. `sandbox-exec` needs no sudo/firewall service, so it runs reliably on hosted runners.
+   - **Windows** — a **program-scoped** Windows Firewall outbound-**Block** on exactly the test `node.exe` **and**
+     `whisper-cli.exe` (never a global block, which would sever the runner's own control channel); the rules are
+     asserted present + effective, then the real `whisper-cli` transcribes with all network denied.
+   **Residual gap (honest, for cofounder sign-off):** this OS layer denies **all** egress, not
+   "**all-but-the-pinned-model-host**." macOS Seatbelt's `remote ip` filter accepts only `*`/`localhost` (never an
+   arbitrary remote host), and a global Windows outbound-block would cut the runner itself — so the **only-permitted-GET**
+   model-download assertion is **NOT** made at the macOS/Windows OS layer. It remains proven by the **`webRequest`
+   exact-URL allowlist** (`network-guard` unit tests, Decision 6d) **+** the **Linux deny-all backstop**. **AC-17** is
+   therefore satisfied on both halves: the static/packaging guarantee (provable already) **+** the runtime OS-deny
+   assertion (now delivered on all three platforms against the real binary), with the only-pinned-host carve-out scoped
+   at the allowlist layer rather than the per-process OS sandbox.
    **(d) Harness change this revision forces (🚨 HUMAN-REQUIRED):** because the model fetch is now a *permitted*
    egress, the AC-4 harness must move from "**deny all**" to "**deny all except a data-free `GET` to the exact pinned
    model URL(s)**" — but **at the right layer**. Concretely:
@@ -383,8 +400,10 @@ bundled, **built from source in CI**" framing **favors P1**:
   non-egressing and CI-enforced.
 - **AC-4 is preserved in spirit and *narrowed* in letter:** zero **user-data** egress stays absolute and
   CI-enforced (memories never leave); the one permitted outbound is the opt-in, checksum-verified model fetch.
-  AC-4 is now **bound by AC-17** (whose **runtime** half is gated on the net-new OS-deny harness, M2-7; the
-  static/packaging half provable now) and the new **AC-24** (download integrity/resilience). The off-thread
+  AC-4 is now **bound by AC-17** (whose **runtime** half is **delivered by the net-new OS-deny harness, M2-7** — a real
+  OS-level deny on Linux + macOS + Windows exercising the real `whisper-cli`, with the only-pinned-host carve-out scoped
+  at the `webRequest` allowlist; the static/packaging half provable already) and the new **AC-24** (download
+  integrity/resilience). The off-thread
   guarantee (AC-9) extends to **AC-18**; audio/video become first-class **searchable** via **AC-19** (MISSION §4's
   top candidate realized); resilience + **long-media** by **AC-20**; multilingual accuracy by **AC-21**; **user
   consent/opt-in** by **AC-22**; **license attribution/NOTICES** by **AC-23** (PRD addendum).
@@ -425,8 +444,9 @@ bundled, **built from source in CI**" framing **favors P1**:
    publish-time `hash == pinned`-checked** *before* the downloader increment, since nothing publishes
    `ggml-small.bin` today.
 5. **Heavy-dependency / unsigned-binary posture** — accept a per-arch built-in-CI **unsigned** `whisper-cli` binary
-   whose macOS/Windows zero-egress is provable only by-construction until the net-new OS-firewall harness (M2-7)
-   lands.
+   whose macOS/Windows runtime zero-egress is now **proven by the net-new OS-firewall harness (M2-7)** — the real
+   binary transcribes under a kernel deny on each platform — with the only-pinned-host carve-out scoped at the
+   `webRequest` allowlist (documented residual gap), not just by-construction.
 
 **Remaining open items for the red-team / build:** the exact Release tag + asset URL to pin (and whether to re-host
 vs fetch Hugging Face directly); the **model-asset publication** workflow + its publish-time `hash == pinned` gate

@@ -315,13 +315,18 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
     app egress anywhere (ADR-0027 Decision 6d), which is **not** on the transcription path. The download is issued
     via **Electron `net.request` on the guarded session** so it actually flows through that `webRequest` chokepoint
     (a Node-primitive downloader would bypass `webRequest` and is **not** what is specified).
-  - **(b) Runtime egress assertion (net-new harness):** the **real** `whisper-cli` subprocess is exercised under an
-    **OS-level deny firewall** and records **zero** egress. The existing in-process `net`/`dgram`/`dns` spies prove
-    the **main process only** and **cannot observe a separate OS process**, and the existing OS-deny firewall is
-    **Linux-only** (`ac4-egress.yml` is `runs-on: ubuntu-latest`) while Kawsay ships **macOS arm64/x64 + Windows
-    x64** — so a macOS/Windows OS-deny harness around the real binary is **net-new work** (M2-7, HUMAN-REQUIRED: it
-    edits the AC-4 CI workflow). *(The prior claim that the existing harness "already covers the subprocess and
-    extends directly" is withdrawn.)*
+  - **(b) Runtime egress assertion (net-new OS-deny harness — DELIVERED, M2-7):** the **real**, shipped `whisper-cli`
+    subprocess is run on a fixture WAV+model **under a real OS-level network DENY** and asserted to **still transcribe**
+    (it produces JFK's sample words with all egress denied) — proof transcription **needs, and makes, zero egress**. The
+    in-process `net`/`dgram`/`dns` spies prove the **main process only** and **cannot observe a separate OS process**, so
+    `ac4-egress.yml` — previously **Linux-only** (`runs-on: ubuntu-latest`) while Kawsay ships **macOS arm64/x64 +
+    Windows x64** — now enforces a real OS deny on **all three** platforms: **Linux** `iptables` default-DROP, **macOS** a
+    kernel **Seatbelt** sandbox (`sandbox-exec`, `(deny network*)`), and **Windows** a **program-scoped** firewall
+    outbound-Block on the test `node.exe` + `whisper-cli.exe`; each first proves the deny is active (a routable probe is
+    blocked) so a green run can't be a silent no-op. **Residual gap (honest):** the OS layer denies **all** egress, not
+    "all-but-the-pinned-model-host" (macOS Seatbelt can't allow-list a remote host; a global Windows block would sever
+    the runner) — so the **only-permitted-GET** model fetch is proven at the **`webRequest` exact-URL allowlist**
+    (unit-tested) **+** the **Linux deny-all backstop**, not at the macOS/Windows OS layer.
 - **Test kind:** integration (static packaging checks) **+** the net-new OS-deny egress harness. *(Extends AC-4 —
   whose user-data zero-egress promise may never be weakened; MISSION §5, NEVER list. A **cloud-STT** approach fails
   this AC by definition — it ships the user's voice off-device. The **opt-in model download** is the one permitted,

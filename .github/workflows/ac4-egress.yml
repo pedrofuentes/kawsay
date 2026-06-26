@@ -1,16 +1,28 @@
-# AC-4 zero-network-egress gate (ARCHITECTURE §6.2 / PRD AC-4).
+# AC-4 zero-network-egress gate (ARCHITECTURE §6.2 / PRD AC-4 + AC-17b).
 #
-# The AUTHORITATIVE proof of the local-only invariant. On a Linux runner this job
-# enables an outbound-firewall DENY (loopback only), ASSERTS the deny rule is
-# actually in force (so a green run can never be a silent no-op), then drives the
-# positive controls from the main process, a worker thread, and a simulated
-# ffmpeg subprocess at a routable target — catching any real OS-level egress the
-# in-process Vitest spies cannot see across process boundaries.
+# The AUTHORITATIVE proof of the local-only invariant, enforced by a REAL
+# OS-level outbound DENY on every shipped platform and asserted to be in force
+# (so a green run can never be a silent no-op):
 #
-# Scope note: a fully-portable per-OS firewall is out of scope here, so the
-# OS-level deny is implemented authoritatively on Linux. macOS/Windows rely on
-# the in-process spies + nock (run in the main `ci.yml` test matrix, owned by
-# another card); this job is the kernel-enforced backstop for the invariant.
+#   • Linux   — iptables/ip6tables default-DROP OUTPUT (loopback only).
+#   • macOS   — sandbox-exec Seatbelt `(deny network*)` around the process tree.
+#   • Windows — program-scoped Windows Firewall outbound-Block on node + whisper.
+#
+# Each job first proves the deny is active (probes a routable address that MUST
+# be blocked), then drives the positive controls — main process, worker thread,
+# ffmpeg-style subprocess — at a routable target, catching any real OS-level
+# egress the in-process Vitest spies cannot see across process boundaries. The
+# macOS + Windows jobs ADDITIONALLY run the REAL, shipped whisper-cli on a
+# fixture WAV+model UNDER the deny and assert it STILL transcribes JFK's words
+# (M2-7, AC-17b): proof the on-device transcription subprocess needs — and makes
+# — ZERO egress, not just that the in-process spies see none.
+#
+# Residual gap (documented in DECISIONS.md ADR-0027): this OS layer denies ALL
+# egress, not "all-but-the-pinned-model-host". Seatbelt cannot allow-list a
+# remote host and a global Windows block would sever the runner's own control
+# channel, so the only-pinned-GET model download stays proven at the webRequest
+# allowlist (unit-tested) + the Linux deny-all backstop, not at the macOS/Windows
+# OS layer.
 name: AC-4 zero-egress
 
 on:
@@ -110,3 +122,207 @@ jobs:
           sudo iptables -F OUTPUT || true
           sudo ip6tables -P OUTPUT ACCEPT || true
           sudo ip6tables -F OUTPUT || true
+
+  os-deny-macos:
+    name: macOS sandbox-exec network-DENY (real whisper-cli)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      # Pin whisper.cpp identically to ci.yml so the cache key matches and the
+      # already-built binary is restored instead of recompiled.
+      WHISPER_CPP_REPO: ggml-org/whisper.cpp
+      WHISPER_CPP_REF: v1.9.1
+      WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
+      # A routable public endpoint that WOULD connect without the sandbox, so a
+      # blocked attempt proves the Seatbelt deny is the thing stopping egress.
+      KAWSAY_AC4_PUBLIC_HOST: 1.1.1.1
+      KAWSAY_AC4_PUBLIC_PORT: '443'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      # Everything that needs the network (registry, source, fixtures) runs
+      # BEFORE the sandbox wraps the assertions.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Defense-in-depth + the unit-tested verdict logic the runner mirrors.
+      - name: Run in-process AC-4 suite
+        run: pnpm test tests/ac4
+
+      - name: Cache compiled whisper-cli
+        id: whisper-cache
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: resources/whisper
+          key: whisper-cli-v1-${{ runner.os }}-${{ env.WHISPER_CPP_REF }}-${{ env.WHISPER_CPP_COMMIT }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}
+
+      - name: Build whisper-cli from source
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-whisper-cli.sh
+
+      - name: Verify staged binaries
+        run: |
+          set -euo pipefail
+          for f in resources/whisper/mac-arm64/whisper-cli resources/whisper/mac-x64/whisper-cli; do
+            [ -s "$f" ] || { echo "missing/empty: $f" >&2; exit 1; }
+            echo "ok: $f ($(wc -c <"$f") bytes)"
+          done
+
+      - name: Cache egress fixtures (jfk.wav + tiny model)
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: .harness-fixtures
+          key: ac4-egress-fixtures-v1-${{ env.WHISPER_CPP_COMMIT }}-tiny
+
+      - name: Fetch egress fixtures (sha256-pinned)
+        run: ./scripts/fetch-egress-fixtures.sh .harness-fixtures
+
+      # From here every assertion runs UNDER the Seatbelt deny. sandbox-exec needs
+      # no sudo/firewall service and sandboxes the whole process tree, so the
+      # spawned whisper-cli, worker threads and subprocesses all inherit the deny.
+      - name: Self-check — real outbound egress is blocked
+        run: sandbox-exec -f tests/ac4/macos-deny.sb node tests/ac4/assert-egress-blocked.mjs
+
+      - name: AC-4 OS-deny e2e (main + worker + subprocess)
+        env:
+          KAWSAY_AC4_TARGET_HOST: 1.1.1.1
+          KAWSAY_AC4_TARGET_PORT: '443'
+        run: sandbox-exec -f tests/ac4/macos-deny.sb node tests/ac4/egress-e2e.mjs
+
+      - name: Real whisper-cli transcribes with ALL network denied
+        run: >-
+          sandbox-exec -f tests/ac4/macos-deny.sb
+          node tests/ac4/assert-whisper-no-egress.mjs
+          --model .harness-fixtures/ggml-tiny.bin
+          --wav .harness-fixtures/jfk.wav
+          --expect "ask not what your country"
+
+  os-deny-windows:
+    name: Windows Firewall outbound-DENY (real whisper-cli)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      WHISPER_CPP_REPO: ggml-org/whisper.cpp
+      WHISPER_CPP_REF: v1.9.1
+      WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
+      KAWSAY_AC4_PUBLIC_HOST: 1.1.1.1
+      KAWSAY_AC4_PUBLIC_PORT: '443'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run in-process AC-4 suite
+        run: pnpm test tests/ac4
+
+      - name: Cache compiled whisper-cli
+        id: whisper-cache
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: resources/whisper
+          key: whisper-cli-v1-${{ runner.os }}-${{ env.WHISPER_CPP_REF }}-${{ env.WHISPER_CPP_COMMIT }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}
+
+      - name: Build whisper-cli from source
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: ./scripts/build-whisper-cli.sh
+
+      - name: Verify staged binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          f="resources/whisper/win-x64/whisper-cli.exe"
+          [ -s "$f" ] || { echo "missing/empty: $f" >&2; exit 1; }
+          echo "ok: $f ($(wc -c <"$f") bytes)"
+
+      - name: Cache egress fixtures (jfk.wav + tiny model)
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: .harness-fixtures
+          key: ac4-egress-fixtures-v1-${{ env.WHISPER_CPP_COMMIT }}-tiny
+
+      - name: Fetch egress fixtures (sha256-pinned)
+        shell: bash
+        run: ./scripts/fetch-egress-fixtures.sh .harness-fixtures
+
+      # A PROGRAM-scoped outbound block on exactly the test node.exe AND the real
+      # whisper-cli.exe — NOT a global block, which would sever the runner's own
+      # control channel (Runner.Worker.exe is a separate process, so it stays
+      # connected). This is the Windows parallel of the per-process Seatbelt deny.
+      - name: Apply program-scoped Windows Firewall outbound-block
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-NetFirewallProfile -All -Enabled True
+          $nodePath = (Get-Command node).Source
+          $whisperPath = (Resolve-Path 'resources/whisper/win-x64/whisper-cli.exe').Path
+          Write-Host "blocking node:    $nodePath"
+          Write-Host "blocking whisper: $whisperPath"
+          New-NetFirewallRule -DisplayName 'AC4-Deny-Node' -Direction Outbound `
+            -Program $nodePath -Action Block -Profile Any -Enabled True | Out-Null
+          New-NetFirewallRule -DisplayName 'AC4-Deny-Whisper' -Direction Outbound `
+            -Program $whisperPath -Action Block -Profile Any -Enabled True | Out-Null
+
+      - name: Assert the block rules are present (fail the job if not)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rules = Get-NetFirewallRule -DisplayName 'AC4-Deny-Node', 'AC4-Deny-Whisper'
+          if ($rules.Count -ne 2) {
+            Write-Error "expected 2 AC4 block rules, found $($rules.Count)"
+            exit 1
+          }
+          foreach ($r in $rules) {
+            if ($r.Action -ne 'Block' -or $r.Direction -ne 'Outbound' -or $r.Enabled -ne 'True') {
+              Write-Error "rule $($r.DisplayName) is not an enabled outbound Block"
+              exit 1
+            }
+          }
+          Write-Host "ok: both outbound Block rules are enabled"
+
+      # The runner's node.exe is now blocked, so the self-check + e2e prove the
+      # firewall actually stops real egress (a reachable target would FAIL them).
+      - name: Self-check — real outbound egress is blocked
+        run: node tests/ac4/assert-egress-blocked.mjs
+
+      - name: AC-4 OS-deny e2e (main + worker + subprocess)
+        env:
+          KAWSAY_AC4_TARGET_HOST: 1.1.1.1
+          KAWSAY_AC4_TARGET_PORT: '443'
+        run: node tests/ac4/egress-e2e.mjs
+
+      - name: Real whisper-cli transcribes with ALL network denied
+        run: >-
+          node tests/ac4/assert-whisper-no-egress.mjs
+          --cli resources/whisper/win-x64/whisper-cli.exe
+          --model .harness-fixtures/ggml-tiny.bin
+          --wav .harness-fixtures/jfk.wav
+          --expect "ask not what your country"
+
+      - name: Remove firewall rules
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-NetFirewallRule -DisplayName 'AC4-Deny-Node' -ErrorAction SilentlyContinue
+          Remove-NetFirewallRule -DisplayName 'AC4-Deny-Whisper' -ErrorAction SilentlyContinue
