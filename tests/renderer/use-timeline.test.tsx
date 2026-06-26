@@ -95,6 +95,41 @@ describe('useTimeline', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('retries the next page from an error state, keeping the items already loaded (#101)', async () => {
+    const first = [makeItemCard({ id: '11111111-2222-4333-8444-555555550001' })];
+    const second = [makeItemCard({ id: '11111111-2222-4333-8444-555555550002' })];
+    const getTimeline = vi
+      .fn()
+      .mockResolvedValueOnce(page({ items: first, nextCursor: 'cursor-2' }))
+      .mockRejectedValueOnce(new Error('mid-scroll glitch'))
+      .mockResolvedValueOnce(page({ items: second, nextCursor: null }));
+    const api = makeFakeApi({ getTimeline });
+    const { result } = renderHook(() => useTimeline(), { wrapper: wrapper(api) });
+
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.hasMore).toBe(true);
+
+    // A later page fails: the error is surfaced but the first page is kept and the
+    // cursor stays put so the same page can be retried.
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.hasMore).toBe(true);
+
+    // loadMore from the error state retries that same next page and recovers.
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.items).toHaveLength(2));
+    expect(result.current.status).toBe('ready');
+    expect(result.current.error).toBeNull();
+    expect(getTimeline).toHaveBeenCalledTimes(3);
+    expect(getTimeline.mock.calls[1]?.[0]).toMatchObject({ cursor: 'cursor-2' });
+    expect(getTimeline.mock.calls[2]?.[0]).toMatchObject({ cursor: 'cursor-2' });
+  });
+
   it('tolerates a missing bridge (browser preview) without throwing or fetching', () => {
     const { result } = renderHook(() => useTimeline(), { wrapper: wrapper(undefined) });
     expect(result.current.status).toBe('unavailable');

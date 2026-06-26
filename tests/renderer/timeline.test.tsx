@@ -174,6 +174,54 @@ describe('Timeline — virtualization at scale (AC-8)', () => {
   });
 });
 
+describe('Timeline — mid-scroll pagination failure stays non-silent and recoverable (#101)', () => {
+  it('surfaces a gentle retry affordance when a later page fails, keeping loaded memories', async () => {
+    const getTimeline = vi
+      .fn()
+      .mockResolvedValueOnce(page({ items: seededItems(4), nextCursor: 'cursor-2' }))
+      .mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
+    const api = makeFakeApi({ getTimeline });
+    renderTimeline(api);
+
+    // The first page renders, then the auto-streamed next page rejects.
+    expect(await screen.findByText('Memory number 0')).toBeInTheDocument();
+    await waitFor(() => expect(getTimeline).toHaveBeenCalledTimes(2));
+
+    // The failure is announced calmly (plain language, never a raw code) with a
+    // way to recover — not a silent dead-stop.
+    const alert = await screen.findByRole('alert');
+    expect(alert).not.toHaveTextContent(/SQLITE_BUSY/);
+    expect(within(alert).getByRole('button', { name: /try again/i })).toBeInTheDocument();
+
+    // Already-loaded memories are never lost.
+    expect(screen.getByText('Memory number 0')).toBeInTheDocument();
+  });
+
+  it('retries the failed page on demand, clears the error, and appends the recovered memories', async () => {
+    const recovered = makeItemCard({
+      id: 'recovered',
+      title: 'Recovered later memory',
+      captureDate: '2020-01-01T12:00:00.000Z',
+    });
+    const getTimeline = vi
+      .fn()
+      .mockResolvedValueOnce(page({ items: seededItems(4), nextCursor: 'cursor-2' }))
+      .mockRejectedValueOnce(new Error('temporary glitch'))
+      .mockResolvedValueOnce(page({ items: [recovered], nextCursor: null }));
+    const api = makeFakeApi({ getTimeline });
+    renderTimeline(api);
+
+    const alert = await screen.findByRole('alert');
+    await userEvent.click(within(alert).getByRole('button', { name: /try again/i }));
+
+    expect(await screen.findByText('Recovered later memory')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // The earlier page is still present, and the retry re-requested the same cursor.
+    expect(screen.getByText('Memory number 0')).toBeInTheDocument();
+    expect(getTimeline.mock.calls[2]?.[0]).toMatchObject({ cursor: 'cursor-2' });
+  });
+});
+
 describe('Timeline — untrusted catalog data is rendered as escaped text (security)', () => {
   it('never interprets markup smuggled into a caption or filename', async () => {
     const malicious = '<script>window.__xss__=1</script><img src=x onerror="window.__xss__=1">';
