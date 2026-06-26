@@ -9,13 +9,17 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
+  TRANSCRIPTION_START,
+  TRANSCRIPTION_STATUS,
   ipcContract,
 } from '@shared/ipc/contract';
 import {
   IMPORT_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
+  TRANSCRIPTION_PROGRESS,
   ipcEventContract,
 } from '@shared/ipc/events';
 import { itemCardSchema } from '@shared/ipc/schemas';
@@ -71,7 +75,9 @@ describe('ipcContract — library:create', () => {
     expect(resOk(LIBRARY_CREATE, { ...librarySummary, schemaVersion: -1 })).toBe(false);
     expect(resOk(LIBRARY_CREATE, { ...librarySummary, name: '' })).toBe(false);
     // The internal catalog filesystem path must never leak to the renderer.
-    expect(resOk(LIBRARY_CREATE, { ...librarySummary, catalogPath: '/x/catalog.sqlite3' })).toBe(false);
+    expect(resOk(LIBRARY_CREATE, { ...librarySummary, catalogPath: '/x/catalog.sqlite3' })).toBe(
+      false,
+    );
   });
 });
 
@@ -98,7 +104,12 @@ describe('ipcContract — catalog:timeline', () => {
   it('validates a TimelinePage response (items + nullable cursor)', () => {
     expect(resOk(CATALOG_TIMELINE, { items: [itemCard], nextCursor: 'next' })).toBe(true);
     expect(resOk(CATALOG_TIMELINE, { items: [], nextCursor: null })).toBe(true);
-    expect(resOk(CATALOG_TIMELINE, { items: [{ ...itemCard, mediaType: 'hologram' }], nextCursor: null })).toBe(false);
+    expect(
+      resOk(CATALOG_TIMELINE, {
+        items: [{ ...itemCard, mediaType: 'hologram' }],
+        nextCursor: null,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -162,9 +173,12 @@ describe('itemCardSchema — the renderer-safe tile carries its source (AC-7)', 
     void hasThumbnail;
     expect(itemCardSchema.safeParse(withoutHint).success).toBe(false);
     // …and strictly a boolean, never a path or other smuggled value.
-    expect(itemCardSchema.safeParse({ ...base, source: 'folder', hasThumbnail: 'yes' }).success).toBe(false);
     expect(
-      itemCardSchema.safeParse({ ...base, source: 'folder', hasThumbnail: '/var/lib/x.webp' }).success,
+      itemCardSchema.safeParse({ ...base, source: 'folder', hasThumbnail: 'yes' }).success,
+    ).toBe(false);
+    expect(
+      itemCardSchema.safeParse({ ...base, source: 'folder', hasThumbnail: '/var/lib/x.webp' })
+        .success,
     ).toBe(false);
   });
 });
@@ -250,7 +264,9 @@ describe('ipcContract — dialog:openDirectory / dialog:openFile (W2 native pick
         // are rejected outright, not silently stripped.
         expect(reqOk(channel, { properties: ['openFile'] })).toBe(false);
         expect(reqOk(channel, { title: 'ok', message: 'evil' })).toBe(false);
-        expect(reqOk(channel, { title: 'ok', filters: [{ name: 'all', extensions: ['*'] }] })).toBe(false);
+        expect(reqOk(channel, { title: 'ok', filters: [{ name: 'all', extensions: ['*'] }] })).toBe(
+          false,
+        );
         expect(reqOk(channel, { rogue: true })).toBe(false);
       });
 
@@ -321,11 +337,61 @@ describe('ipcEventContract — import:progress', () => {
   });
 
   it('rejects a bad phase, negative counts, missing jobId, or unknown keys', () => {
-    expect(schema.safeParse({ jobId: UUID, phase: 'teleporting', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
-    expect(schema.safeParse({ jobId: UUID, phase: 'emit', processed: -1, total: null, message: null, summary: null, error: null }).success).toBe(false);
-    expect(schema.safeParse({ phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
-    expect(schema.safeParse({ jobId: 'nope', phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
-    expect(schema.safeParse({ jobId: UUID, phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null, rogue: true }).success).toBe(false);
+    expect(
+      schema.safeParse({
+        jobId: UUID,
+        phase: 'teleporting',
+        processed: 1,
+        total: null,
+        message: null,
+        summary: null,
+        error: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        jobId: UUID,
+        phase: 'emit',
+        processed: -1,
+        total: null,
+        message: null,
+        summary: null,
+        error: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        phase: 'emit',
+        processed: 1,
+        total: null,
+        message: null,
+        summary: null,
+        error: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        jobId: 'nope',
+        phase: 'emit',
+        processed: 1,
+        total: null,
+        message: null,
+        summary: null,
+        error: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        jobId: UUID,
+        phase: 'emit',
+        processed: 1,
+        total: null,
+        message: null,
+        summary: null,
+        error: null,
+        rogue: true,
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -348,6 +414,124 @@ describe('ipcContract — transcription:downloadModel / transcription:modelStatu
     expect(resOk(TRANSCRIPTION_MODEL_STATUS, { ready: false })).toBe(true);
     expect(resOk(TRANSCRIPTION_MODEL_STATUS, { ready: 'yes' })).toBe(false);
     expect(resOk(TRANSCRIPTION_MODEL_STATUS, {})).toBe(false);
+  });
+});
+
+describe('ipcContract — transcription:start / status / cancel (#157, gated run)', () => {
+  const counts = { total: 3, transcribed: 1, failed: 0, skipped: 1, inFlight: 1 };
+
+  it('start takes an empty request and answers with an outcome + reason + counts', () => {
+    expect(reqOk(TRANSCRIPTION_START, {})).toBe(true);
+    expect(reqOk(TRANSCRIPTION_START, { force: true })).toBe(false);
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'started', reason: null, counts })).toBe(true);
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'idle', reason: null, counts })).toBe(true);
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'refused', reason: 'not-opted-in', counts })).toBe(
+      true,
+    );
+    expect(
+      resOk(TRANSCRIPTION_START, { outcome: 'refused', reason: 'model-not-ready', counts }),
+    ).toBe(true);
+  });
+
+  it('start rejects an unknown outcome, an unknown refusal reason, or malformed counts', () => {
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'exploded', reason: null, counts })).toBe(false);
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'refused', reason: 'because', counts })).toBe(
+      false,
+    );
+    expect(
+      resOk(TRANSCRIPTION_START, {
+        outcome: 'started',
+        reason: null,
+        counts: { total: -1, transcribed: 0, failed: 0, skipped: 0, inFlight: 0 },
+      }),
+    ).toBe(false);
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'started', reason: null })).toBe(false);
+  });
+
+  it('status returns the run state and counts', () => {
+    expect(reqOk(TRANSCRIPTION_STATUS, {})).toBe(true);
+    expect(resOk(TRANSCRIPTION_STATUS, { state: 'idle', counts, lastItem: null })).toBe(true);
+    expect(
+      resOk(TRANSCRIPTION_STATUS, {
+        state: 'running',
+        counts,
+        lastItem: { id: UUID, status: 'transcribed' },
+      }),
+    ).toBe(true);
+    expect(
+      resOk(TRANSCRIPTION_STATUS, {
+        state: 'complete',
+        counts,
+        lastItem: { id: UUID, status: 'skipped' },
+      }),
+    ).toBe(true);
+    expect(resOk(TRANSCRIPTION_STATUS, { state: 'teleporting', counts, lastItem: null })).toBe(
+      false,
+    );
+    expect(
+      resOk(TRANSCRIPTION_STATUS, {
+        state: 'idle',
+        counts,
+        lastItem: { id: 'nope', status: 'transcribed' },
+      }),
+    ).toBe(false);
+    expect(
+      resOk(TRANSCRIPTION_STATUS, {
+        state: 'idle',
+        counts,
+        lastItem: { id: UUID, status: 'pending' },
+      }),
+    ).toBe(false);
+  });
+
+  it('cancel takes an empty request and answers with a cancelled flag', () => {
+    expect(reqOk(TRANSCRIPTION_CANCEL, {})).toBe(true);
+    expect(resOk(TRANSCRIPTION_CANCEL, { cancelled: true })).toBe(true);
+    expect(resOk(TRANSCRIPTION_CANCEL, { cancelled: 'yes' })).toBe(false);
+  });
+});
+
+describe('ipcEventContract — transcription:progress (#157, polite per-item stream)', () => {
+  const schema = ipcEventContract[TRANSCRIPTION_PROGRESS];
+  const counts = { total: 2, transcribed: 1, failed: 0, skipped: 0, inFlight: 1 };
+
+  it('accepts a running snapshot carrying the last settled item', () => {
+    expect(
+      schema.safeParse({ state: 'running', counts, lastItem: { id: UUID, status: 'transcribed' } })
+        .success,
+    ).toBe(true);
+  });
+
+  it('accepts an idle / complete snapshot with no last item', () => {
+    expect(
+      schema.safeParse({
+        state: 'idle',
+        counts: { total: 0, transcribed: 0, failed: 0, skipped: 0, inFlight: 0 },
+        lastItem: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({
+        state: 'complete',
+        counts: { total: 2, transcribed: 2, failed: 0, skipped: 0, inFlight: 0 },
+        lastItem: { id: UUID, status: 'transcribed' },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a bad state, a bad item status, negative counts, or unknown keys', () => {
+    expect(schema.safeParse({ state: 'nope', counts, lastItem: null }).success).toBe(false);
+    expect(
+      schema.safeParse({ state: 'running', counts, lastItem: { id: UUID, status: 'cancelled' } })
+        .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ state: 'running', counts: { ...counts, failed: -1 }, lastItem: null })
+        .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ state: 'running', counts, lastItem: null, rogue: true }).success,
+    ).toBe(false);
   });
 });
 

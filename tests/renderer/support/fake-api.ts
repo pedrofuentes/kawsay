@@ -10,6 +10,7 @@ import type {
   LibrarySummaryDTO,
   ModelDownloadProgressEvent,
   SearchResultDTO,
+  TranscriptionProgressEvent,
 } from '@shared/kawsay-api';
 
 /** A stable, valid-looking job id used across import tests. */
@@ -112,6 +113,10 @@ export interface FakeApi extends KawsayAPI {
   emitModelDownloadProgress(event: ModelDownloadProgressEvent): void;
   /** Number of live model-download-progress subscribers (asserts clean unsubscribe). */
   modelSubscriberCount(): number;
+  /** Push a transcription progress snapshot to every onTranscriptionProgress subscriber. */
+  emitTranscriptionProgress(event: TranscriptionProgressEvent): void;
+  /** Number of live transcription-progress subscribers (asserts clean unsubscribe). */
+  transcriptionSubscriberCount(): number;
 }
 
 export interface FakeApiOptions {
@@ -128,12 +133,25 @@ export interface FakeApiOptions {
   getThumbnail?: KawsayAPI['getThumbnail'];
   downloadTranscriptionModel?: KawsayAPI['downloadTranscriptionModel'];
   isTranscriptionModelReady?: KawsayAPI['isTranscriptionModelReady'];
+  startTranscription?: KawsayAPI['startTranscription'];
+  getTranscriptionStatus?: KawsayAPI['getTranscriptionStatus'];
+  cancelTranscription?: KawsayAPI['cancelTranscription'];
 }
+
+/** A zero transcription tally (the calm default for status/start fakes). */
+const ZERO_TRANSCRIPTION_COUNTS = {
+  total: 0,
+  transcribed: 0,
+  failed: 0,
+  skipped: 0,
+  inFlight: 0,
+} as const;
 
 /** Build a fully typed fake KawsayAPI whose methods are spies (vi.fn). */
 export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
   const listeners = new Set<(event: ImportProgressEvent) => void>();
   const modelListeners = new Set<(event: ModelDownloadProgressEvent) => void>();
+  const transcriptionListeners = new Set<(event: TranscriptionProgressEvent) => void>();
   const jobId = opts.jobId ?? FAKE_JOB_ID;
 
   return {
@@ -178,6 +196,34 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         modelListeners.delete(listener);
       };
     },
+    // Default to a calm "nothing to do": idle status, idle start, no-op cancel.
+    // #136's transcription UI tests inject their own run behaviour.
+    startTranscription:
+      opts.startTranscription ??
+      vi.fn(() =>
+        Promise.resolve({
+          outcome: 'idle' as const,
+          reason: null,
+          counts: { ...ZERO_TRANSCRIPTION_COUNTS },
+        }),
+      ),
+    getTranscriptionStatus:
+      opts.getTranscriptionStatus ??
+      vi.fn(() =>
+        Promise.resolve({
+          state: 'idle' as const,
+          counts: { ...ZERO_TRANSCRIPTION_COUNTS },
+          lastItem: null,
+        }),
+      ),
+    cancelTranscription:
+      opts.cancelTranscription ?? vi.fn(() => Promise.resolve({ cancelled: false })),
+    onTranscriptionProgress: (listener) => {
+      transcriptionListeners.add(listener);
+      return () => {
+        transcriptionListeners.delete(listener);
+      };
+    },
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },
@@ -186,5 +232,9 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       for (const listener of [...modelListeners]) listener(event);
     },
     modelSubscriberCount: () => modelListeners.size,
+    emitTranscriptionProgress: (event) => {
+      for (const listener of [...transcriptionListeners]) listener(event);
+    },
+    transcriptionSubscriberCount: () => transcriptionListeners.size,
   };
 }

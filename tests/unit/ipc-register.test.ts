@@ -10,8 +10,11 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
+  TRANSCRIPTION_START,
+  TRANSCRIPTION_STATUS,
 } from '@shared/ipc/contract';
 import {
   registerIpcHandlers,
@@ -44,6 +47,17 @@ const otherHandlers = {
   [DIALOG_OPEN_FILE]: () => null,
   [TRANSCRIPTION_DOWNLOAD_MODEL]: () => ({ status: 'already-present' as const }),
   [TRANSCRIPTION_MODEL_STATUS]: () => ({ ready: false }),
+  [TRANSCRIPTION_START]: () => ({
+    outcome: 'idle' as const,
+    reason: null,
+    counts: { total: 0, transcribed: 0, failed: 0, skipped: 0, inFlight: 0 },
+  }),
+  [TRANSCRIPTION_STATUS]: () => ({
+    state: 'idle' as const,
+    counts: { total: 0, transcribed: 0, failed: 0, skipped: 0, inFlight: 0 },
+    lastItem: null,
+  }),
+  [TRANSCRIPTION_CANCEL]: () => ({ cancelled: false }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
@@ -73,6 +87,14 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     expect(ipcMain.listeners.has(TRANSCRIPTION_MODEL_STATUS)).toBe(true);
   });
 
+  it('registers a handle() listener for the gated transcription-run channels (#157)', () => {
+    const ipcMain = fakeIpcMain();
+    registerIpcHandlers(ipcMain, handlers);
+    expect(ipcMain.listeners.has(TRANSCRIPTION_START)).toBe(true);
+    expect(ipcMain.listeners.has(TRANSCRIPTION_STATUS)).toBe(true);
+    expect(ipcMain.listeners.has(TRANSCRIPTION_CANCEL)).toBe(true);
+  });
+
   it('runs the handler and returns its validated response for a trusted sender', async () => {
     const ipcMain = fakeIpcMain();
     registerIpcHandlers(ipcMain, handlers, trustedSenderOptions);
@@ -85,7 +107,11 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('rejects a non-app file:// sender (attacker-dropped HTML) without calling the handler', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { ...otherHandlers, [APP_GET_VERSION]: spy }, trustedSenderOptions);
+    registerIpcHandlers(
+      ipcMain,
+      { ...otherHandlers, [APP_GET_VERSION]: spy },
+      trustedSenderOptions,
+    );
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(
@@ -117,7 +143,11 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('re-validates the request in main and rejects unexpected payload keys', async () => {
     const ipcMain = fakeIpcMain();
     const spy = vi.fn(() => ({ version: '0.1.0' }));
-    registerIpcHandlers(ipcMain, { ...otherHandlers, [APP_GET_VERSION]: spy }, trustedSenderOptions);
+    registerIpcHandlers(
+      ipcMain,
+      { ...otherHandlers, [APP_GET_VERSION]: spy },
+      trustedSenderOptions,
+    );
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
     await expect(listener?.(trustedEvent, { rogue: true })).rejects.toThrow();
