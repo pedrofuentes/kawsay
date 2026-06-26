@@ -54,8 +54,11 @@ const DEV_LOOPBACK_SCHEMES: ReadonlySet<string> = new Set(['http:', 'ws:']);
 
 export interface NetworkGuardOptions {
   /**
-   * `app.isPackaged`. A packaged build permits NO network whatsoever — not even
-   * loopback. The dev-server relaxation applies only when this is `false`.
+   * `app.isPackaged`. A packaged build grants no LOCAL network relaxation — not even
+   * loopback; the dev-server / HMR exception applies only when this is `false`. The
+   * sole outbound request a packaged build still permits is the opt-in, scoped model
+   * download (see {@link isAllowedModelDownloadRequest}), which is gated on its own
+   * and evaluated independently of this flag.
    */
   readonly isPackaged: boolean;
 }

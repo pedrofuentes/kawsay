@@ -21,9 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   pinned values** and only then **atomically renamed** into place; a mismatch deletes the file and allows a
   clean refetch, and a `verifyModelOnDisk()` re-check guards against on-disk tampering before each use
   (AC-24). The **network guard's egress allowlist** is extended **narrowly and centrally** to permit
-  **exactly** the pinned model `GET` (the origin URL plus the `release-assets.githubusercontent.com`
-  redirect host, `GET` only, empty upload body) and to **deny everything else** — a `POST` to the same host,
-  a `GET` to a different path/host, and every non-model URL all stay denied; the renderer CSP
+  **exactly** the pinned model `GET`, matched two ways: the **origin** leg by **exact URL**, and the
+  **CDN** leg (`release-assets.githubusercontent.com`) by **exact host** over https — the latter because
+  GitHub's `302` lands on a signed, time-limited link whose path and query legitimately vary per attempt.
+  Both legs are `GET`-only with an empty upload body, and **everything else stays denied** — a `POST` to
+  either host, a `GET` to a **different path on the origin** (exact-URL), a CDN **subdomain spoof** or
+  plaintext leg, and every non-model URL all stay denied; the renderer CSP
   (`connect-src 'none'`) is untouched. The capability is exposed over a gated main↔renderer IPC channel
   (start the download, stream progress, query `isModelReady`) but is **never auto-triggered** — the opt-in
   consent UI is card #132 and the worker that consumes the verified model is card #134. **AC-4 (zero egress)

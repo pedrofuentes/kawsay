@@ -82,8 +82,10 @@ export interface ModelFetchRequest {
   readonly headers: Readonly<Record<string, string>>;
 }
 
-/** The fetcher's response — a status line plus a streamed body (a Node/Electron
- *  `IncomingMessage` satisfies this structurally, being an async-iterable Readable). */
+/** The fetcher's response — a status line plus a streamed body. The body is an
+ *  `AsyncIterable<Uint8Array>`: Node's `http.IncomingMessage` satisfies it directly
+ *  (it is an async-iterable Readable), whereas Electron's `net` `IncomingMessage` is a
+ *  bare `EventEmitter` that `electron-net-fetcher.ts` bridges into this shape. */
 export interface ModelFetchResponse {
   readonly statusCode: number;
   readonly headers: Readonly<Record<string, string | string[] | undefined>>;
