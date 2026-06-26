@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { createCatalogSession } from '../../electron/main/app/catalog-session';
 import { openCatalog } from '../../electron/main/db/connection';
 import { createCatalogRepo } from '../../electron/main/db/catalog-repo';
-import { librarySummarySchema, itemCardSchema } from '@shared/ipc/schemas';
+import { createTranscriptRepo } from '../../electron/main/db/transcript-repo';
+import { librarySummarySchema, itemCardSchema, transcriptViewSchema } from '@shared/ipc/schemas';
 import type { SourceType } from '@shared/catalog';
 import type { IngestionCoordinator } from '../../electron/main/importers/ingestion/coordinator';
 import type { IngestionJobSpec } from '../../electron/main/importers/ingestion/protocol';
@@ -126,6 +127,38 @@ function seedAudioWithLocalOriginal(catalogPath: string, originalPath: string): 
     originalKind: 'in_place',
     originalPath,
   });
+  db.close();
+  return id;
+}
+
+/** Seed an audio item and attach a finished transcript to it (mirrors what the
+ *  #134 worker persists via transcript-repo), returning its opaque id. */
+function seedTranscribedAudio(
+  catalogPath: string,
+  over: { language?: string | null; text?: string } = {},
+): string {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const transcripts = createTranscriptRepo(db);
+  const src = repo.registerSource({ sourceKey: 'voices', type: 'folder', label: 'Voices' });
+  const id = repo.insertItem({ mediaType: 'audio', contentHash: 'h-done', durationSec: 12 });
+  transcripts.saveTranscript({
+    itemId: id,
+    text: over.text ?? 'Hola, te quiero mucho.',
+    language: over.language === undefined ? 'es' : over.language,
+    segments: [{ startMs: 0, endMs: 1500, text: over.text ?? 'Hola, te quiero mucho.' }],
+  });
+  db.close();
+  return id;
+}
+
+/** Seed an audio item and leave it un-transcribed but with a chosen drain status. */
+function seedAudioWithStatus(catalogPath: string, status: 'pending' | 'failed' | 'skipped'): string {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const transcripts = createTranscriptRepo(db);
+  const id = repo.insertItem({ mediaType: 'audio', contentHash: `h-${status}`, durationSec: 7 });
+  if (status !== 'pending') transcripts.setStatus(id, status);
   db.close();
   return id;
 }
@@ -328,5 +361,56 @@ describe('createCatalogSession (the IPC application service)', () => {
   it('refuses to hand out a transcription port when no library is open (#157)', () => {
     const s = createCatalogSession({ coordinator: coordinator.coordinator });
     expect(() => s.transcription()).toThrow();
+  });
+
+  it('getTranscript returns a finished transcript: status done + words + detected language (#136)', async () => {
+    session.createLibrary({ path: root });
+    const id = seedTranscribedAudio(join(root, 'catalog.sqlite3'), { language: 'es', text: 'Hola mundo.' });
+
+    const view = await session.getTranscript({ id });
+
+    expect(transcriptViewSchema.safeParse(view).success).toBe(true);
+    expect(view.status).toBe('done');
+    expect(view.language).toBe('es');
+    expect(view.text).toBe('Hola mundo.');
+    expect(view.segments.length).toBeGreaterThan(0);
+  });
+
+  it('getTranscript returns a calm pending view (no words) for an un-transcribed item (#136)', async () => {
+    session.createLibrary({ path: root });
+    const id = seedAudioWithStatus(join(root, 'catalog.sqlite3'), 'pending');
+
+    const view = await session.getTranscript({ id });
+
+    expect(view).toEqual({ status: 'pending', language: null, text: null, segments: [] });
+  });
+
+  it('getTranscript reflects a failed / skipped drain status without any words (#136)', async () => {
+    session.createLibrary({ path: root });
+    const failedId = seedAudioWithStatus(join(root, 'catalog.sqlite3'), 'failed');
+    const skippedId = seedAudioWithStatus(join(root, 'catalog.sqlite3'), 'skipped');
+
+    expect(await session.getTranscript({ id: failedId })).toEqual({
+      status: 'failed',
+      language: null,
+      text: null,
+      segments: [],
+    });
+    expect(await session.getTranscript({ id: skippedId })).toEqual({
+      status: 'skipped',
+      language: null,
+      text: null,
+      segments: [],
+    });
+  });
+
+  it('getTranscript rejects an unknown item id (a transcript read never invents an item)', async () => {
+    session.createLibrary({ path: root });
+    await expect(session.getTranscript({ id: JOB_ID })).rejects.toThrow();
+  });
+
+  it('getTranscript refuses when no library is open (#136)', async () => {
+    const s = createCatalogSession({ coordinator: coordinator.coordinator });
+    await expect(s.getTranscript({ id: JOB_ID })).rejects.toThrow();
   });
 });

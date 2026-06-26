@@ -258,6 +258,26 @@ describe('Timeline — accessibility (WCAG 2.1 AA essentials, AC-13)', () => {
   });
 });
 
+describe('Timeline — opening a memory', () => {
+  it('opens a memory in its own view when its card is activated', async () => {
+    const items = [makeItemCard({ id: 'open-1', title: 'Open this one', mediaType: 'audio' })];
+    const api = makeFakeApi({ getTimeline: vi.fn(() => Promise.resolve(page({ items }))) });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(
+        <>
+          <Timeline />
+          <ViewProbe />
+        </>,
+        api,
+      ),
+    );
+
+    await user.click(await screen.findByRole('button', { name: /open this one/i }));
+    expect(screen.getByTestId('active-view')).toHaveTextContent('item');
+  });
+});
+
 describe('Timeline — tolerates a missing bridge (browser preview)', () => {
   it('shows a calm not-connected message instead of crashing', () => {
     const original = (window as { kawsayAPI?: unknown }).kawsayAPI;

@@ -8,7 +8,7 @@ import { LibraryProvider } from '@renderer/lib/library';
 import { NavigationProvider } from '@renderer/lib/navigation';
 import { makeFakeApi, makeItemCard, makeSearchResult } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
-import { renderWithProviders, wrapInProviders } from './support/render';
+import { renderWithProviders, ViewProbe, wrapInProviders } from './support/render';
 
 /** Render the Search view inside the three renderer providers with a fake bridge. */
 function renderSearch(api: FakeApi = makeFakeApi()) {
@@ -364,5 +364,105 @@ describe('Search — wiring into the main app', () => {
     renderWithProviders(<MainApp />, { initialView: { name: 'search' } });
     expect(screen.getByRole('searchbox')).toBeInTheDocument();
     expect(screen.queryByText(/on its way/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('Search — a transcript match is made clear (AC-19)', () => {
+  it('hints that an audio result matched the spoken words when the term is not in its caption', async () => {
+    // The caption (a filename) does NOT contain the term, yet the audio item came
+    // back from the catalog — so the match was in its transcript (search_meta FTS).
+    // The hint explains why a "silent" tile surfaced for a text search.
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(
+          makeSearchResult({
+            items: [makeItemCard({ mediaType: 'audio', title: 'voice-051.m4a', description: null })],
+          }),
+        ),
+      ),
+    });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'familia');
+
+    expect(await screen.findByText(/found in what was said/i)).toBeInTheDocument();
+  });
+
+  it('does NOT add the transcript hint when the term is already visible in the caption', async () => {
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(
+          makeSearchResult({ items: [makeItemCard({ mediaType: 'audio', title: 'Familia reunion' })] }),
+        ),
+      ),
+    });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'familia');
+
+    expect(await screen.findByText(caption('Familia reunion'))).toBeInTheDocument();
+    expect(screen.queryByText(/found in what was said/i)).not.toBeInTheDocument();
+  });
+
+  it('does NOT add the transcript hint to a photo (only audio/video are transcribed)', async () => {
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(
+          makeSearchResult({ items: [makeItemCard({ mediaType: 'photo', title: 'beach-051.jpg' })] }),
+        ),
+      ),
+    });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'familia');
+
+    expect(await screen.findByText(caption('beach-051.jpg'))).toBeInTheDocument();
+    expect(screen.queryByText(/found in what was said/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a transcript-matched audio item exactly once (no duplicate tile)', async () => {
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(
+          makeSearchResult({
+            items: [makeItemCard({ id: 'once-1', mediaType: 'audio', title: 'voice-051.m4a' })],
+          }),
+        ),
+      ),
+    });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'familia');
+    await screen.findByText(/found in what was said/i);
+
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+  });
+});
+
+describe('Search — opening a result', () => {
+  it('opens a result in its own view when its card is activated', async () => {
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(
+          makeSearchResult({ items: [makeItemCard({ id: 'open-1', mediaType: 'audio', title: 'Open me' })] }),
+        ),
+      ),
+    });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(
+        <>
+          <Search />
+          <ViewProbe />
+        </>,
+        api,
+        { name: 'search' },
+      ),
+    );
+
+    await user.type(screen.getByRole('searchbox'), 'open');
+    await user.click(await screen.findByRole('button', { name: /open me/i }));
+
+    expect(screen.getByTestId('active-view')).toHaveTextContent('item');
   });
 });

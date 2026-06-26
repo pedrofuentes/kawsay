@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   APP_GET_VERSION,
+  CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
@@ -58,6 +59,12 @@ const otherHandlers = {
     lastItem: null,
   }),
   [TRANSCRIPTION_CANCEL]: () => ({ cancelled: false }),
+  [CATALOG_GET_TRANSCRIPT]: () => ({
+    status: 'pending' as const,
+    language: null,
+    text: null,
+    segments: [],
+  }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
@@ -93,6 +100,12 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     expect(ipcMain.listeners.has(TRANSCRIPTION_START)).toBe(true);
     expect(ipcMain.listeners.has(TRANSCRIPTION_STATUS)).toBe(true);
     expect(ipcMain.listeners.has(TRANSCRIPTION_CANCEL)).toBe(true);
+  });
+
+  it('registers a handle() listener for the per-item transcript read channel (#136)', () => {
+    const ipcMain = fakeIpcMain();
+    registerIpcHandlers(ipcMain, handlers);
+    expect(ipcMain.listeners.has(CATALOG_GET_TRANSCRIPT)).toBe(true);
   });
 
   it('runs the handler and returns its validated response for a trusted sender', async () => {
