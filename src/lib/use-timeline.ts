@@ -57,8 +57,11 @@ function reducer(state: TimelineState, action: Action): TimelineState {
     case 'load-start':
       return { items: [], status: 'loading', error: null, cursor: null, hasMore: false };
     case 'load-more-start':
-      return state.status === 'ready' && state.hasMore
-        ? { ...state, status: 'loadingMore' }
+      // Allow a retry from the error state too: a mid-scroll page failed but the
+      // cursor was preserved, so the same next page can be re-requested. Clear the
+      // stale message while the retry is in flight.
+      return (state.status === 'ready' || state.status === 'error') && state.hasMore
+        ? { ...state, status: 'loadingMore', error: null }
         : state;
     case 'page': {
       const items = action.append ? [...state.items, ...action.items] : action.items;
@@ -96,7 +99,12 @@ export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult
       const current = stateRef.current;
       if (
         mode === 'more' &&
-        (!current.hasMore || current.cursor === null || current.status !== 'ready')
+        (!current.hasMore ||
+          current.cursor === null ||
+          // 'ready' is the normal case; 'error' lets the user retry a page that
+          // failed mid-scroll (the cursor was kept). 'loading'/'loadingMore' are
+          // already covered by the inFlight guard above.
+          (current.status !== 'ready' && current.status !== 'error'))
       ) {
         return;
       }

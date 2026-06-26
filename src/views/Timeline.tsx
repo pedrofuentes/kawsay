@@ -217,22 +217,34 @@ export function Timeline(): ReactElement {
     }
 
     return (
-      <section
-        ref={scrollRef}
-        aria-label={memoriesLabel}
-        aria-busy={status === 'loadingMore'}
-        onScroll={handleScroll}
-        className="min-h-0 flex-1 overflow-y-auto pr-1"
-      >
-        <div style={{ height: windowed.totalHeight }} className="relative w-full">
-          <ol
-            style={{ transform: `translateY(${windowed.topPad}px)` }}
-            className="absolute inset-x-0 top-0 m-0 list-none p-0"
-          >
-            {rows.slice(windowed.startIndex, windowed.endIndex).map(renderRow)}
-          </ol>
-        </div>
-      </section>
+      <>
+        <section
+          ref={scrollRef}
+          aria-label={memoriesLabel}
+          aria-busy={status === 'loadingMore'}
+          onScroll={handleScroll}
+          className="min-h-0 flex-1 overflow-y-auto pr-1"
+        >
+          <div style={{ height: windowed.totalHeight }} className="relative w-full">
+            <ol
+              style={{ transform: `translateY(${windowed.topPad}px)` }}
+              className="absolute inset-x-0 top-0 m-0 list-none p-0"
+            >
+              {rows.slice(windowed.startIndex, windowed.endIndex).map(renderRow)}
+            </ol>
+          </div>
+        </section>
+        {status === 'error' ? (
+          // A later page failed to load. Keep every memory already gathered on
+          // screen and offer a calm, non-blocking way to try for more again —
+          // never a silent dead-stop (the first page's error path is separate).
+          <ErrorBanner
+            title="We couldn't load more memories just now"
+            message="Nothing is lost — everything already here is safe on this computer. Let's try for more again."
+            onRetry={loadMore}
+          />
+        ) : null}
+      </>
     );
   }
 }
