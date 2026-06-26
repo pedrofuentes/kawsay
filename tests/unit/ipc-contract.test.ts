@@ -272,6 +272,45 @@ describe('ipcContract — catalog:getTranscript (#136: an item’s transcript by
       resOk(CATALOG_GET_TRANSCRIPT, { status: 'pending', language: null, text: null, segments: [], extra: 1 }),
     ).toBe(false);
   });
+
+  it('bounds the transcript text and segment count (defence-in-depth caps, #164)', () => {
+    // A legitimately long recording (~1 MB of words, 1k segments) still crosses.
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'a'.repeat(1_000_000),
+        segments: Array.from({ length: 1_000 }, () => ({ startMs: 0, endMs: 1, text: 'a' })),
+      }),
+    ).toBe(true);
+    // …but an adversarial multi-megabyte text is refused.
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'a'.repeat(8 * 1024 * 1024 + 1),
+        segments: [],
+      }),
+    ).toBe(false);
+    // …as is an absurdly long segment list,
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'hi',
+        segments: Array.from({ length: 200_001 }, () => ({ startMs: 0, endMs: 1, text: 'a' })),
+      }),
+    ).toBe(false);
+    // …and a single oversized segment text.
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'hi',
+        segments: [{ startMs: 0, endMs: 1, text: 'a'.repeat(8 * 1024 * 1024 + 1) }],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('ipcContract — import:start / import:cancel', () => {
