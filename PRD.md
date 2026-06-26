@@ -289,6 +289,136 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   counts and field values** against the fixtures (research: `formats.md` §3–§4).
 - **Test kind:** integration.
 
+### M2 acceptance addendum (AC-17 … AC-24 — on-device transcription, **post-v1 / proposed**)
+
+> **Scope:** these criteria belong to ROADMAP **M2 (audio & video transcription)**, not the M1 MVP. They are
+> **proposed**, bound to the M2 architecture gate (**ADR-0027**), and **🚨 HUMAN-REQUIRED** (heavy dependency +
+> privacy-data capability + a new, scoped network egress) — they activate **only after** @pedrofuentes signs off on
+> ADR-0027. They **augment, never replace** the canonical suite and **must keep AC-1 … AC-16 green** (cumulative
+> acceptance regression). The zero-egress promise (**AC-4**) for **user data / memories stays absolute and is never
+> weakened**; per the cofounder's locked decision it is **narrowed** to permit **exactly one** outbound — an opt-in,
+> checksum-verified, data-free **model download** from the exact pinned model URL(s) (AC-17 + the new **AC-24**).
+
+**AC-17 — Voice notes / audio / video transcribed fully on-device; user memories never egress.**
+- **Given** a WhatsApp voice note (`.opus`), an audio file, or a video with an audio track, with the `whisper-cli`
+  binary **bundled in the installer** and the `small` model **fetched once on opt-in and verified** (ADR-0027 / the
+  new AC-24),
+- **When** transcription runs **at runtime** on the user's audio,
+- **Then** the transcript is produced **entirely on-device** and **no user audio, memory, or derived transcript
+  ever leaves the machine** — and **transcription itself makes ZERO network calls** — asserted in **two parts**:
+  - **(a) Static / packaging guarantee (provable now):** the binary ships in the installer; there is **no
+    network-capable code on the transcription path**; transcription reads local files only (array-argv paths, never
+    URLs); the renderer CSP (`connect-src 'none'`) is **unchanged**. The runtime guard (`network-guard.ts`, a
+    `session.webRequest.onBeforeRequest` handler) denies all egress **except a single `GET` to the exact pinned
+    model URL(s)** — the model-download origin **+ its redirect/CDN target** (`{github.com,
+    release-assets.githubusercontent.com}`, or the HF fallback `{huggingface.co, *.cdn.hf.co}`) — the only permitted
+    app egress anywhere (ADR-0027 Decision 6d), which is **not** on the transcription path. The download is issued
+    via **Electron `net.request` on the guarded session** so it actually flows through that `webRequest` chokepoint
+    (a Node-primitive downloader would bypass `webRequest` and is **not** what is specified).
+  - **(b) Runtime egress assertion (net-new harness):** the **real** `whisper-cli` subprocess is exercised under an
+    **OS-level deny firewall** and records **zero** egress. The existing in-process `net`/`dgram`/`dns` spies prove
+    the **main process only** and **cannot observe a separate OS process**, and the existing OS-deny firewall is
+    **Linux-only** (`ac4-egress.yml` is `runs-on: ubuntu-latest`) while Kawsay ships **macOS arm64/x64 + Windows
+    x64** — so a macOS/Windows OS-deny harness around the real binary is **net-new work** (M2-7, HUMAN-REQUIRED: it
+    edits the AC-4 CI workflow). *(The prior claim that the existing harness "already covers the subprocess and
+    extends directly" is withdrawn.)*
+- **Test kind:** integration (static packaging checks) **+** the net-new OS-deny egress harness. *(Extends AC-4 —
+  whose user-data zero-egress promise may never be weakened; MISSION §5, NEVER list. A **cloud-STT** approach fails
+  this AC by definition — it ships the user's voice off-device. The **opt-in model download** is the one permitted,
+  data-free egress and is asserted by **AC-24**, not a violation of this AC.)*
+
+**AC-18 — Transcription runs off the UI thread (performance).**
+- **Given** a batch of recordings queued for transcription,
+- **When** audio extraction (`ffmpeg`) and inference (`whisper-cli`) run,
+- **Then** that work executes **off the UI thread** (the F3c `worker_threads` harness + a bounded subprocess) —
+  asserted by observing the work occurs **off-main-thread** — and **no main-thread task exceeds 50 ms** for the
+  duration, keeping the renderer responsive while progress is streamed.
+- **Test kind:** integration / performance. *(Extends AC-9.)*
+
+**AC-19 — Transcript text is searchable via FTS.**
+- **Given** items whose audio/video has been transcribed,
+- **When** the user searches a word or phrase **spoken** in a recording, optionally filtered by type / source /
+  date,
+- **Then** the matching item is returned by the **existing FTS5 search** (the transcript is indexed into
+  `items_fts` via the FTS-synced `search_meta` column — or a dedicated FTS-synced column — **not** the
+  message-body `description`), ranked, with filters narrowing **exactly** to matching items — and the transcript is
+  **attached to the existing media item**, never a duplicate item.
+- **Test kind:** integration. *(Extends AC-6 / AC-7.)*
+
+**AC-20 — Resilient, non-destructive transcription incl. long media (never silently drop; originals untouched).**
+- **Given** a transcription run where some recordings are unreadable, corrupt, silent, or in an unsupported
+  language — **and where some are multi-minute (long)** — and where the run may be **cancelled** or **re-run**,
+- **When** transcription proceeds,
+- **Then** each failed/empty item is **skipped and reported with a status** (the user sees a count), the run **does
+  not abort**, remaining items still transcribe, **re-running does not duplicate** transcripts, and **no original
+  media file is ever altered or deleted** (transcripts and any derived audio are Kawsay-generated only); **long
+  recordings are not killed by the 30 s import-spawn cap** — they use a **duration-scaled timeout or chunking** with
+  **partial/checkpoint** output — and **cancelling a single in-flight transcription kills the `whisper-cli` child**
+  (the import worker's cooperative *between-records* cancel does not stop a long child mid-file).
+- **Test kind:** integration. *(Mirrors AC-15; honours AC-14. The transcription queue is a **net-new** per-item
+  drain analogous to `thumb_status`, not a verbatim reuse of the import worker — ADR-0027.)*
+
+**AC-21 — Multilingual coverage + accuracy floor (Spanish + others).**
+- **Given** a labelled offline fixture set of short, WhatsApp-style voice notes in **Spanish and other languages**,
+- **When** transcribed with the **multilingual `small` model** (no `.en` variant; downloaded on opt-in),
+- **Then** the spoken language is **auto-detected** and the transcript meets a **defined word-error-rate ceiling**
+  on the fixture set — where the concrete WER threshold is **fixed empirically on real Spanish samples by the M2-0
+  spike / M2-6 harness, not asserted from clean published benchmarks** (real WhatsApp-voice-note WER runs materially
+  worse than clean Common Voice figures, and accuracy rises monotonically with model size — which is why **`small`
+  was chosen over `base`**) — measured **offline** (CI fixtures, **no telemetry**).
+- **Test kind:** integration / performance (offline fixtures). *(New M2 quality bar; M2-0 now **validates `small`**
+  against the ceiling rather than choosing `base` vs `small`.)*
+
+**AC-22 — User control / opt-in over transcription (consent) — gates both transcription AND the model download.**
+- **Given** a grief-sensitive library in which transcription would turn a deceased person's voice into stored,
+  searchable text, and in which enabling the feature triggers a one-time model download,
+- **When** the user reaches the transcription capability,
+- **Then** **no audio is transcribed, and no model byte is downloaded, without an explicit user opt-in**: there is a
+  clear **first-run / global toggle** (and, ideally, **per-item** control), the current state is visible, and
+  **nothing auto-transcribes silently** in the background. **No opt-in ⇒ no model download ⇒ no network.**
+- **Test kind:** integration / e2e. *(New M2 privacy capability; honours MISSION §5. The default is **opt-in**
+  (LOCKED by @pedrofuentes — ADR-0027); this opt-in is the consent gate for the AC-24 download.)*
+
+**AC-23 — Attribution / NOTICES for third-party artifacts (bundled binary + downloaded model).**
+- **Given** a shipped installer bundling the `whisper-cli` binary (whisper.cpp, **MIT**) and a `small` `ggml` model
+  (derived from OpenAI Whisper, **MIT**) that the app **downloads on opt-in**,
+- **When** the app is packaged **and the model asset is published** (a `models-v1` GitHub Release asset must be
+  **published before** the downloader can fetch it — nothing publishes `ggml-small.bin` today; ADR-0027 Decision
+  6e),
+- **Then** the build includes **license attribution / NOTICES** for the bundled binary **and** for the downloaded
+  model weights, each with recorded **provenance** (source + version + size + checksum) — the model's NOTICES travel
+  with the app even though the weights arrive at runtime — and the publication step carries the weights' NOTICES and
+  gates on a **publish-time `hash(asset) == pinned SHA-256` check** so a corrupt re-host is caught before release.
+- **Test kind:** integration / packaging-config. *(New M2 compliance bar; sequenced in M2-1, publication before the
+  downloader.)*
+
+**AC-24 — Model-download integrity & resilience (the one permitted egress is safe).**
+- **Given** the opt-in `small` model download from the pinned URL(s) (ADR-0027 Decision 6) — issued via **Electron
+  `net.request` on the guarded session**, where the origin **302-redirects to a signed, time-limited CDN host**
+  (`github.com` → `release-assets.githubusercontent.com`, or HF `huggingface.co` → `*.cdn.hf.co`),
+- **When** the model is fetched, verified, and installed — including under a dropped connection, an offline machine,
+  a corrupt / tampered file, a **disk-full** condition mid-download, a **signed-CDN URL that expires** on a
+  long-paused resume, or a **second app instance** racing the same download,
+- **Then** the file's **SHA-256 is verified before first use** (the hard-coded
+  `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`, 487,601,967 bytes) **and re-validated before
+  each `whisper-cli` spawn** (on-disk tampering is in the threat model — ADR-0027 Decision 6b), and an **unverified
+  model is never run**; the install is **atomic** (temp → verify → rename, so a partial file is never seen as "the
+  model"); the download is **resumable** (a dropped connection does not restart from zero, and an **expired CDN
+  signature on resume re-requests the origin for a fresh redirect**); a **corrupt / mismatched file is rejected and
+  re-fetched**; an **offline or failed** download surfaces a **calm retry with no crash and no half-state**, leaving
+  the feature disabled until a verified model is present; and the **only** outbound observed is a **`GET` to the
+  exact pinned URL with an empty body** — asserted as that **precise request shape** (method + exact URL + no upload
+  body) at the `network-guard` `webRequest` allowlist + the OS-deny firewall (the **Node-prototype in-process spies
+  do not observe a Chromium-stack `net.request` download** — they stay a deny-all assertion that Node outbound is
+  zero), **not** merely "the host is reachable" — so a host-only `POST` smuggling a transcript is rejected. **Edge
+  cases:** **disk-full mid-download** (the ~466 MiB temp file fails closed — clear error, no partial model, retry);
+  a **second app instance** racing the same download is serialized by a **single-instance lock** (no duplicate
+  fetch, no corrupt interleave); an **expiring signed-CDN URL** on a long resume triggers a fresh origin redirect
+  rather than a hard failure.
+- **Test kind:** integration **+** the scoped AC-4 egress harness. *(New M2 integrity bar; the safety envelope
+  around the single egress AC-4 now permits — ties to AC-17 / AC-22; sequenced after the model-asset **publication**
+  pre-step in M2-1, harness edits HUMAN-REQUIRED.)*
+
 ### 4.1 AC traceability table (AC-id → feature → test kind)
 
 | AC | Source | Feature / capability | Test kind |
@@ -309,6 +439,18 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 | **AC-14** | added | (d) Originals preserved on disk + undo without data loss | integration |
 | **AC-15** | added | (a)/(b)/(c) Resilient partial import | integration |
 | **AC-16** | added | (c) Facebook DYI + LinkedIn content correctness — text/timestamps/media linkage | integration |
+| **AC-17** | M2 · ADR-0027 | On-device transcription — user memories never egress (absolute); static packaging guarantee **+** real-binary OS-deny egress (extends AC-4; runtime half = net-new M2-7) | integration + net-new OS-deny harness |
+| **AC-18** | M2 · ADR-0027 | Transcription off the UI thread (extends AC-9) | integration / perf |
+| **AC-19** | M2 · ADR-0027 | Transcripts searchable via FTS5 (`search_meta`/dedicated column), attached to items (extends AC-6/AC-7) | integration |
+| **AC-20** | M2 · ADR-0027 | Resilient, non-destructive transcription incl. **long media** (child-kill on cancel; net-new per-item queue) | integration |
+| **AC-21** | M2 · ADR-0027 | Multilingual coverage + WER floor (Spanish + others), empirically set on real samples, offline-measured | integration / perf |
+| **AC-22** | M2 · ADR-0027 | User control / opt-in over transcription (consent; privacy) | integration / e2e |
+| **AC-23** | M2 · ADR-0027 | NOTICES / attribution for bundled binary + **downloaded** model weights (provenance) | integration / packaging |
+| **AC-24** | M2 · ADR-0027 | Model-download integrity & resilience — SHA-256 verify-before-use **+ re-verify before each spawn**, atomic, resumable, corrupt→refetch, offline-safe; only egress = the **exact pinned-URL `GET`** (method + URL + empty body), origin **+ redirect/CDN host**, asserted at `webRequest` + OS firewall (not the Node spies) | integration + scoped AC-4 harness |
+
+> **AC-17 … AC-24 are M2 (post-v1), proposed, and HUMAN-REQUIRED** — they activate only on @pedrofuentes sign-off of
+> ADR-0027 and must keep AC-1 … AC-16 green (cumulative regression). AC-4's **user-data** zero-egress is **never
+> weakened**; it is **narrowed** to one opt-in, data-free, checksum-verified model fetch (AC-17 + AC-24).
 
 **Coverage check — every MVP capability maps to ≥1 AC:** (a) → AC-2, AC-9, AC-14, AC-15; (b) → AC-1,
 AC-12, AC-15; (c) → AC-3, AC-10, AC-11, AC-15, **AC-16** (Facebook/LinkedIn content correctness);
