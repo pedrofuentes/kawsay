@@ -18,6 +18,17 @@ export const CURSOR_MAX_LENGTH = 4096;
 export const PAGE_LIMIT_MAX = 200;
 
 /**
+ * Transcript bounds (#164, defence-in-depth — NOT a UX limit). A real recording's
+ * words are legitimately large, but the read path must still refuse an adversarial
+ * or corrupt payload: `TEXT_MAX_LENGTH` (8 MiB of chars ≈ many hours of dense
+ * speech) caps the full text and any one segment's text, and `SEGMENTS_MAX` caps
+ * the segment array (whisper emits a segment every few seconds, so 200k spans
+ * tens of hours). Both leave generous headroom over any genuine transcript.
+ */
+export const TRANSCRIPT_TEXT_MAX_LENGTH = 8 * 1024 * 1024;
+export const TRANSCRIPT_SEGMENTS_MAX = 200_000;
+
+/**
  * Thumbnail bounds (U4). The renderer may only ask for a square edge within
  * `[MIN, MAX]` px; the main process clamps anything else. `MAX_BYTES` caps a
  * single rendition so an adversarial original can't balloon the response, and
@@ -233,7 +244,7 @@ export type TranscriptStatusDTO = z.infer<typeof transcriptStatusSchema>;
 export const transcriptSegmentSchema = z.strictObject({
   startMs: z.number().int().nonnegative(),
   endMs: z.number().int().nonnegative(),
-  text: z.string(),
+  text: z.string().max(TRANSCRIPT_TEXT_MAX_LENGTH),
 });
 export type TranscriptSegmentDTO = z.infer<typeof transcriptSegmentSchema>;
 
@@ -241,14 +252,14 @@ export type TranscriptSegmentDTO = z.infer<typeof transcriptSegmentSchema>;
  * The renderer-facing view of an item's transcript. `status` is always present;
  * `text` and `language` are non-null only once `status === 'done'` (`language` is
  * the whisper-detected tag, e.g. `es`, or null when undetected), and `segments`
- * is empty unless done. The text is deliberately UNBOUNDED — a long recording's
- * transcript is legitimately large, and it crosses only as the words themselves,
- * never as a path or handle (consistent with itemCardSchema's unbounded title).
+ * is empty unless done. `text` and `segments` are bounded only by generous
+ * defence-in-depth caps (#164) — a long recording's transcript is legitimately
+ * large, and it crosses only as the words themselves, never as a path or handle.
  */
 export const transcriptViewSchema = z.strictObject({
   status: transcriptStatusSchema,
   language: z.string().max(NAME_MAX_LENGTH).nullable(),
-  text: z.string().nullable(),
-  segments: z.array(transcriptSegmentSchema),
+  text: z.string().max(TRANSCRIPT_TEXT_MAX_LENGTH).nullable(),
+  segments: z.array(transcriptSegmentSchema).max(TRANSCRIPT_SEGMENTS_MAX),
 });
 export type TranscriptViewDTO = z.infer<typeof transcriptViewSchema>;
