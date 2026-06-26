@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **An honest answer to "is the `small` model good enough?" — measured, not guessed** (card #137, M2 · ADR-0027,
+  **AC-21 / AC-18**): a fully-offline accuracy/performance harness now measures how well the bundled transcription
+  engine actually does. Run locally against the real engine + `small` model over a small set of **labeled,
+  license-clean voice-note-style clips** (Spanish plus German and Russian, fetched on demand and checksum-verified —
+  never committed), it computes a standard **word-error-rate** (with a documented, multilingual normalization that
+  keeps Spanish accents, German umlauts/ß and Cyrillic) and a **real-time factor**, and reports per-language
+  accuracy, language **auto-detection** accuracy, and speed. The verdict, recorded with the numbers in
+  `docs/perf/m2-wer-rtf-results.md`: **`small` is good enough and is kept** — on these clean clips it transcribed
+  most perfectly (every *correctly language-detected* Spanish clip at **0%** error; **13.6%** overall) and ran
+  **~4× faster than real time** on Apple Silicon. The harness was honest about the limits, too: the worst clip was a
+  short 3.3 s Spanish utterance the model heard as **Italian** (a language-detection miss, not a transcription one),
+  and these clean clips are a **best case** — real noisy, accented WhatsApp voice notes will be worse, so the field
+  accuracy bar must still be set on real samples. The pure scoring logic is unit-tested in normal CI; the heavy
+  real-model run is **self-gated** (it skips unless the binary, model and clips are present) so it **never blocks
+  CI** and downloads nothing in the pipeline. Locks the previously-illustrative **AC-21** WER ceiling and **AC-18**
+  throughput numbers with real evidence. Harness + docs only — no app code, dependencies, or network behaviour
+  changed.
+
 - **Proof that transcription never phones home — now on macOS and Windows, against the real engine** (card #138,
   M2 · ADR-0027, **AC-4 / AC-17**): the zero-egress gate that guarantees "your memories never leave this computer"
   used to enforce a real operating-system network block only on Linux. It now does so on **all three platforms we

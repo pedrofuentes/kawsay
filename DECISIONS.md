@@ -132,6 +132,18 @@ across macOS (arm64+x64) + Windows — without ever moving the user's memories o
      Spanish samples** and locks the **AC-21** threshold (it no longer decides `base` vs `small`). A quantized
      `q5_0` `small` variant may be measured later as an optional footprint optimization, but **full `small` is the
      default**.
+   - **MEASURED + LOCKED (M2-6 harness, #137 — 2026-06-26):** the illustrative clean-benchmark figures above are now
+     **superseded by real measurement** of the bundled `whisper-cli` 1.9.1 + `small` over 8 labeled, license-clean
+     voice-note-style clips (4× es, 2× de, 2× ru; Apple Silicon/Metal; auto-detect; the app's own ffmpeg→`-oj`
+     pipeline). Result: **overall aggregate WER 13.6%, Spanish 15.2%**, **auto-detect 7/8 (87.5%)**, **mean RTF
+     0.25×** (~4× real time). **Every *correctly language-detected* Spanish clip transcribed at 0% WER** — the only
+     Spanish errors came from **one 3.3 s clip auto-detected as Italian** (a language-ID miss, not a quality miss).
+     **Verdict: `small` IS good enough — kept.** Locked ceilings (`tests/perf/thresholds.ts`): Spanish aggregate WER
+     **≤ 22%**, overall **≤ 18%**, auto-detect floor **≥ 75%**, with a loose cross-platform RTF sanity bound (≤ 3×).
+     ⚠️ These are **clean-clip** bounds — real noisy/accented WhatsApp audio is worse; the **field** AC-21 ceiling
+     must still be set on real Spanish samples, and short-clip language-ID warrants a locale hint / user override.
+     Pure WER/RTF/detection logic is unit-tested in normal CI; the heavy real-model run is **self-gated** (env-var,
+     like the real-whisper tests) and never blocks required CI. Full evidence: `docs/perf/m2-wer-rtf-results.md`.
    - **`medium` (1.5 GiB) / `large` (2.9 GiB)** remain rejected: too large even as a download, and too slow on
      Windows CPU for a non-technical "in an afternoon" audience.
 5. **Transcript storage + FTS** — transcripts **attach to the existing media item** (audio/video), never create new

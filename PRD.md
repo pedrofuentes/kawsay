@@ -339,6 +339,10 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   asserted by observing the work occurs **off-main-thread** — and **no main-thread task exceeds 50 ms** for the
   duration, keeping the renderer responsive while progress is streamed.
 - **Test kind:** integration / performance. *(Extends AC-9.)*
+- **Measured (M2 harness, #137 — clean clips, offline):** mean **RTF ≈ 0.25×** (~4× faster than real time) with
+  the bundled `whisper-cli` 1.9.1 + `small` on Apple Silicon/Metal; a CPU host (Windows/Linux) is slower (near/at
+  real time). RTF is supplementary throughput evidence — the binding AC-18 guarantee remains *off-thread, no
+  main-thread task > 50 ms*. Full table + per-platform note: `docs/perf/m2-wer-rtf-results.md`.
 
 **AC-19 — Transcript text is searchable via FTS.**
 - **Given** items whose audio/video has been transcribed,
@@ -373,6 +377,13 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   was chosen over `base`**) — measured **offline** (CI fixtures, **no telemetry**).
 - **Test kind:** integration / performance (offline fixtures). *(New M2 quality bar; M2-0 now **validates `small`**
   against the ceiling rather than choosing `base` vs `small`.)*
+- **Measured + locked (M2 harness, #137 — clean labeled clips, offline, auto-detect):** `small` clears a sane bar —
+  **overall aggregate WER 13.6%, Spanish 15.2%** (every *correctly language-detected* Spanish clip transcribed at
+  **0%**), **language auto-detect 7/8 = 87.5%**. **Locked ceilings:** Spanish aggregate WER **≤ 22%**, overall
+  **≤ 18%**, auto-detect accuracy **≥ 75%** (`tests/perf/thresholds.ts`). **`small` is good enough — kept.** ⚠️
+  These are **clean-clip** bounds; the dominant error was language-ID on a 3.3 s clip (detected Italian), and real
+  noisy/accented WhatsApp audio is materially worse — the **field** WER ceiling must still be re-derived on real
+  Spanish samples. Evidence + caveats: `docs/perf/m2-wer-rtf-results.md`.
 
 **AC-22 — User control / opt-in over transcription (consent) — gates both transcription AND the model download.**
 - **Given** a grief-sensitive library in which transcription would turn a deceased person's voice into stored,

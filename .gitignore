@@ -18,6 +18,14 @@ out/
 /.ac4-whisper-*/
 /.harness-fixtures/
 
+# M2 offline WER/RTF accuracy harness (ADR-0027 / #137): the labeled clips are
+# fetched on demand (scripts/fetch-perf-fixtures.sh, sha256-verified) and the
+# 466 MB `small` model is downloaded locally — neither is committed. Only
+# tests/perf/fixtures/manifest.json + NOTICES.md live in git.
+/.perf-fixtures/
+*.ggml.bin
+ggml-*.bin
+
 # Test coverage reports
 coverage/
 
