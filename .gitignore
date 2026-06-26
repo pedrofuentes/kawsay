@@ -6,6 +6,12 @@ dist/
 build/
 out/
 
+# Compiled whisper-cli binaries — built from source in CI (ADR-0027 / #129),
+# never committed; the per-arch subdirs are bundled by electron-builder.
+# resources/whisper/README.md is kept; the binaries and work dir are not.
+/.whisper-build/
+/resources/whisper/*/
+
 # Test coverage reports
 coverage/
 

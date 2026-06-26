@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (start the download, stream progress, query `isModelReady`) but is **never auto-triggered** — the opt-in
   consent UI is card #132 and the worker that consumes the verified model is card #134. **AC-4 (zero egress)
   is preserved**: with no opt-in, the app still makes no network connections.
+- **Groundwork for on-device transcription** (card #133, M2 · ADR-0027): the first step toward gently turning
+  a loved one's voice notes and videos into searchable, readable text — **entirely on your own computer**.
+  Kawsay can now decode any WhatsApp voice note (`.opus`), audio file, or video soundtrack into the exact
+  audio shape the upcoming on-device transcription engine needs (16 kHz mono), reusing the same bundled,
+  offline media tooling that already makes thumbnails — **no new downloads and no network access** (AC-4). A
+  recording with no sound, or one that is unreadable or corrupt, is quietly skipped and noted rather than
+  interrupting anything, and long recordings are given the time they need to finish instead of being cut off.
+  Your original files are never changed. This is internal groundwork only: the transcription itself — the
+  on-device model, the off-thread worker, and the opt-in controls — arrives in later steps.
 - **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new
   `.github/workflows/release.yml` builds Kawsay on native **macOS** and **Windows** runners and uploads the
   installers — the macOS `.dmg`/`.zip` (Apple Silicon + Intel) and the Windows `.exe` (NSIS) — as assets of a
@@ -44,6 +53,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `contents: write` (create the release + upload assets) and nothing more, every action is pinned to a full
   commit SHA, and `package.json`'s `dist*` scripts stay `--publish never` so no local/automated build can
   ever publish. No new dependencies and no runtime network egress are added (AC-4 untouched) — see ADR-0026.
+- **Transcription groundwork — the `whisper-cli` engine, built from source in CI** (card #129, ADR-0027,
+  AC-23): the speech-to-text engine Kawsay will use later is the MIT-licensed **whisper.cpp** `whisper-cli`,
+  pinned to **`v1.9.1`** (commit `f049fff…`) and **compiled from source on the CI runners** — macOS
+  **arm64** + **x64** and **Windows x64** — rather than downloading a prebuilt binary, so every shipped
+  executable is reproducible from a known commit. A new `scripts/build-whisper-cli.sh` clones the pinned
+  ref, verifies the commit, and builds the per-arch binary with CMake (portable build — host-CPU tuning is
+  off so it can't crash on older machines; macOS embeds Metal so the binary is self-contained), staging it
+  under `resources/whisper/<os>-<arch>/`. `electron-builder.yml` bundles it per-arch via `extraResources`,
+  and a small resolver (`electron/main/transcription/whisper-cli.ts`) finds it at runtime via
+  `process.resourcesPath` (mirroring how `ffmpeg`/`ffprobe` are located). This is **groundwork only** —
+  there is no transcription feature yet, and **no speech model is bundled** (the model is a separate,
+  opt-in download handled later). No new runtime dependencies and **no network egress** are added
+  (AC-4 untouched); the whisper.cpp attribution is recorded in `NOTICES.md`.
 - Packaged, installable app (card P1, AC-5): Kawsay can now be built into real installers — a **macOS
   `.dmg`** (and `.zip`) for Apple Silicon and Intel, and a **Windows `.exe`** (NSIS) — with one command,
   `pnpm dist`. The native catalogue engine (`better-sqlite3`, bumped to **12.11.1** for Electron 42
