@@ -87,6 +87,70 @@ describe('PathField — Browse… native picker (W2, AC-12 usability)', () => {
     expect(screen.queryByRole('button', { name: /browse/i })).toBeNull();
   });
 
+  it('handles a rejected picker calmly: keeps the field, shows a gentle inline error, no crash (#115)', async () => {
+    // The native dialog rarely fails, but if its IPC rejects the await must not
+    // become an unhandled rejection that leaves the user with no feedback.
+    const openDirectory = vi.fn(() => Promise.reject(new Error('EACCES: native dialog failed')));
+    const api = makeFakeApi({ openDirectory });
+    const onChange = vi.fn();
+    renderWithApi(
+      <PathField label="Folder" value="/keep/me" onChange={onChange} browseFor="directory" />,
+      api,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /browse/i }));
+
+    // A calm, non-technical message is announced — never the raw OS error.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/couldn't open/i);
+    expect(alert).not.toHaveTextContent(/EACCES/);
+    // The field is left exactly as the user had it, and onChange never fires.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Folder')).toHaveValue('/keep/me');
+    // The message is associated with the input for screen-reader users.
+    const input = screen.getByLabelText('Folder');
+    expect(input.getAttribute('aria-describedby') ?? '').toContain(alert.id);
+  });
+
+  it('handles a rejected FILE picker the same calm way (#115)', async () => {
+    const openFile = vi.fn(() => Promise.reject(new Error('dialog unavailable')));
+    const api = makeFakeApi({ openFile });
+    const onChange = vi.fn();
+    const { container } = renderWithApi(
+      <PathField label="WhatsApp file" value="/prior.zip" onChange={onChange} browseFor="file" />,
+      api,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /browse/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/couldn't open/i);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('WhatsApp file')).toHaveValue('/prior.zip');
+    await expectNoAxeViolations(container);
+  });
+
+  it('recovers when a retried Browse succeeds: clears the error and fills the field (#115)', async () => {
+    const openDirectory = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('dialog hiccup'))
+      .mockResolvedValueOnce('/Users/elena/Memories');
+    const api = makeFakeApi({ openDirectory });
+    const onChange = vi.fn();
+    renderWithApi(
+      <PathField label="Folder" value="" onChange={onChange} browseFor="directory" />,
+      api,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /browse/i }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /browse/i }));
+
+    expect(onChange).toHaveBeenCalledWith('/Users/elena/Memories');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('exposes an accessible, keyboard-operable Browse control with zero axe violations', async () => {
     const api = makeFakeApi({ openDirectory: vi.fn(() => Promise.resolve('/picked')) });
     const onChange = vi.fn();
