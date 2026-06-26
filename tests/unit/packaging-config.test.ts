@@ -39,6 +39,33 @@ const packageJson = JSON.parse(readFileSync(repoRoot('package.json'), 'utf8')) a
   devDependencies?: Record<string, string>;
 };
 
+// The release automation harness (.github/workflows/release.yml) is the other half
+// of the AC-5 packaging contract (ADR-0007), so this drift test guards it too.
+// #122: the macOS + Windows matrix legs each ran `electron-builder --publish always`
+// and RACED to create the GitHub Release, producing two split/duplicate releases
+// (each carrying only its own platform's assets). The assertions below pin the
+// race-free shape — a build-only OS matrix that uploads artifacts plus a SINGLE,
+// human-gated publish job that downloads them and creates exactly ONE release —
+// so the race cannot silently regress.
+const releaseYml = readFileSync(repoRoot('.github/workflows/release.yml'), 'utf8');
+
+/** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
+function releaseJobBlock(jobId: string): string {
+  const lines = releaseYml.split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp(`^ {2}${jobId}:\\s*$`).test(l));
+  if (start === -1) return '';
+  const body: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() !== '' && /^ {0,2}\S/.test(line)) break; // next job or top-level key
+    body.push(line);
+  }
+  return body.join('\n');
+}
+
+/** Every `uses:` line in the workflow (for the SHA-pin assertions). */
+const releaseUsesLines = releaseYml.split(/\r?\n/).filter((l) => /^\s*uses:/.test(l));
+
 /** Return the indented body lines that belong to a top-level YAML key. */
 function topLevelBlock(name: string): string {
   const lines = builderYml.split(/\r?\n/);
@@ -223,5 +250,83 @@ describe('stripYamlComments tolerates CRLF and LF line endings (Windows-checkout
     expect(stripped).not.toMatch(/telemetry/);
     expect(stripped).toMatch(/provider: github/);
     expect(stripped).toMatch(/releaseType: release/);
+  });
+});
+
+describe('release workflow publishes ONE consolidated GitHub Release — no publish race (#122)', () => {
+  const build = releaseJobBlock('build');
+  const publish = releaseJobBlock('publish');
+
+  it('builds the OS matrix with --publish never and never with --publish always', () => {
+    // The v0.1.0 race was two matrix legs each running `--publish always`. The build
+    // legs now only BUILD; nothing in the workflow publishes via electron-builder.
+    expect(releaseYml).toMatch(/electron-builder --publish never/);
+    expect(releaseYml).not.toMatch(/--publish always/);
+  });
+
+  it('runs the macOS+Windows matrix on the build job and publishes from a single non-matrix job', () => {
+    expect(build).toMatch(/matrix:/);
+    expect(build).toMatch(/os:\s*\[\s*macos-latest\s*,\s*windows-latest\s*\]/);
+    // The publisher must run exactly once — no matrix/strategy fan-out, hence no race.
+    expect(publish).not.toMatch(/matrix:/);
+    expect(publish).not.toMatch(/strategy:/);
+    expect(publish).toMatch(/needs:\s*\[\s*build\s*\]/);
+  });
+
+  it('creates the release from exactly one SHA-pinned softprops/action-gh-release step', () => {
+    const ghRelease = releaseYml.match(/uses:\s*softprops\/action-gh-release@[0-9a-f]{40}/g) ?? [];
+    expect(ghRelease).toHaveLength(1); // one publisher → one release
+    expect(publish).toMatch(
+      /uses:\s*softprops\/action-gh-release@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/,
+    );
+  });
+
+  it('hands platform installers from the build legs to the publish job via artifacts', () => {
+    expect(build).toMatch(/uses:\s*actions\/upload-artifact@[0-9a-f]{40}/);
+    expect(publish).toMatch(/uses:\s*actions\/download-artifact@[0-9a-f]{40}/);
+  });
+
+  it('keeps the protected `release` environment human gate on the single publish job only', () => {
+    expect(publish).toMatch(/environment:\s*release/);
+    expect(build).not.toMatch(/environment:\s*release/); // build legs do not publish
+    // The required-reviewer gate guards exactly one job — the one that publishes.
+    expect(releaseYml.match(/environment:\s*release/g)).toHaveLength(1);
+  });
+
+  it('grants contents: write only to the publish job and stays read-only at the top level', () => {
+    expect(publish).toMatch(/contents:\s*write/);
+    expect(build).not.toMatch(/contents:\s*write/); // build legs upload artifacts, not releases
+    expect(releaseYml).toMatch(/permissions:\n {2}contents: read/); // top-level least privilege
+  });
+});
+
+describe('release workflow preserves the M1 hardening + whisper-cli build (#129, ADR-0007/0025/0027)', () => {
+  const build = releaseJobBlock('build');
+
+  it('SHA-pins every action to a 40-hex commit with a # vX.Y.Z comment', () => {
+    expect(releaseUsesLines.length).toBeGreaterThan(0);
+    for (const line of releaseUsesLines) {
+      expect(line).toMatch(/uses:\s*[^@\s]+@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/);
+    }
+  });
+
+  it('builds + verifies the per-arch whisper-cli before packaging', () => {
+    expect(build).toMatch(/scripts\/build-whisper-cli\.sh/);
+    expect(build).toMatch(/Verify staged binaries/);
+    expect(build).toMatch(/resources\/whisper\/mac-arm64\/whisper-cli/);
+    expect(build).toMatch(/resources\/whisper\/win-x64\/whisper-cli\.exe/);
+  });
+
+  it('keeps the unsigned-v1 posture, Node 22, and non-persisted credentials', () => {
+    expect(build).toMatch(/CSC_IDENTITY_AUTO_DISCOVERY:\s*'false'/);
+    expect(releaseYml).toMatch(/node-version:\s*22/);
+    expect(releaseYml).toMatch(/persist-credentials:\s*false/);
+  });
+
+  it('still triggers on a pushed v* tag and manual dispatch, serialized by concurrency', () => {
+    expect(releaseYml).toMatch(/tags:\s*\n\s*-\s*'v\*'/);
+    expect(releaseYml).toMatch(/workflow_dispatch:/);
+    expect(releaseYml).toMatch(/concurrency:/);
+    expect(releaseYml).toMatch(/cancel-in-progress:\s*false/);
   });
 });
