@@ -1,0 +1,20 @@
+(version 1)
+;; AC-4 macOS OS-deny profile (ADR-0027 / #138). A kernel-enforced Seatbelt
+;; sandbox that DENIES all network for the wrapped process tree (children and
+;; worker threads inherit it), allowing only loopback so local IPC and on-device
+;; compute are unaffected. This is the macOS equivalent of the Linux iptables
+;; default-DROP: it is what gives the real, shipped whisper-cli ZERO off-machine
+;; egress while it transcribes a fixture WAV, and what blocks the routable-target
+;; positive controls. `sandbox-exec` needs no sudo or firewall service, so it
+;; runs reliably on hosted runners (verified: a routable probe is dropped, the
+;; binary still produces JFK's words).
+;;
+;; Residual gap (see DECISIONS.md ADR-0027): Seatbelt's `remote ip` host filter
+;; accepts only `*` or `localhost`, never an arbitrary remote host, so this layer
+;; cannot express "deny all egress EXCEPT the pinned model host". The only-pinned
+;; -GET model download stays proven at the webRequest allowlist (unit-tested) and
+;; the Linux deny-all backstop, not at this OS layer.
+(allow default)
+(deny network*)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-inbound (local ip "localhost:*"))
