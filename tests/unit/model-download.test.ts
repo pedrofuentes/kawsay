@@ -199,6 +199,34 @@ describe('createModelDownloader — resumable download (HTTP Range)', () => {
     expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
     expect(requests[0].headers.Range).toBe('bytes=13-');
   });
+
+  it('discards a stale partial on HTTP 416 (range not satisfiable) and cleanly restarts', async () => {
+    // A leftover .part whose offset the server now rejects (the asset changed, or
+    // the partial is bogus). The first ranged request gets 416; the partial must be
+    // discarded and the download must restart from zero and complete — not wedge.
+    writeFileSync(`${modelPath}.part`, Buffer.from(chunk(0, 20)));
+    const { fetcher, requests } = makeFetcher((req) =>
+      req.headers.Range !== undefined
+        ? response(416, bytesBody([]))
+        : response(200, bytesBody([chunk(0, 33)])),
+    );
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: MODEL_BYTES.length,
+      maxAttempts: 3,
+      sleep: () => Promise.resolve(),
+    });
+
+    const result = await downloader.downloadModel();
+    expect(result.status).toBe('done');
+    expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
+    // First request carried the stale Range and got 416; the retry restarted clean.
+    expect(requests[0].headers.Range).toBe('bytes=20-');
+    expect(requests[1].headers.Range).toBeUndefined();
+    expect(existsSync(`${modelPath}.part`)).toBe(false);
+  });
 });
 
 describe('createModelDownloader — typed, calm failures (no crash)', () => {

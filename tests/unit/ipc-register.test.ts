@@ -66,6 +66,13 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     expect(ipcMain.listeners.has(APP_GET_VERSION)).toBe(true);
   });
 
+  it('registers a handle() listener for the gated model-download channels', () => {
+    const ipcMain = fakeIpcMain();
+    registerIpcHandlers(ipcMain, handlers);
+    expect(ipcMain.listeners.has(TRANSCRIPTION_DOWNLOAD_MODEL)).toBe(true);
+    expect(ipcMain.listeners.has(TRANSCRIPTION_MODEL_STATUS)).toBe(true);
+  });
+
   it('runs the handler and returns its validated response for a trusted sender', async () => {
     const ipcMain = fakeIpcMain();
     registerIpcHandlers(ipcMain, handlers, trustedSenderOptions);

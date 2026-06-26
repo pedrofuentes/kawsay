@@ -124,6 +124,25 @@ describe('createElectronModelFetcher — routes through net.request on the guard
     expect(request.aborted).toBe(true);
   });
 
+  it('queues body chunks (and end) that arrive before the consumer starts iterating', async () => {
+    const { net, request } = makeNet();
+    const fetcher = createElectronModelFetcher(net, SESSION);
+    const promise = fetcher({ url: 'https://example/x', method: 'GET', headers: {} });
+    const message = new FakeIncomingMessage(200, {});
+    request.emit('response', message);
+    const response = await promise;
+
+    // The whole body (and `end`) lands BEFORE we begin draining — eager listeners
+    // must buffer it so a fast early burst is never lost between response + consume.
+    message.emit('data', Buffer.from([1, 2, 3]));
+    message.emit('data', Buffer.from([4, 5]));
+    message.emit('end');
+
+    const collected: number[] = [];
+    for await (const chunk of response.body) collected.push(...chunk);
+    expect(collected).toEqual([1, 2, 3, 4, 5]);
+  });
+
   it('rejects when the request errors (offline / connection failure)', async () => {
     const { net, request } = makeNet();
     const fetcher = createElectronModelFetcher(net, SESSION);
