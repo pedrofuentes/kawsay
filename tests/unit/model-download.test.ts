@@ -356,3 +356,108 @@ describe('createModelDownloader — single-flight & skip-when-present', () => {
     expect(await downloader.isModelReady()).toBe(true);
   });
 });
+
+describe('createModelDownloader — progress-driven resume budget (bounded-buffer backpressure)', () => {
+  let dir: string;
+  let modelPath: string;
+  beforeEach(() => {
+    dir = makeTmpDir('model-dl-budget-');
+    modelPath = join(dir, 'ggml-small.bin');
+  });
+  afterEach(() => {
+    removeTmpDir(dir);
+  });
+
+  it('keeps resuming while each attempt makes forward progress, even past maxAttempts interruptions', async () => {
+    // Every attempt delivers ONE byte then drops the connection — the shape a
+    // bounded-buffer backpressure abort produces on a slow disk. With a blunt
+    // 2-attempt budget this would die after 2 bytes; because each attempt makes
+    // forward progress the budget must reset so the whole file still lands.
+    const { fetcher, requests } = makeFetcher((req) => {
+      const range = req.headers.Range;
+      const start = range ? Number(/bytes=(\d+)-/.exec(range)?.[1] ?? '0') : 0;
+      const end = Math.min(start + 1, MODEL_BYTES.length);
+      const status = start > 0 ? 206 : 200;
+      const headers: Record<string, string> =
+        start > 0 ? { 'content-range': `bytes ${start}-${end - 1}/${MODEL_BYTES.length}` } : {};
+      // Drop right after the single byte unless this is the final byte (then finish).
+      const failAfter = end < MODEL_BYTES.length ? 1 : undefined;
+      return response(status, bytesBody([chunk(start, end)], failAfter), headers);
+    });
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: MODEL_BYTES.length,
+      maxAttempts: 2,
+      sleep: () => Promise.resolve(),
+    });
+
+    const result = await downloader.downloadModel();
+
+    expect(result.status).toBe('done');
+    expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
+    // It took far more than the 2-attempt budget — proof the budget resets on
+    // progress rather than capping a healthy, steadily-resuming download.
+    expect(requests.length).toBeGreaterThan(2);
+  });
+});
+
+describe('createModelDownloader — install-commit failures emit a terminal error (no silent reject)', () => {
+  let dir: string;
+  let modelPath: string;
+  let progress: ModelDownloadProgress[];
+  beforeEach(() => {
+    dir = makeTmpDir('model-dl-commit-');
+    modelPath = join(dir, 'models', 'ggml-small.bin');
+    progress = [];
+  });
+  afterEach(() => {
+    removeTmpDir(dir);
+  });
+
+  it('emits a terminal error progress event when the atomic install rename fails', async () => {
+    const renameError = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
+      code: 'EXDEV',
+    });
+    const { fetcher } = makeFetcher(() => response(200, bytesBody([chunk(0, 33)])));
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: MODEL_BYTES.length,
+      rename: () => Promise.reject(renameError),
+      onProgress: (p) => progress.push(p),
+    });
+
+    const error = await downloader.downloadModel().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ModelDownloadError);
+    expect((error as ModelDownloadError).kind).toBe('disk');
+    // The crux: a TERMINAL error progress event is emitted, so the IPC handler's
+    // fire-and-forget `.catch()` cannot swallow the failure into a renderer that
+    // hangs forever at `verifying`.
+    expect(progress.at(-1)?.phase).toBe('error');
+    expect(progress.at(-1)?.error?.kind).toBe('disk');
+  });
+
+  it('emits a terminal error progress event when creating the install directory fails', async () => {
+    const mkdirError = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    const { fetcher } = makeFetcher(() => response(200, bytesBody([chunk(0, 33)])));
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: MODEL_BYTES.length,
+      mkdir: () => Promise.reject(mkdirError),
+      onProgress: (p) => progress.push(p),
+    });
+
+    const error = await downloader.downloadModel().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ModelDownloadError);
+    expect((error as ModelDownloadError).kind).toBe('disk');
+    expect(progress.at(-1)?.phase).toBe('error');
+    expect(progress.at(-1)?.error?.kind).toBe('disk');
+  });
+});
