@@ -83,8 +83,16 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
     },
     setOptedIn(value) {
       const payload: ConsentFile = { transcriptionOptedIn: value };
-      fs.mkdirSync(dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      try {
+        fs.mkdirSync(dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      } catch (error) {
+        // Best-effort (header contract): an unwritable location must not crash the
+        // calm main process. Fail closed — the choice simply is not persisted (a
+        // relaunch reads the prior/absent value, defaulting to opted-OUT) — and
+        // leave a diagnostic rather than throwing out of the seam.
+        console.warn(`[kawsay] could not persist transcription consent to ${filePath}:`, error);
+      }
     },
   };
 }
