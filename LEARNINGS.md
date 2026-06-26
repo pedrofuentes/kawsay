@@ -19,6 +19,29 @@
 
 <!-- Add new learnings below this line, most recent first -->
 
+### [2026-06-25] Electron `net.request` is the only guard-respecting downloader, and its `IncomingMessage` is event-based (not a Node `Readable`)
+**Context**: Card #131 (ADR-0027 Decision 6) — building the opt-in, checksum-verified model download manager
+that must not bypass the AC-4 zero-egress guard.
+**Learning**:
+- `network-guard.ts` installs **only** `session.webRequest.onBeforeRequest`, which governs the
+  **Chromium/Electron-session network stack only**. Node `http`/`https`/`net` traffic **bypasses it
+  entirely**. So any privileged egress (the model download) **must** use **Electron `net.request`/`net.fetch`
+  on the guarded `session`** to actually pass through the chokepoint — a Node-primitive downloader would
+  silently defeat the guarantee. The AC-4 allow/deny proof therefore lives in the `webRequest` allowlist test
+  (`tests/ac4/network-guard.test.ts`), not in the Node-prototype egress spies (which never observe the
+  Chromium-stack download).
+- Electron's `net` `IncomingMessage` **extends `EventEmitter`, not a Node `Readable`**: it emits
+  `data`(Buffer)/`end`/`error`/`aborted` and has **no** `pause`/`resume`/`Symbol.asyncIterator`. To consume
+  it as a stream you must **bridge the events to an `AsyncIterable`** yourself (a chunk queue + a wake
+  promise), attaching the listeners **eagerly when the response arrives** so an early `data` event isn't
+  dropped before iteration starts.
+- Follow GitHub's `302` natively with `redirect: 'follow'` and `credentials: 'omit'`; the signed
+  `release-assets.githubusercontent.com` URL is time-limited, so on a long resume **re-request the pinned
+  origin URL** (which mints a fresh redirect) rather than reusing the expired signed link.
+**Impact**: Card #134 (the `whisper-cli` worker) and any future feature that needs the network must route
+through `net` on the guarded session and call `verifyModelOnDisk()` before use; do not reach for Node
+`https`/`http`.
+
 ### [2026-06-24] Packaging Kawsay with electron-builder: native ABI, the asar-integrity/signing trap, nested-worktree rebuilds
 **Context**: Card P1 (AC-5) — turning the electron-builder skeleton into a `pnpm dist` that actually builds
 the macOS dmg/zip + Windows nsis and *launches*. Most of the work was diagnosing why the first real

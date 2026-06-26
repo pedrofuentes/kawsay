@@ -9,9 +9,15 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_DOWNLOAD_MODEL,
+  TRANSCRIPTION_MODEL_STATUS,
   ipcContract,
 } from '@shared/ipc/contract';
-import { IMPORT_PROGRESS, ipcEventContract } from '@shared/ipc/events';
+import {
+  IMPORT_PROGRESS,
+  TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
+  ipcEventContract,
+} from '@shared/ipc/events';
 import { itemCardSchema } from '@shared/ipc/schemas';
 
 const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
@@ -320,5 +326,90 @@ describe('ipcEventContract — import:progress', () => {
     expect(schema.safeParse({ phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
     expect(schema.safeParse({ jobId: 'nope', phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null }).success).toBe(false);
     expect(schema.safeParse({ jobId: UUID, phase: 'emit', processed: 1, total: null, message: null, summary: null, error: null, rogue: true }).success).toBe(false);
+  });
+});
+
+describe('ipcContract — transcription:downloadModel / transcription:modelStatus (AC-17)', () => {
+  it('takes an empty request and answers with a started/already-present status', () => {
+    expect(reqOk(TRANSCRIPTION_DOWNLOAD_MODEL, {})).toBe(true);
+    expect(resOk(TRANSCRIPTION_DOWNLOAD_MODEL, { status: 'started' })).toBe(true);
+    expect(resOk(TRANSCRIPTION_DOWNLOAD_MODEL, { status: 'already-present' })).toBe(true);
+  });
+
+  it('rejects an unknown status, extra request keys, or a non-empty body', () => {
+    expect(resOk(TRANSCRIPTION_DOWNLOAD_MODEL, { status: 'done' })).toBe(false);
+    expect(resOk(TRANSCRIPTION_DOWNLOAD_MODEL, {})).toBe(false);
+    expect(reqOk(TRANSCRIPTION_DOWNLOAD_MODEL, { force: true })).toBe(false);
+  });
+
+  it('reports model readiness as a strict boolean', () => {
+    expect(reqOk(TRANSCRIPTION_MODEL_STATUS, {})).toBe(true);
+    expect(resOk(TRANSCRIPTION_MODEL_STATUS, { ready: true })).toBe(true);
+    expect(resOk(TRANSCRIPTION_MODEL_STATUS, { ready: false })).toBe(true);
+    expect(resOk(TRANSCRIPTION_MODEL_STATUS, { ready: 'yes' })).toBe(false);
+    expect(resOk(TRANSCRIPTION_MODEL_STATUS, {})).toBe(false);
+  });
+});
+
+describe('ipcEventContract — transcription:modelDownloadProgress (AC-17)', () => {
+  const schema = ipcEventContract[TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS];
+
+  it('accepts an in-flight downloading tick (no error)', () => {
+    expect(
+      schema.safeParse({
+        phase: 'downloading',
+        bytesDownloaded: 1024,
+        totalBytes: 487601967,
+        error: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts verifying / done / already-present terminal ticks', () => {
+    for (const phase of ['verifying', 'done', 'already-present'] as const) {
+      expect(
+        schema.safeParse({ phase, bytesDownloaded: 487601967, totalBytes: 487601967, error: null })
+          .success,
+      ).toBe(true);
+    }
+  });
+
+  it('accepts a typed error terminal tick', () => {
+    expect(
+      schema.safeParse({
+        phase: 'error',
+        bytesDownloaded: 2048,
+        totalBytes: 487601967,
+        error: { kind: 'network', message: 'offline', retryable: true },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a bad phase, bad error kind, negative bytes, or unknown keys', () => {
+    expect(
+      schema.safeParse({ phase: 'teleporting', bytesDownloaded: 0, totalBytes: 0, error: null })
+        .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        phase: 'error',
+        bytesDownloaded: 0,
+        totalBytes: 0,
+        error: { kind: 'cosmic-ray', message: 'x', retryable: false },
+      }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ phase: 'downloading', bytesDownloaded: -1, totalBytes: 0, error: null })
+        .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        phase: 'downloading',
+        bytesDownloaded: 0,
+        totalBytes: 0,
+        error: null,
+        rogue: true,
+      }).success,
+    ).toBe(false);
   });
 });

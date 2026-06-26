@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Opt-in transcription model download manager + integrity verification + a scoped egress allowlist**
+  (card #131, ADR-0027 Decision 6, **AC-17 / AC-24**): Kawsay can now fetch the on-device transcription
+  model (`ggml-small.bin`) **once, on opt-in, over a single checksum-verified download** — and nothing else.
+  The download runs in the **main process through Electron's `net.request` on the guarded session**, so it
+  flows through the very same `webRequest` kill-switch that denies all other egress (a Node `http`/`https`
+  downloader would have silently bypassed it). The model is **streamed to a temp file**, is **resumable**
+  (HTTP `Range`; it re-resolves the pinned origin URL when the signed CDN link expires mid-resume), reports
+  typed progress and terminal states, and fails **calmly and retryably** when offline, on a network error,
+  or when the disk is full — never crashing. After download it is **SHA-256- and size-verified against
+  pinned values** and only then **atomically renamed** into place; a mismatch deletes the file and allows a
+  clean refetch, and a `verifyModelOnDisk()` re-check guards against on-disk tampering before each use
+  (AC-24). The **network guard's egress allowlist** is extended **narrowly and centrally** to permit
+  **exactly** the pinned model `GET`, matched two ways: the **origin** leg by **exact URL**, and the
+  **CDN** leg (`release-assets.githubusercontent.com`) by **exact host** over https — the latter because
+  GitHub's `302` lands on a signed, time-limited link whose path and query legitimately vary per attempt.
+  Both legs are `GET`-only with an empty upload body, and **everything else stays denied** — a `POST` to
+  either host, a `GET` to a **different path on the origin** (exact-URL), a CDN **subdomain spoof** or
+  plaintext leg, and every non-model URL all stay denied; the renderer CSP
+  (`connect-src 'none'`) is untouched. The capability is exposed over a gated main↔renderer IPC channel
+  (start the download, stream progress, query `isModelReady`) but is **never auto-triggered** — the opt-in
+  consent UI is card #132 and the worker that consumes the verified model is card #134. **AC-4 (zero egress)
+  is preserved**: with no opt-in, the app still makes no network connections.
 - **Groundwork for on-device transcription** (card #133, M2 · ADR-0027): the first step toward gently turning
   a loved one's voice notes and videos into searchable, readable text — **entirely on your own computer**.
   Kawsay can now decode any WhatsApp voice note (`.opus`), audio file, or video soundtrack into the exact

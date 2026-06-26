@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, session } from 'electron';
 import {
   APP_GET_VERSION,
   CATALOG_SEARCH,
@@ -12,10 +12,13 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_DOWNLOAD_MODEL,
+  TRANSCRIPTION_MODEL_STATUS,
 } from '@shared/ipc/contract';
-import { IMPORT_PROGRESS } from '@shared/ipc/events';
+import { IMPORT_PROGRESS, TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS } from '@shared/ipc/events';
 import { handleGetVersion } from './ipc/handlers/app';
 import { handleOpenDirectory, handleOpenFile, type ShowOpenDialog } from './ipc/handlers/dialog';
+import { handleDownloadModel, handleModelStatus } from './ipc/handlers/transcription';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
@@ -24,6 +27,9 @@ import { createIngestionCoordinator } from './importers/ingestion/coordinator';
 import { createWorkerThreadsSpawner } from './importers/ingestion/worker-threads-transport';
 import { createFfmpegVideoFrameThumbnailer } from './importers/deps/thumbnail';
 import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-service';
+import { createModelDownloader } from './transcription/model-download';
+import { createElectronModelFetcher } from './transcription/electron-net-fetcher';
+import { MODEL_FILE_NAME } from './transcription/model-source';
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
 import { installNetworkGuard } from './security/network-guard';
 import {
@@ -66,6 +72,19 @@ const ingestionCoordinator = createIngestionCoordinator({
   spawn: createWorkerThreadsSpawner({ scriptPath: join(moduleDir, 'ingestion-worker.js') }),
   emitProgress: (event) => emitEvent(IMPORT_PROGRESS, event),
 });
+
+// The opt-in transcription-model download manager (AC-17 / ADR-0027). Built in
+// bootstrap() once the app is ready (it needs the guarded `session.defaultSession`
+// and `userData` path), then driven by the transcription IPC handlers. It is
+// NEVER auto-started — only the caller-initiated `transcription:downloadModel`
+// channel begins a download (the consent UI is card #132).
+let modelDownloader: ReturnType<typeof createModelDownloader> | undefined;
+function requireModelController(): ReturnType<typeof createModelDownloader> {
+  if (modelDownloader === undefined) {
+    throw new Error('the transcription model downloader is not initialised yet');
+  }
+  return modelDownloader;
+}
 
 // The thumbnail decoders (U4), injected into the catalog session so it stays
 // Electron-free and unit-testable. Photos use Electron's built-in `nativeImage`
@@ -125,6 +144,8 @@ const ipcHandlers: IpcHandlerMap = {
   [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
   [DIALOG_OPEN_DIRECTORY]: (request) => handleOpenDirectory({ showOpenDialog }, request),
   [DIALOG_OPEN_FILE]: (request) => handleOpenFile({ showOpenDialog }, request),
+  [TRANSCRIPTION_DOWNLOAD_MODEL]: () => handleDownloadModel({ controller: requireModelController() }),
+  [TRANSCRIPTION_MODEL_STATUS]: () => handleModelStatus({ controller: requireModelController() }),
 };
 
 function createMainWindow(): void {
@@ -166,6 +187,16 @@ async function bootstrap(): Promise<void> {
   installContentSecurityPolicy(session.defaultSession, cspOptions);
   // The runtime zero-egress kill-switch (AC-4): cancel every non-local request.
   installNetworkGuard(session.defaultSession, { isPackaged: app.isPackaged });
+
+  // The model download flows through Electron `net` on the GUARDED session, so it
+  // passes through the webRequest allowlist above — not Node http/https, which
+  // would bypass the guard. The verified model lands under userData/models.
+  modelDownloader = createModelDownloader({
+    fetcher: createElectronModelFetcher(net, session.defaultSession),
+    modelPath: join(app.getPath('userData'), 'models', MODEL_FILE_NAME),
+    onProgress: (progress) => emitEvent(TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS, progress),
+  });
+
   registerIpcHandlers(ipcMain, ipcHandlers, senderOptions);
 
   createMainWindow();

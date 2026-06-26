@@ -35,9 +35,50 @@ export const importProgressEventSchema = z.strictObject({
 });
 export type ImportProgressEvent = z.infer<typeof importProgressEventSchema>;
 
+/** IPC event: streamed progress for the opt-in transcription-model download. */
+export const TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS = 'transcription:modelDownloadProgress';
+
+/**
+ * Lifecycle phases for the model download, mirroring the download manager's
+ * `ModelDownloadProgress.phase`. `downloading` ticks carry advancing byte counts;
+ * `verifying` is the SHA-256 + size check of the completed file; `done` /
+ * `already-present` / `error` are the terminal states (the stream ends there).
+ */
+export const MODEL_DOWNLOAD_PHASES = [
+  'downloading',
+  'verifying',
+  'done',
+  'already-present',
+  'error',
+] as const;
+
+/** Typed failure categories the renderer may branch on (calm, never a crash). */
+export const MODEL_DOWNLOAD_ERROR_KINDS = ['network', 'disk', 'integrity', 'http'] as const;
+
+/**
+ * The single payload for {@link TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS}. Terminal
+ * state is folded into the same stream (phase `done`/`already-present`/`error`)
+ * so a subscriber sees one ordered sequence. `error` is non-null ONLY on the
+ * `error` phase and carries a typed `kind` plus whether a retry may help.
+ */
+export const modelDownloadProgressEventSchema = z.strictObject({
+  phase: z.enum(MODEL_DOWNLOAD_PHASES),
+  bytesDownloaded: z.number().int().nonnegative(),
+  totalBytes: z.number().int().nonnegative(),
+  error: z
+    .strictObject({
+      kind: z.enum(MODEL_DOWNLOAD_ERROR_KINDS),
+      message: z.string(),
+      retryable: z.boolean(),
+    })
+    .nullable(),
+});
+export type ModelDownloadProgressEvent = z.infer<typeof modelDownloadProgressEventSchema>;
+
 /** The complete one-way event contract. */
 export const ipcEventContract = {
   [IMPORT_PROGRESS]: importProgressEventSchema,
+  [TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS]: modelDownloadProgressEventSchema,
 } as const;
 
 export type IpcEventContract = typeof ipcEventContract;

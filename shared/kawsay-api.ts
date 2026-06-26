@@ -10,7 +10,7 @@ import type {
   SearchResultDTO,
   TimelinePageDTO,
 } from '@shared/ipc/schemas';
-import type { ImportProgressEvent } from '@shared/ipc/events';
+import type { ImportProgressEvent, ModelDownloadProgressEvent } from '@shared/ipc/events';
 import type { SourceType } from '@shared/catalog';
 
 export interface KawsayAPI {
@@ -57,6 +57,29 @@ export interface KawsayAPI {
 
   /** Subscribe to the import progress stream; returns an unsubscribe function. */
   onImportProgress(listener: (event: ImportProgressEvent) => void): () => void;
+
+  /**
+   * Start the opt-in transcription-model download (AC-17 / ADR-0027). This is the
+   * gated capability only — it is CALLER-INITIATED (the consent UI is card #132)
+   * and never auto-runs. Resolves as soon as the work is scheduled: `started`
+   * means a download is now in flight, `already-present` means a verified model
+   * is already on disk. Byte progress and the terminal result arrive via
+   * {@link onModelDownloadProgress}; the file never leaves a checksum-verified,
+   * atomically-installed state.
+   */
+  downloadTranscriptionModel(): Promise<{ status: 'started' | 'already-present' }>;
+
+  /**
+   * Whether the transcription model is present AND integrity-verified — the
+   * capability gate the UI reads before offering transcription.
+   */
+  isTranscriptionModelReady(): Promise<boolean>;
+
+  /**
+   * Subscribe to the model-download progress + terminal stream; returns an
+   * unsubscribe function. Mirrors {@link onImportProgress}.
+   */
+  onModelDownloadProgress(listener: (event: ModelDownloadProgressEvent) => void): () => void;
 }
 
 /**
@@ -78,4 +101,5 @@ export type {
   ImportSummaryDTO,
 } from '@shared/ipc/schemas';
 export type { ImportProgressEvent } from '@shared/ipc/events';
+export type { ModelDownloadProgressEvent } from '@shared/ipc/events';
 export type { SourceType, MediaType } from '@shared/catalog';

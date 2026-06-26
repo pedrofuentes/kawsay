@@ -10,6 +10,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_DOWNLOAD_MODEL,
+  TRANSCRIPTION_MODEL_STATUS,
 } from '@shared/ipc/contract';
 import {
   registerIpcHandlers,
@@ -40,6 +42,8 @@ const otherHandlers = {
   [IMPORT_CANCEL]: () => ({ cancelled: false }),
   [DIALOG_OPEN_DIRECTORY]: () => null,
   [DIALOG_OPEN_FILE]: () => null,
+  [TRANSCRIPTION_DOWNLOAD_MODEL]: () => ({ status: 'already-present' as const }),
+  [TRANSCRIPTION_MODEL_STATUS]: () => ({ ready: false }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
@@ -60,6 +64,13 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     const ipcMain = fakeIpcMain();
     registerIpcHandlers(ipcMain, handlers);
     expect(ipcMain.listeners.has(APP_GET_VERSION)).toBe(true);
+  });
+
+  it('registers a handle() listener for the gated model-download channels', () => {
+    const ipcMain = fakeIpcMain();
+    registerIpcHandlers(ipcMain, handlers);
+    expect(ipcMain.listeners.has(TRANSCRIPTION_DOWNLOAD_MODEL)).toBe(true);
+    expect(ipcMain.listeners.has(TRANSCRIPTION_MODEL_STATUS)).toBe(true);
   });
 
   it('runs the handler and returns its validated response for a trusted sender', async () => {

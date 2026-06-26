@@ -11,8 +11,10 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_DOWNLOAD_MODEL,
+  TRANSCRIPTION_MODEL_STATUS,
 } from '@shared/ipc/contract';
-import { IMPORT_PROGRESS } from '@shared/ipc/events';
+import { IMPORT_PROGRESS, TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS } from '@shared/ipc/events';
 
 const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
@@ -30,6 +32,8 @@ function fakeInvoke() {
     [DIALOG_OPEN_DIRECTORY]: '/picked/dir',
     [DIALOG_OPEN_FILE]: '/picked/file.zip',
     [CATALOG_THUMBNAIL]: 'data:image/png;base64,AAAA',
+    [TRANSCRIPTION_DOWNLOAD_MODEL]: { status: 'started' },
+    [TRANSCRIPTION_MODEL_STATUS]: { ready: true },
   };
   const invoke = vi.fn((channel: string, payload: unknown) => {
     calls.push({ channel, payload });
@@ -54,10 +58,14 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     const pickedDir = await api.openDirectory({ title: 'Pick a folder' });
     const pickedFile = await api.openFile({});
     const thumbnail = await api.getThumbnail({ id: UUID });
+    const modelDownload = await api.downloadTranscriptionModel();
+    const modelReady = await api.isTranscriptionModelReady();
 
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
     expect(thumbnail).toBe('data:image/png;base64,AAAA');
+    expect(modelDownload).toEqual({ status: 'started' });
+    expect(modelReady).toBe(true);
     expect(calls.map((c) => c.channel)).toEqual([
       APP_GET_VERSION,
       LIBRARY_CREATE,
@@ -69,11 +77,28 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       DIALOG_OPEN_DIRECTORY,
       DIALOG_OPEN_FILE,
       CATALOG_THUMBNAIL,
+      TRANSCRIPTION_DOWNLOAD_MODEL,
+      TRANSCRIPTION_MODEL_STATUS,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
     expect(calls[8].payload).toEqual({});
     expect(calls[9].payload).toEqual({ id: UUID });
+    expect(calls[10].payload).toEqual({});
+    expect(calls[11].payload).toEqual({});
+  });
+
+  it('wires onModelDownloadProgress onto the model-download event subscription', () => {
+    const { invoke } = fakeInvoke();
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn(() => unsubscribe) as never;
+    const api = createKawsayApi(invoke, subscribe);
+    const listener = () => {};
+
+    const returned = api.onModelDownloadProgress(listener);
+
+    expect(subscribe).toHaveBeenCalledWith(TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS, listener);
+    expect(returned).toBe(unsubscribe);
   });
 
   it('wires onImportProgress onto the import:progress event subscription', () => {
@@ -97,10 +122,13 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       [
         'cancelImport',
         'createLibrary',
+        'downloadTranscriptionModel',
         'getAppVersion',
         'getThumbnail',
         'getTimeline',
+        'isTranscriptionModelReady',
         'onImportProgress',
+        'onModelDownloadProgress',
         'openDirectory',
         'openFile',
         'openLibrary',
