@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Proof that transcription never phones home — now on macOS and Windows, against the real engine** (card #138,
+  M2 · ADR-0027, **AC-4 / AC-17**): the zero-egress gate that guarantees "your memories never leave this computer"
+  used to enforce a real operating-system network block only on Linux. It now does so on **all three platforms we
+  ship** — macOS and Windows included — and, on those two, it runs the **real, shipped transcription engine**
+  (`whisper-cli`) on a sample recording **with every network connection blocked by the OS** and proves it **still
+  produces the transcript**. In other words: transcription is shown to need, and make, **zero internet access** on
+  the exact platforms users run. The block is proven to actually be in force before each run (a deliberate outbound
+  attempt must be stopped), so the check can never silently pass. One honest limitation is recorded for the team: at
+  the OS layer the block denies **all** egress rather than "all-but-the-one-permitted-model-download", so the
+  *only-the-pinned-download* guarantee continues to be proven by the app's request allowlist plus the Linux backstop.
+  Harness only — no app code or runtime network behaviour changes.
+
 - **On-device transcription engine — voices turned to text, off the main thread** (card #134, M2 · ADR-0027,
   **AC-18 / AC-20 / AC-24**): the engine that actually transcribes now exists — it composes the on-device
   model (#131), the 16 kHz audio extraction (#133), and the bundled `whisper-cli` engine (#129) into one
