@@ -27,14 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Settings card that **explains transcription and asks before anything is downloaded**. It describes, without
   jargon, what transcription does (turn a loved one's voice notes, audio, and videos into text you can read and
   search), that it happens **entirely on this computer** and **a loved one's memories never leave it**, and that
-  enabling it makes a **one-time ~466 MB download** — the language model — which is **the only time the app uses
+  enabling it makes a **one-time ~465 MB download** — the language model — which is **the only time the app uses
   the internet**. **Nothing downloads or transcribes without an explicit opt-in** (AC-22): pressing **Enable
   transcription** is what starts the one-time download, which then shows **gentle progress** (percentage and
   megabytes in a polite live region with a reassuring message) and recovers **calmly from being offline, a network
-  error, or a full disk** — a plain "try again", never a raw code or stack trace. The feature is **gated on a
+  error, or a full disk** — a plain "try again", never a raw code or stack trace; a **permanent** failure (a
+  forbidden or missing download, or a read-only install) **drops the futile retry** and offers calm alternate
+  guidance instead, so a grieving user is never trapped in a hopeless loop. The feature is **gated on a
   present, verified model**: a single global on/off toggle stays disabled with a clear "transcription isn't set up
   yet" until the model is ready, then unlocks so transcription can be turned on or off at any time. The screen
-  meets **WCAG 2.1 AA** (labelled toggle, described status, `aria-live` progress, no axe violations). It consumes
+  meets **WCAG 2.1 AA** (labelled toggle, described status, `aria-live` progress, an **announced "ready"
+  confirmation** that takes focus when setup completes, no axe violations). The intro's download size is derived
+  from the pinned `MODEL_SIZE_BYTES`, so the intro and the live progress always agree. It consumes
   the existing gated download IPC from card #131 and adds **no new network access**; per-item transcript display and
   search arrive with card #136.
 - **Opt-in transcription model download manager + integrity verification + a scoped egress allowlist**
@@ -386,7 +390,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   download" stance within the same ADR). Locked: **model = `small`**, **policy = opt-in**, **delivery = the app
   auto-downloads the model on first opt-in** (bundling rejected as "a huge app to download and install"; manual
   import rejected as too much friction for a grieving, non-technical user). The **binary stays bundled and the
-  installer stays ~200 MB**; the model is a one-time ~466 MB download to the app's data dir, **SHA-256-verified
+  installer stays ~200 MB**; the model is a one-time ~465 MB download to the app's data dir, **SHA-256-verified
   before use** (atomic, resumable, corrupt→refetch; re-verified before each transcription run). **Your memories
   never leave this computer** — transcription
   runs 100% locally and no audio/memory ever egresses; the previously-absolute zero-egress is **narrowed** to
