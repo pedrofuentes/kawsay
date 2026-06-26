@@ -44,6 +44,27 @@ describe('useModelDownload', () => {
     expect(api.downloadTranscriptionModel).not.toHaveBeenCalled();
   });
 
+  it('self-heals after a readiness-check rejection — a later enable() still downloads to ready', async () => {
+    const api = makeFakeApi({
+      isTranscriptionModelReady: vi.fn(() => Promise.reject(new Error('status check failed'))),
+      downloadTranscriptionModel: vi.fn(started),
+    });
+    const { result } = renderHook(() => useModelDownload(), { wrapper: wrapper(api) });
+    // The rejected check is treated as "not ready" (idle), never a crash...
+    await waitFor(() => expect(result.current.status).toBe('idle'));
+
+    // ...and the very next opt-in proceeds normally: the silent fallback self-heals.
+    await act(async () => {
+      await result.current.enable();
+    });
+    act(() => {
+      api.emitModelDownloadProgress(makeModelDownloadProgressEvent({ phase: 'done' }));
+    });
+
+    expect(result.current.ready).toBe(true);
+    expect(result.current.status).toBe('ready');
+  });
+
   it('enable() starts the download exactly once through the typed api', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { result } = renderHook(() => useModelDownload(), { wrapper: wrapper(api) });
@@ -97,7 +118,9 @@ describe('useModelDownload', () => {
 
   it('is immediately ready when enable() finds the model already present', async () => {
     const api = makeFakeApi({
-      downloadTranscriptionModel: vi.fn(() => Promise.resolve({ status: 'already-present' as const })),
+      downloadTranscriptionModel: vi.fn(() =>
+        Promise.resolve({ status: 'already-present' as const }),
+      ),
     });
     const { result } = renderHook(() => useModelDownload(), { wrapper: wrapper(api) });
     await waitFor(() => expect(result.current.status).toBe('idle'));
