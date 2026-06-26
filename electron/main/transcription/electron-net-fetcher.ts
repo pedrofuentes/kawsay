@@ -65,17 +65,51 @@ export interface ElectronNetLike<TSession = unknown> {
 }
 
 /**
+ * Default high-water mark (bytes) for the in-memory body queue: 16 MiB. Electron's
+ * `IncomingMessage` has no `pause`/`resume`, so on a fast-net/slow-disk machine an
+ * unbounded queue could grow toward the whole ~466 MiB body and OOM a low-RAM
+ * machine (our audience). 16 MiB caps the worst-case spike while staying far above
+ * a single socket read, so backpressure aborts are rare and each resume still
+ * transfers a large, efficient run before the next (if any) pause.
+ */
+export const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
+
+/** Tuning for {@link toAsyncIterable}'s bounded, backpressure-aware queue. */
+interface ToAsyncIterableOptions {
+  /** Max bytes allowed to sit un-drained in the queue before backpressure trips. */
+  readonly maxBufferedBytes: number;
+  /**
+   * Called once the queue would exceed {@link maxBufferedBytes}. Electron's body
+   * stream cannot be paused, so the only lever is to ABORT the request; the
+   * download manager then resumes from the on-disk offset via HTTP `Range`.
+   */
+  readonly onBackpressure: () => void;
+}
+
+/**
  * Bridge an event-based Electron `IncomingMessage` into an ordered, error-aware
  * {@link AsyncIterable}. Listeners are attached eagerly (when the response
  * arrives) so a `data` event that fires before the consumer starts iterating is
- * queued rather than lost. Electron's `IncomingMessage` exposes no backpressure
- * primitive, so chunks queue in memory if the disk lags the network; in practice
- * the network is the bottleneck for the ~466 MiB model, keeping the queue small.
+ * queued rather than lost.
+ *
+ * Electron's `IncomingMessage` exposes NO backpressure primitive (no
+ * `pause`/`resume`), so if the disk lags the network the queue would otherwise
+ * grow without bound — a real OOM risk on the ~466 MiB model. Instead the queue
+ * is BOUNDED: once buffering another chunk would exceed `maxBufferedBytes` we stop
+ * accumulating, fire `onBackpressure` (which aborts the request), and surface a
+ * retryable signal AFTER the already-queued bytes drain. The download manager
+ * banks those bytes and resumes from the on-disk offset via HTTP `Range`, so peak
+ * memory stays bounded with integrity (SHA-256) intact.
  */
-function toAsyncIterable(message: ElectronIncomingMessageLike): AsyncIterable<Uint8Array> {
+function toAsyncIterable(
+  message: ElectronIncomingMessageLike,
+  options: ToAsyncIterableOptions,
+): AsyncIterable<Uint8Array> {
   const chunks: Uint8Array[] = [];
+  let queuedBytes = 0;
   let ended = false;
   let failure: Error | undefined;
+  let backpressured = false;
   let wake: (() => void) | undefined;
 
   const signal = (): void => {
@@ -85,7 +119,27 @@ function toAsyncIterable(message: ElectronIncomingMessageLike): AsyncIterable<Ui
   };
 
   message.on('data', (chunk) => {
+    // Already over the mark and aborting: drop further chunks. They are not lost —
+    // the resume re-requests them from the on-disk offset via `Range`.
+    if (backpressured) {
+      return;
+    }
+    // Accept the chunk only while the queue stays within the high-water mark, but
+    // always accept when the queue is empty so a single oversized chunk still makes
+    // forward progress (never a resume that can't advance).
+    if (queuedBytes > 0 && queuedBytes + chunk.length > options.maxBufferedBytes) {
+      backpressured = true;
+      // Surface AFTER the queued prefix drains (the iterator checks `failure` only
+      // once `chunks` is empty), so banked bytes reach disk before the resume.
+      failure ??= new Error(
+        'model download paused: response buffer high-water mark exceeded (resuming via Range)',
+      );
+      options.onBackpressure();
+      signal();
+      return;
+    }
     chunks.push(chunk);
+    queuedBytes += chunk.length;
     signal();
   });
   message.on('end', () => {
@@ -106,6 +160,7 @@ function toAsyncIterable(message: ElectronIncomingMessageLike): AsyncIterable<Ui
       for (;;) {
         const next = chunks.shift();
         if (next !== undefined) {
+          queuedBytes -= next.length;
           yield next;
           continue;
         }
@@ -123,6 +178,16 @@ function toAsyncIterable(message: ElectronIncomingMessageLike): AsyncIterable<Ui
   };
 }
 
+/** Tuning for the production model fetcher. */
+export interface ElectronModelFetcherOptions {
+  /**
+   * High-water mark (bytes) for the in-memory body queue before backpressure
+   * aborts the request and the download resumes via `Range`. Defaults to
+   * {@link DEFAULT_MAX_BUFFERED_BYTES} (16 MiB).
+   */
+  readonly maxBufferedBytes?: number;
+}
+
 /**
  * Create the production model fetcher. `net` and `session` are injected so the
  * adapter is Electron-free at the type level and testable with a fake `net`; the
@@ -131,7 +196,9 @@ function toAsyncIterable(message: ElectronIncomingMessageLike): AsyncIterable<Ui
 export function createElectronModelFetcher<TSession = unknown>(
   net: ElectronNetLike<TSession>,
   session: TSession,
+  options: ElectronModelFetcherOptions = {},
 ): ModelFetcher {
+  const maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
   return (request: ModelFetchRequest): Promise<ModelFetchResponse> =>
     new Promise<ModelFetchResponse>((resolve, reject) => {
       const clientRequest = net.request({
@@ -154,7 +221,14 @@ export function createElectronModelFetcher<TSession = unknown>(
         resolve({
           statusCode: response.statusCode,
           headers: response.headers,
-          body: toAsyncIterable(response),
+          body: toAsyncIterable(response, {
+            maxBufferedBytes,
+            // No `pause`/`resume` on Electron's body — abort and let the download
+            // manager resume from the on-disk offset via HTTP `Range`.
+            onBackpressure: () => {
+              clientRequest.abort();
+            },
+          }),
           cancel: () => {
             clientRequest.abort();
           },

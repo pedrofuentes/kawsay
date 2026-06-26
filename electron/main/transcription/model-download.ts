@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir as mkdirFs, rename as renameFs, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import {
   MODEL_DOWNLOAD_URL,
@@ -134,6 +134,16 @@ export interface ModelDownloaderOptions {
   sink?: ModelWriteSinkFactory;
   /** File hasher (injectable); defaults to a streaming SHA-256. */
   hashFile?: (path: string) => Promise<string>;
+  /**
+   * Install-directory creator (injectable to simulate a commit-step failure).
+   * Defaults to a recursive `fs.mkdir`. A failure here emits a terminal `error`.
+   */
+  mkdir?: (dir: string) => Promise<void>;
+  /**
+   * Atomic install rename (injectable to simulate a commit-step failure).
+   * Defaults to `fs.rename`. A failure here emits a terminal `error`.
+   */
+  rename?: (from: string, to: string) => Promise<void>;
   /** Max HTTP attempts before a network failure becomes terminal (default 5). */
   maxAttempts?: number;
   /** Backoff sleeper (injectable for fast tests). */
@@ -241,6 +251,30 @@ function classifyStreamError(err: unknown): ModelDownloadError {
   });
 }
 
+/** Node fs error codes at the install-commit step that a later retry could clear. */
+const INSTALL_RETRYABLE_CODES: ReadonlySet<string> = new Set(['ENOSPC', 'EDQUOT', 'EIO']);
+
+/**
+ * Classify a failure of the install commit — the install-dir `mkdir` or the atomic
+ * `rename` — into a typed, TERMINAL `disk` error. These steps run OUTSIDE the
+ * stream loop, so without this they would reject `run()` with NO terminal `error`
+ * progress event; the fire-and-forget IPC handler's `.catch()` would then swallow
+ * the failure and the renderer could hang at `verifying`. Out-of-space / I/O codes
+ * are marked retryable; permission / cross-device / read-only failures are not.
+ */
+function classifyInstallError(err: unknown): ModelDownloadError {
+  if (err instanceof ModelDownloadError) {
+    return err;
+  }
+  const code = (err as { code?: unknown } | null)?.code;
+  const detail = typeof code === 'string' ? ` (${code})` : '';
+  const retryable = typeof code === 'string' && INSTALL_RETRYABLE_CODES.has(code);
+  return new ModelDownloadError('disk', `installing the model failed${detail}`, {
+    retryable,
+    cause: err,
+  });
+}
+
 export function createModelDownloader(options: ModelDownloaderOptions): ModelDownloader {
   const {
     fetcher,
@@ -252,6 +286,9 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
     onProgress,
     sink = defaultSinkFactory,
     hashFile = hashFileSha256,
+    mkdir: mkdirInstallDir = (dir: string): Promise<void> =>
+      mkdirFs(dir, { recursive: true }).then(() => undefined),
+    rename: renameInto = renameFs,
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
     sleep = defaultSleep,
     backoffMs = defaultBackoff,
@@ -367,8 +404,13 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
       return { status: 'already-present', path: modelPath };
     }
 
-    // 2) Ensure the destination directory exists.
-    await mkdir(dirname(modelPath), { recursive: true });
+    // 2) Ensure the destination directory exists. A failure here (permissions,
+    //    a file where the dir should be) is a terminal disk error, not a reject.
+    try {
+      await mkdirInstallDir(dirname(modelPath));
+    } catch (err) {
+      return fail(classifyInstallError(err));
+    }
 
     // 3) Resume offset from any leftover .part (a corrupt over-long one is discarded).
     let offset = (await sizeOf(partPath)) ?? 0;
@@ -380,9 +422,13 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
     emit({ phase: 'downloading', bytesDownloaded: offset, totalBytes: expectedSize, error: null });
 
     // 4) Attempt loop: stream, resuming on a network/HTTP hiccup until complete.
+    //    The budget bounds CONSECUTIVE no-progress failures: any attempt that
+    //    banked bytes (e.g. a bounded-buffer backpressure abort) resets it, so a
+    //    healthy, steadily-resuming download is never starved of retries.
     let attempt = 0;
     while (offset < expectedSize) {
       attempt += 1;
+      const offsetBefore = offset;
       try {
         offset = await streamOnce(offset);
       } catch (err) {
@@ -395,6 +441,10 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
         // Network/HTTP: keep the partial and resume from its true on-disk size.
         offset = (await sizeOf(partPath)) ?? 0;
         bytesDownloaded = offset;
+        // Forward progress means the link is alive — reset the retry budget.
+        if (offset > offsetBefore) {
+          attempt = 0;
+        }
         if (attempt < maxAttempts && error.retryable) {
           await sleep(backoffMs(attempt));
           emit({ phase: 'downloading', bytesDownloaded: offset, totalBytes: expectedSize, error: null });
@@ -417,8 +467,14 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
       );
     }
 
-    // 6) Atomic install: rename the verified temp file into place.
-    await rename(partPath, modelPath);
+    // 6) Atomic install: rename the verified temp file into place. A failure here
+    //    (cross-device, permissions, disk-full at commit) is a terminal disk error
+    //    — emit it so the renderer never hangs waiting past `verifying`.
+    try {
+      await renameInto(partPath, modelPath);
+    } catch (err) {
+      return fail(classifyInstallError(err));
+    }
     verifiedThisSession = true;
     emit({ phase: 'done', bytesDownloaded: expectedSize, totalBytes: expectedSize, error: null });
     return { status: 'done', path: modelPath };
