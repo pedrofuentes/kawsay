@@ -1,0 +1,87 @@
+{
+  "source": "Tatoeba (https://tatoeba.org) — short, labeled, single-sentence voice recordings",
+  "license": "Sentence text is CC BY 2.0 FR (© tatoeba.org contributors); each audio clip is CC BY 4.0 or CC0 1.0 per its recorder — see fixtures/NOTICES.md for full per-clip attribution.",
+  "normalization": "WER labels are scored after: Unicode NFC, lowercase, replace every run of non-(letter|number|space) with a space, collapse whitespace, trim. Letters of any script (Spanish accents, German umlauts/ß, Cyrillic) and digits are kept; only punctuation/symbols are removed. See tests/perf/wer.ts.",
+  "clips": [
+    {
+      "id": "es-941424",
+      "language": "es",
+      "file": "es_941424.mp3",
+      "url": "https://audio.tatoeba.org/sentences/spa/941424.mp3",
+      "sha256": "73943b909f4c2fe9ef61d9f7476915e3d50f1125617b75a75dda645e51698899",
+      "transcript": "Ella va a la escuela caminando.",
+      "license": "CC BY 4.0",
+      "attribution": "hayastan — https://tatoeba.org/en/user/profile/hayastan"
+    },
+    {
+      "id": "es-1075482",
+      "language": "es",
+      "file": "es_1075482.mp3",
+      "url": "https://audio.tatoeba.org/sentences/spa/1075482.mp3",
+      "sha256": "e5f5e5e3d8a2ec365a29b0b3c6279c775169748660226c44bab20af35d5ac8bc",
+      "transcript": "El chico tiene una manzana en el bolsillo.",
+      "license": "CC BY 4.0",
+      "attribution": "hayastan — https://tatoeba.org/en/user/profile/hayastan"
+    },
+    {
+      "id": "es-1086510",
+      "language": "es",
+      "file": "es_1086510.mp3",
+      "url": "https://audio.tatoeba.org/sentences/spa/1086510.mp3",
+      "sha256": "79f621a8ab67eea55d56a62dfc8c930d05b2c5077ac5f2d03975ebc7de5df868",
+      "transcript": "Quiero otro cuchillo, uno que sirva para cortar el asado.",
+      "license": "CC BY 4.0",
+      "attribution": "hayastan — https://tatoeba.org/en/user/profile/hayastan"
+    },
+    {
+      "id": "es-1101947",
+      "language": "es",
+      "file": "es_1101947.mp3",
+      "url": "https://audio.tatoeba.org/sentences/spa/1101947.mp3",
+      "sha256": "f7198d0a94ec4aad26629caded4b6b7a063e0528ad51eae3ca6de888ce2aca21",
+      "transcript": "Es otoño. La calle está cubierta de hojas secas.",
+      "license": "CC BY 4.0",
+      "attribution": "hayastan — https://tatoeba.org/en/user/profile/hayastan"
+    },
+    {
+      "id": "de-344494",
+      "language": "de",
+      "file": "de_344494.mp3",
+      "url": "https://audio.tatoeba.org/sentences/deu/344494.mp3",
+      "sha256": "c3b0dff3d554c4bab64e28388a0bd566cea920041a9136fcad628b1ccbc0e8b9",
+      "transcript": "Ich laufe lieber, als den Bus zu nehmen.",
+      "license": "CC BY 4.0",
+      "attribution": "MisterTrouser — https://tatoeba.org/en/user/profile/MisterTrouser"
+    },
+    {
+      "id": "de-340872",
+      "language": "de",
+      "file": "de_340872.mp3",
+      "url": "https://audio.tatoeba.org/sentences/deu/340872.mp3",
+      "sha256": "a9a73acc168a65b7a0d46dc506557e9586f0d4e1599e5b201b62cbe3977fd739",
+      "transcript": "Ich frage mich, wer dieses Gerücht in Umlauf gebracht hat.",
+      "license": "CC BY 4.0",
+      "attribution": "MisterTrouser — https://tatoeba.org/en/user/profile/MisterTrouser"
+    },
+    {
+      "id": "ru-374358",
+      "language": "ru",
+      "file": "ru_374358.mp3",
+      "url": "https://audio.tatoeba.org/sentences/rus/374358.mp3",
+      "sha256": "82c698097dd08fb2bf7291c2554f8766f472d1c627d665738ee32bacd9aabda7",
+      "transcript": "Я спросил у него, как его зовут.",
+      "license": "CC0 1.0",
+      "attribution": "retr0ra1n — https://tatoeba.org/en/user/profile/retr0ra1n"
+    },
+    {
+      "id": "ru-351416",
+      "language": "ru",
+      "file": "ru_351416.mp3",
+      "url": "https://audio.tatoeba.org/sentences/rus/351416.mp3",
+      "sha256": "c3676a299d8d0a2f1e4d44d3ee2aef74ed3a2c8ae4c7b2fb9188dbe663deaafb",
+      "transcript": "Дата и адрес обычно пишутся в шапке писем.",
+      "license": "CC0 1.0",
+      "attribution": "retr0ra1n — https://tatoeba.org/en/user/profile/retr0ra1n"
+    }
+  ]
+}
