@@ -36,6 +36,7 @@ export default defineConfig({
         'electron/main/index.ts', // main-process entry (app/BrowserWindow bootstrap)
         'electron/preload/index.ts', // preload bootstrap (contextBridge.exposeInMainWorld)
         'electron/main/importers/workers/ingestion-worker.ts', // worker_threads entry
+        'electron/main/transcription/workers/transcription-worker.ts', // worker_threads entry
         'src/main.tsx', // React renderer bootstrap (createRoot)
       ],
       thresholds: {
