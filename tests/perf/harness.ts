@@ -211,6 +211,10 @@ export interface AggregateStats {
   readonly meanWer: number;
   /** Mean RTF over ok clips. */
   readonly meanRtf: number;
+  /** Ok clips whose auto-detected language matched the labelled language (AC-21). */
+  readonly detectedCount: number;
+  /** detectedCount / okCount — language auto-detection accuracy (0 when no ok clips). */
+  readonly detectionAccuracy: number;
 }
 
 /** Per-language aggregate (adds the language code). */
@@ -230,6 +234,7 @@ function aggregate(measurements: ClipMeasurement[]): AggregateStats {
   const totalErrors = ok.reduce((sum, m) => sum + m.errorCount, 0);
   const meanWer = ok.length > 0 ? ok.reduce((sum, m) => sum + m.wer, 0) / ok.length : 0;
   const meanRtf = ok.length > 0 ? ok.reduce((sum, m) => sum + m.rtf, 0) / ok.length : 0;
+  const detectedCount = ok.filter((m) => m.detectedLanguage === m.language).length;
   return {
     clipCount: measurements.length,
     okCount: ok.length,
@@ -238,6 +243,8 @@ function aggregate(measurements: ClipMeasurement[]): AggregateStats {
     aggregateWer: totalReferenceWords > 0 ? totalErrors / totalReferenceWords : 0,
     meanWer,
     meanRtf,
+    detectedCount,
+    detectionAccuracy: ok.length > 0 ? detectedCount / ok.length : 0,
   };
 }
 
@@ -291,18 +298,20 @@ export function formatMarkdownResults(
     lines.push('');
   }
 
-  lines.push('| Language | Clips | OK | Ref words | Errors | WER (aggregate) | mean WER | mean RTF |');
-  lines.push('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |');
+  lines.push('| Language | Clips | OK | Ref words | Errors | WER (aggregate) | mean WER | mean RTF | Detected |');
+  lines.push('| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |');
   for (const lang of summary.perLanguage) {
     lines.push(
       `| ${lang.language} | ${lang.clipCount} | ${lang.okCount} | ${lang.totalReferenceWords} | ` +
-        `${lang.totalErrors} | ${pct(lang.aggregateWer)} | ${pct(lang.meanWer)} | ${lang.meanRtf.toFixed(2)}× |`,
+        `${lang.totalErrors} | ${pct(lang.aggregateWer)} | ${pct(lang.meanWer)} | ${lang.meanRtf.toFixed(2)}× | ` +
+        `${lang.detectedCount}/${lang.okCount} (${pct(lang.detectionAccuracy)}) |`,
     );
   }
   const o = summary.overall;
   lines.push(
     `| **Overall** | ${o.clipCount} | ${o.okCount} | ${o.totalReferenceWords} | ${o.totalErrors} | ` +
-      `**${pct(o.aggregateWer)}** | ${pct(o.meanWer)} | **${o.meanRtf.toFixed(2)}×** |`,
+      `**${pct(o.aggregateWer)}** | ${pct(o.meanWer)} | **${o.meanRtf.toFixed(2)}×** | ` +
+      `**${o.detectedCount}/${o.okCount} (${pct(o.detectionAccuracy)})** |`,
   );
 
   if (measurements.length > 0) {

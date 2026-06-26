@@ -240,6 +240,62 @@ describe('summarizeMeasurements', () => {
     expect(summary.overall.clipCount).toBe(4);
     expect(summary.overall.meanRtf).toBeCloseTo((0.5 + 0.25 + 1) / 3, 10);
   });
+
+  it('reports language auto-detection accuracy (detected === labelled, over ok clips)', () => {
+    // In the shared fixture every ok clip's detectedLanguage matches its label.
+    const summary = summarizeMeasurements(measurements);
+    const es = summary.perLanguage.find((l) => l.language === 'es');
+    expect(es?.detectedCount).toBe(2);
+    expect(es?.detectionAccuracy).toBe(1);
+    expect(summary.overall.detectedCount).toBe(3);
+    expect(summary.overall.detectionAccuracy).toBe(1);
+  });
+
+  it('counts a mismatched detected language (e.g. short es clip detected as it) as a miss', () => {
+    // Mirrors the real measurement: one short Spanish clip auto-detects as Italian.
+    const withMissedLid: ClipMeasurement[] = [
+      {
+        ok: true,
+        id: 'es-good',
+        language: 'es',
+        detectedLanguage: 'es',
+        hypothesis: '',
+        referenceWordCount: 8,
+        errorCount: 0,
+        wer: 0,
+        audioDurationSec: 3,
+        inferenceMs: 600,
+        rtf: 0.2,
+      },
+      {
+        ok: true,
+        id: 'es-short',
+        language: 'es',
+        detectedLanguage: 'it',
+        hypothesis: '',
+        referenceWordCount: 6,
+        errorCount: 5,
+        wer: 5 / 6,
+        audioDurationSec: 3,
+        inferenceMs: 600,
+        rtf: 0.2,
+      },
+    ];
+    const summary = summarizeMeasurements(withMissedLid);
+    const es = summary.perLanguage.find((l) => l.language === 'es');
+    expect(es?.okCount).toBe(2);
+    expect(es?.detectedCount).toBe(1);
+    expect(es?.detectionAccuracy).toBeCloseTo(0.5, 10);
+    expect(summary.overall.detectionAccuracy).toBeCloseTo(0.5, 10);
+  });
+
+  it('reports a detection accuracy of 0 when there are no ok clips (no divide-by-zero)', () => {
+    const summary = summarizeMeasurements([
+      { ok: false, id: 'x', language: 'es', reason: 'no-speech', message: 'no speech' },
+    ]);
+    expect(summary.overall.detectedCount).toBe(0);
+    expect(summary.overall.detectionAccuracy).toBe(0);
+  });
 });
 
 describe('formatMarkdownResults', () => {
@@ -262,6 +318,7 @@ describe('formatMarkdownResults', () => {
     const md = formatMarkdownResults(summary, []);
     expect(md).toContain('WER');
     expect(md).toContain('RTF');
+    expect(md).toContain('Detected');
     expect(md).toMatch(/\bes\b/);
     expect(md.toLowerCase()).toContain('overall');
   });
