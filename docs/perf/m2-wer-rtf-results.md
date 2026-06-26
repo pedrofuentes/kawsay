@@ -46,10 +46,11 @@ This locks the **AC-21** (WER) and **AC-18** (RTF/throughput) thresholds with
 
 ## What the numbers say
 
-- **Transcription quality is excellent on clean speech.** 6 of 8 clips are a
-  perfect 0% WER. **Every Spanish clip that was correctly language-detected
-  transcribed at 0%** — including accents and punctuation (`otoño`, the
-  comma/period in `es-1101947`), which the normalization correctly ignores.
+- **Transcription quality is excellent on clean speech.** 4 of 8 clips are a
+  perfect 0% WER (6 of 8 are ≤ 12.5%). **Every Spanish clip that was correctly
+  language-detected transcribed at 0%** — including accents and punctuation
+  (`otoño`, the comma/period in `es-1101947`), which the normalization
+  correctly ignores.
 - **The dominant error was language ID, not transcription.** All 5 Spanish errors
   come from the **one** clip (`es-941424`, "Ella va a la escuela caminando.") — a
   short 3.3 s utterance auto-detected as **Italian** and decoded as Italian
@@ -103,8 +104,9 @@ not RTF.
 
 ## Recommendation
 
-**Keep `small`.** It clears the accuracy bar comfortably on clean speech (most
-clips perfect; correctly-detected Spanish at 0%) and is fast on Apple Silicon.
+**Keep `small`.** It clears the accuracy bar comfortably on clean speech (half
+the clips perfect, most ≤ 12.5% WER; correctly-detected Spanish at 0%) and is
+fast on Apple Silicon.
 Reconsidering model size is **not** warranted by this evidence — the one bad clip
 is a language-ID issue a larger model would not reliably fix and a language hint
 would. Next: (a) gather a small set of **real, consented** noisy Spanish voice
