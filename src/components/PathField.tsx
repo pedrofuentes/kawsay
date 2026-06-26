@@ -5,7 +5,7 @@
 // the chosen path. Typing always remains a fallback; in a plain browser preview
 // (no bridge) the button simply isn't shown. The label is always associated with
 // the input (optionally visually hidden when a nearby heading already names it).
-import { useId } from 'react';
+import { useId, useState } from 'react';
 import type { ChangeEvent, ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
 import { useKawsayApi } from '@renderer/lib/kawsay-api';
@@ -46,10 +46,15 @@ export function PathField({
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const helperId = helper !== undefined ? `${inputId}-helper` : undefined;
+  // A rejected native picker (rare) leaves a calm, non-technical message here;
+  // it is announced and tied to the input so screen-reader users hear it too.
+  const [browseError, setBrowseError] = useState<string | null>(null);
+  const browseErrorId = `${inputId}-browse-error`;
   // Associate the input with both its static helper copy and any active error
-  // message (LibraryLocationStep passes the ErrorBanner id when status is error),
-  // so screen readers announce the failure when focus lands on the field.
-  const describedByIds = [helperId, describedBy]
+  // message (LibraryLocationStep passes the ErrorBanner id when status is error,
+  // and a failed Browse adds its own), so screen readers announce the failure
+  // when focus lands on the field.
+  const describedByIds = [helperId, browseError !== null ? browseErrorId : undefined, describedBy]
     .filter((token): token is string => token !== undefined && token !== '')
     .join(' ');
 
@@ -68,12 +73,22 @@ export function PathField({
       title: title !== '' ? title : undefined,
       defaultPath: value !== '' ? value : undefined,
     };
-    const picked =
-      browseFor === 'file' ? await api.openFile(options) : await api.openDirectory(options);
-    // A cancelled picker resolves null (and an empty string is never a real path),
-    // so the field is left exactly as the user had it.
-    if (picked !== null && picked !== '') {
-      onChange(picked);
+    try {
+      const picked =
+        browseFor === 'file' ? await api.openFile(options) : await api.openDirectory(options);
+      // A cancelled picker resolves null (and an empty string is never a real path),
+      // so the field is left exactly as the user had it.
+      if (picked !== null && picked !== '') {
+        setBrowseError(null);
+        onChange(picked);
+      }
+    } catch {
+      // The native picker almost never rejects, but if it does we keep the field
+      // exactly as the user left it and offer a calm nudge — never a crashed
+      // promise or a raw OS error (mirrors library.tsx's reassuring-copy rule).
+      setBrowseError(
+        "We couldn't open the chooser just now. You can type the path above, or try Browse again.",
+      );
     }
   };
 
@@ -109,6 +124,11 @@ export function PathField({
           </Button>
         ) : null}
       </div>
+      {browseError !== null ? (
+        <p id={browseErrorId} role="alert" className="font-body text-sm text-error-text">
+          {browseError}
+        </p>
+      ) : null}
     </div>
   );
 }
