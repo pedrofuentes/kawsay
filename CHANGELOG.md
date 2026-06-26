@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `contents: write` (create the release + upload assets) and nothing more, every action is pinned to a full
   commit SHA, and `package.json`'s `dist*` scripts stay `--publish never` so no local/automated build can
   ever publish. No new dependencies and no runtime network egress are added (AC-4 untouched) — see ADR-0026.
+- **Transcription groundwork — the `whisper-cli` engine, built from source in CI** (card #129, ADR-0027,
+  AC-23): the speech-to-text engine Kawsay will use later is the MIT-licensed **whisper.cpp** `whisper-cli`,
+  pinned to **`v1.9.1`** (commit `f049fff…`) and **compiled from source on the CI runners** — macOS
+  **arm64** + **x64** and **Windows x64** — rather than downloading a prebuilt binary, so every shipped
+  executable is reproducible from a known commit. A new `scripts/build-whisper-cli.sh` clones the pinned
+  ref, verifies the commit, and builds the per-arch binary with CMake (portable build — host-CPU tuning is
+  off so it can't crash on older machines; macOS embeds Metal so the binary is self-contained), staging it
+  under `resources/whisper/<os>-<arch>/`. `electron-builder.yml` bundles it per-arch via `extraResources`,
+  and a small resolver (`electron/main/transcription/whisper-cli.ts`) finds it at runtime via
+  `process.resourcesPath` (mirroring how `ffmpeg`/`ffprobe` are located). This is **groundwork only** —
+  there is no transcription feature yet, and **no speech model is bundled** (the model is a separate,
+  opt-in download handled later). No new runtime dependencies and **no network egress** are added
+  (AC-4 untouched); the whisper.cpp attribution is recorded in `NOTICES.md`.
 - Packaged, installable app (card P1, AC-5): Kawsay can now be built into real installers — a **macOS
   `.dmg`** (and `.zip`) for Apple Silicon and Intel, and a **Windows `.exe`** (NSIS) — with one command,
   `pnpm dist`. The native catalogue engine (`better-sqlite3`, bumped to **12.11.1** for Electron 42

@@ -36,6 +36,25 @@ asarUnpack:
   - '**/node_modules/ffmpeg-static/**'
   - '**/node_modules/ffprobe-static/**'
 
+# The whisper.cpp `whisper-cli` engine (MIT) for on-device transcription (card
+# #129, ADR-0027). It is built FROM SOURCE per-arch in CI (scripts/build-whisper-
+# cli.sh) into resources/whisper/<os>-<arch>/, then bundled here as an
+# extraResource so the packaged app spawns it from `process.resourcesPath` — the
+# same out-of-asar pattern as the ffmpeg/ffprobe/better-sqlite3 binaries above
+# (it is a native executable, not a `.node`, so it lives in Resources, not the
+# asar; resolved by electron/main/transcription/whisper-cli.ts). electron-builder
+# expands ${os}-${arch} per build leg (mac-arm64, mac-x64, win-x64), so each
+# installer carries ONLY its own-arch binary. NO model ships here — the `small`
+# ggml model is a separate opt-in, checksum-verified download (ADR-0027 Decision
+# 6; cards #130/#131). A missing source dir is a build-time WARNING, not an error
+# (electron-builder app-builder-lib copyFiles), so a local `pnpm dist` that skips
+# the build script still produces an app — just without the transcription engine.
+extraResources:
+  - from: 'resources/whisper/${os}-${arch}/'
+    to: 'whisper/${os}-${arch}/'
+    filter:
+      - '**/*'
+
 # Security fuses flipped at package time (ARCHITECTURE §2.5/§8, ADR-0007). Mirrors
 # electron/fuses/fuses.ts FUSE_CONFIG — kept in lock-step by tests/unit/packaging-
 # config.test.ts — with ONE deliberate v1 exception (the asar-integrity fuse below).

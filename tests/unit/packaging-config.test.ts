@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FUSE_CONFIG } from '../../electron/fuses/fuses';
+import {
+  SUPPORTED_WHISPER_TARGETS,
+  WHISPER_CLI_RESOURCE_SUBDIR,
+} from '../../electron/main/transcription/whisper-cli';
 
 // The electron-builder packaging contract for AC-5 (ADR-0007, ARCHITECTURE §8).
 // These assertions pin the load-bearing packaging invariants — the native-module
@@ -129,6 +133,47 @@ describe('electron-builder packaging contract (AC-5, ADR-0007)', () => {
     // Without this, flipping fuses invalidates the signature and the UNSIGNED v1
     // build will not launch on Apple Silicon (arm64 requires a valid signature).
     expect(parseFlatBooleanBlock('electronFuses').resetAdHocDarwinSignature).toBe(true);
+  });
+});
+
+describe('whisper-cli engine bundling contract (#129, ADR-0027)', () => {
+  // The whisper.cpp `whisper-cli` (MIT) is built FROM SOURCE per-arch in CI
+  // (scripts/build-whisper-cli.sh) and bundled as an out-of-asar extraResource,
+  // so the packaged app spawns it via process.resourcesPath — resolved by
+  // electron/main/transcription/whisper-cli.ts. These assertions pin that
+  // packaging contract so it cannot silently drift from the resolver.
+  const extra = topLevelBlock('extraResources');
+
+  it('bundles a per-arch whisper-cli as an out-of-asar extraResource', () => {
+    // A native executable cannot be spawned from inside an asar (same constraint
+    // as ffmpeg/ffprobe), so it travels in Resources, copied from the per-arch
+    // build output into <resources>/whisper/<os>-<arch>/.
+    expect(extra).toMatch(/from:\s*'?resources\/whisper\/\$\{os\}-\$\{arch\}/);
+    expect(extra).toMatch(/to:\s*'?whisper\/\$\{os\}-\$\{arch\}/);
+  });
+
+  it('parameterizes the bundle per build leg via the ${os}-${arch} macros (each shipped arch)', () => {
+    // One macro'd entry that electron-builder expands to a binary per build leg —
+    // macOS arm64 + x64, Windows x64 — so each installer carries exactly its own
+    // arch's whisper-cli and no other. The resolver's shipped-target set is the
+    // cartesian product of those legs; keep the two in lock-step here.
+    expect(extra).toContain('${os}');
+    expect(extra).toContain('${arch}');
+    expect([...SUPPORTED_WHISPER_TARGETS].sort()).toEqual(['mac-arm64', 'mac-x64', 'win-x64']);
+  });
+
+  it('keeps the resolver bundle sub-directory in lock-step with the extraResource `to:`', () => {
+    // electron/main/transcription/whisper-cli.ts resolves
+    // <resourcesPath>/<subdir>/<os>-<arch>/whisper-cli[.exe]; the `to:` sub-dir
+    // here MUST equal that constant or the packaged app can't find the binary.
+    expect(WHISPER_CLI_RESOURCE_SUBDIR).toBe('whisper');
+    expect(extra).toMatch(new RegExp(`to:\\s*'?${WHISPER_CLI_RESOURCE_SUBDIR}/`));
+  });
+
+  it('ships NO model alongside the binary (the ggml model is a separate opt-in download)', () => {
+    // ADR-0027 Decision 6: only the BINARY is bundled here; the ~466 MiB `small`
+    // ggml model is fetched on opt-in (cards #130/#131), never in the installer.
+    expect(extra).not.toMatch(/ggml|\.bin\b|model/i);
   });
 });
 
