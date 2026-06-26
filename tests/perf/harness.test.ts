@@ -170,6 +170,26 @@ describe('buildMeasurement (combine a timed transcription with the ground truth)
     expect(measurement.reason).toBe('no-speech');
     expect(measurement.language).toBe('es');
   });
+
+  it('records a skip (not a thrown RangeError) for a zero-duration decode', () => {
+    const measurement = buildMeasurement(
+      { id: 'es-3', language: 'es', transcript: 'hola mundo' },
+      {
+        result: {
+          ok: true,
+          id: 'es-3',
+          transcript: { text: 'hola mundo', language: 'es', segments: [] },
+        },
+        inferenceMs: 500,
+        audioDurationSec: 0,
+      },
+    );
+    expect(measurement.ok).toBe(false);
+    if (measurement.ok) return;
+    expect(measurement.reason).toBe('zero-duration-audio');
+    expect(measurement.id).toBe('es-3');
+    expect(measurement.language).toBe('es');
+  });
 });
 
 describe('summarizeMeasurements', () => {
