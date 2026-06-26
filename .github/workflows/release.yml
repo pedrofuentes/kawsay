@@ -91,7 +91,7 @@ jobs:
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: resources/whisper
-          key: whisper-cli-v1-${{ runner.os }}-${{ env.WHISPER_CPP_REF }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}
+          key: whisper-cli-v1-${{ runner.os }}-${{ env.WHISPER_CPP_REF }}-${{ env.WHISPER_CPP_COMMIT }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}
 
       - name: Build whisper-cli from source
         # Compile the per-arch whisper-cli (ADR-0027 · #129) into
@@ -100,6 +100,22 @@ jobs:
         if: steps.whisper-cache.outputs.cache-hit != 'true'
         shell: bash
         run: ./scripts/build-whisper-cli.sh
+
+      - name: Verify staged binaries
+        # Assert the expected per-arch binaries exist even on a cache hit, so a
+        # corrupt/partial cache fails here instead of silently shipping nothing.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            expected=("resources/whisper/mac-arm64/whisper-cli" "resources/whisper/mac-x64/whisper-cli")
+          else
+            expected=("resources/whisper/win-x64/whisper-cli.exe")
+          fi
+          for f in "${expected[@]}"; do
+            [ -s "$f" ] || { echo "missing/empty: $f" >&2; exit 1; }
+            echo "ok: $f ($(wc -c <"$f") bytes)"
+          done
 
       - name: Package & publish to GitHub Releases
         # electron-builder reads electron-builder.yml: it builds the per-OS targets,
