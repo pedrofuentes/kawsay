@@ -12,6 +12,7 @@ import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
 import { Search } from '@renderer/views/Search';
+import { Settings } from '@renderer/views/Settings';
 import { Timeline } from '@renderer/views/Timeline';
 import { Sidebar } from './Sidebar';
 
@@ -50,15 +51,7 @@ export function MainApp(): ReactElement {
           />
         );
       case 'settings':
-        return (
-          <InfoView
-            key="settings"
-            heading="Settings"
-            icon="briefcase"
-            emptyTitle="Settings will live here"
-            description="Everything stays on this computer. There is nothing to sign in to."
-          />
-        );
+        return <Settings key="settings" />;
       case 'timeline':
         return <Timeline />;
       // Onboarding is routed by the top-level <Router/> (App.tsx) and never reaches

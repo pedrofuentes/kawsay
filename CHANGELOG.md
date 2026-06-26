@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Opt-in transcription consent screen** (card #132, ADR-0027 Decision 6c, **AC-22**): a calm, plain-language
+  Settings card that **explains transcription and asks before anything is downloaded**. It describes, without
+  jargon, what transcription does (turn a loved one's voice notes, audio, and videos into text you can read and
+  search), that it happens **entirely on this computer** and **a loved one's memories never leave it**, and that
+  enabling it makes a **one-time ~466 MB download** — the language model — which is **the only time the app uses
+  the internet**. **Nothing downloads or transcribes without an explicit opt-in** (AC-22): pressing **Enable
+  transcription** is what starts the one-time download, which then shows **gentle progress** (percentage and
+  megabytes in a polite live region with a reassuring message) and recovers **calmly from being offline, a network
+  error, or a full disk** — a plain "try again", never a raw code or stack trace. The feature is **gated on a
+  present, verified model**: a single global on/off toggle stays disabled with a clear "transcription isn't set up
+  yet" until the model is ready, then unlocks so transcription can be turned on or off at any time. The screen
+  meets **WCAG 2.1 AA** (labelled toggle, described status, `aria-live` progress, no axe violations). It consumes
+  the existing gated download IPC from card #131 and adds **no new network access**; per-item transcript display and
+  search arrive with card #136.
 - **Opt-in transcription model download manager + integrity verification + a scoped egress allowlist**
   (card #131, ADR-0027 Decision 6, **AC-17 / AC-24**): Kawsay can now fetch the on-device transcription
   model (`ggml-small.bin`) **once, on opt-in, over a single checksum-verified download** — and nothing else.

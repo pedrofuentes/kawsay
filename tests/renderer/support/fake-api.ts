@@ -85,6 +85,24 @@ export function makeProgressEvent(over: Partial<ImportProgressEvent> = {}): Impo
   };
 }
 
+/**
+ * Build a transcription-model download progress event. Defaults to an in-flight
+ * `downloading` tick whose `totalBytes` is the real `small` model size
+ * (ADR-0027 Decision 4: 487,601,967 bytes ≈ 466 MiB); `error` is non-null only on
+ * the `error` phase. Pass `over` to pin a phase, byte counts, or a typed failure.
+ */
+export function makeModelDownloadProgressEvent(
+  over: Partial<ModelDownloadProgressEvent> = {},
+): ModelDownloadProgressEvent {
+  return {
+    phase: 'downloading',
+    bytesDownloaded: 0,
+    totalBytes: 487_601_967,
+    error: null,
+    ...over,
+  };
+}
+
 export interface FakeApi extends KawsayAPI {
   /** Push a progress event to every current onImportProgress subscriber. */
   emitProgress(event: ImportProgressEvent): void;
@@ -92,6 +110,8 @@ export interface FakeApi extends KawsayAPI {
   subscriberCount(): number;
   /** Push a model-download progress event to every onModelDownloadProgress subscriber. */
   emitModelDownloadProgress(event: ModelDownloadProgressEvent): void;
+  /** Number of live model-download-progress subscribers (asserts clean unsubscribe). */
+  modelSubscriberCount(): number;
 }
 
 export interface FakeApiOptions {
@@ -165,5 +185,6 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
     emitModelDownloadProgress: (event) => {
       for (const listener of [...modelListeners]) listener(event);
     },
+    modelSubscriberCount: () => modelListeners.size,
   };
 }
