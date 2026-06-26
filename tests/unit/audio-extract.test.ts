@@ -124,6 +124,12 @@ describe('classifyExtractFailure (typed reasons from ffmpeg stderr — AC-20)', 
     expect(classifyExtractFailure("Stream map '0:a' matches no streams.")).toBe('no-audio-stream');
   });
 
+  it('treats an empty output (nothing decodable was encoded) as no-audio-stream, not a crash', () => {
+    expect(classifyExtractFailure('Output file is empty, nothing was encoded')).toBe(
+      'no-audio-stream',
+    );
+  });
+
   it('treats corrupt / missing / unknown failures as a decode failure', () => {
     expect(classifyExtractFailure('Invalid data found when processing input')).toBe(
       'decode-failed',
@@ -249,6 +255,23 @@ describe('createAudioExtractor (resilient, confined, non-destructive — AC-20 /
     const result = await extract({ sourcePath: '/src/a.opus' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('decode-failed');
+  });
+
+  it('SKIPS with a typed scratch-io reason when the scratch dir cannot be created — never throws (AC-20)', async () => {
+    const scratch = tmp('extract');
+    // Occupy the confined transcode sub-directory's path with a FILE, so creating
+    // it as a directory fails (EEXIST/ENOTDIR) — a real scratch-dir I/O failure
+    // (the EACCES/EROFS/ENOTDIR/ENOSPC class). It must surface as a typed skip a
+    // Promise.all batch can survive, never a thrown rejection that aborts it.
+    writeFileSync(join(scratch, TRANSCODE_SUBDIR), Buffer.from('not a directory'));
+    const run = recordingRun();
+    const extract = createAudioExtractor({ ffmpegPath: '/bin/ffmpeg', scratchDir: scratch, run });
+
+    const result = await extract({ sourcePath: '/src/a.opus', key: 'sio' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('scratch-io');
+    expect(run.calls).toHaveLength(0); // ffmpeg is never spawned when scratch setup fails
   });
 
   it('processes a mixed batch to completion — one bad item never aborts the others (AC-20)', async () => {
@@ -398,6 +421,19 @@ describe('defaultRunFfmpegToFile (the real bounded spawn seam, via a node stub)'
     expect(runError.code).toBe(7);
     expect(runError.timedOut).toBe(false);
     expect(runError.stderr).toContain('boom-stderr');
+  });
+
+  it('maps a spawn failure (binary that cannot be executed) to a FfmpegRunError with code null, not timed out', async () => {
+    const error = await defaultRunFfmpegToFile('/no/such/ffmpeg', [], { timeoutMs: 5000 }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(FfmpegRunError);
+    const runError = error as FfmpegRunError;
+    // A failure to spawn (ENOENT) surfaces via the child 'error' event, not a
+    // close code — so there is no exit code and the kill timer never fired.
+    expect(runError.code).toBe(null);
+    expect(runError.timedOut).toBe(false);
   });
 
   it('kills and reports timed-out for a child that overruns the timeout', async () => {
