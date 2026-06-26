@@ -11,6 +11,7 @@ import type {
   ModelDownloadProgressEvent,
   SearchResultDTO,
   TranscriptionProgressEvent,
+  TranscriptViewDTO,
 } from '@shared/kawsay-api';
 
 /** A stable, valid-looking job id used across import tests. */
@@ -104,6 +105,22 @@ export function makeModelDownloadProgressEvent(
   };
 }
 
+/**
+ * Build a per-item transcript view (the `catalog:getTranscript` response, #136).
+ * Defaults to a not-yet-transcribed item (`pending`, no text); pass `over` to pin
+ * a `done` transcript with text + a detected `language`, or a `failed`/`skipped`
+ * outcome.
+ */
+export function makeTranscriptView(over: Partial<TranscriptViewDTO> = {}): TranscriptViewDTO {
+  return {
+    status: 'pending',
+    language: null,
+    text: null,
+    segments: [],
+    ...over,
+  };
+}
+
 export interface FakeApi extends KawsayAPI {
   /** Push a progress event to every current onImportProgress subscriber. */
   emitProgress(event: ImportProgressEvent): void;
@@ -136,6 +153,7 @@ export interface FakeApiOptions {
   startTranscription?: KawsayAPI['startTranscription'];
   getTranscriptionStatus?: KawsayAPI['getTranscriptionStatus'];
   cancelTranscription?: KawsayAPI['cancelTranscription'];
+  getTranscript?: KawsayAPI['getTranscript'];
 }
 
 /** A zero transcription tally (the calm default for status/start fakes). */
@@ -218,6 +236,9 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       ),
     cancelTranscription:
       opts.cancelTranscription ?? vi.fn(() => Promise.resolve({ cancelled: false })),
+    // Default to a not-yet-transcribed item so transcription-agnostic tests see a
+    // calm "pending" view; #136's item-view tests inject their own transcript.
+    getTranscript: opts.getTranscript ?? vi.fn(() => Promise.resolve(makeTranscriptView())),
     onTranscriptionProgress: (listener) => {
       transcriptionListeners.add(listener);
       return () => {

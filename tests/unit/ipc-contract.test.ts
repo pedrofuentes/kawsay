@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
@@ -215,6 +216,61 @@ describe('ipcContract — catalog:thumbnail (U4: bounded data-URL by opaque id)'
     expect(resOk(CATALOG_THUMBNAIL, '')).toBe(false);
     // An unbounded string cannot cross the boundary.
     expect(resOk(CATALOG_THUMBNAIL, `data:image/png;base64,${'A'.repeat(2_000_000)}`)).toBe(false);
+  });
+});
+
+describe('ipcContract — catalog:getTranscript (#136: an item’s transcript by opaque id)', () => {
+  it('accepts an opaque uuid id and nothing else', () => {
+    expect(reqOk(CATALOG_GET_TRANSCRIPT, { id: UUID })).toBe(true);
+  });
+
+  it('rejects a non-uuid id, a path, or extra keys (renderer passes ONLY an id)', () => {
+    expect(reqOk(CATALOG_GET_TRANSCRIPT, { id: 'not-a-uuid' })).toBe(false);
+    // A filesystem path is NOT a valid id — the renderer can only name a catalog id.
+    expect(reqOk(CATALOG_GET_TRANSCRIPT, { id: '/etc/passwd' })).toBe(false);
+    expect(reqOk(CATALOG_GET_TRANSCRIPT, { id: '../../secret' })).toBe(false);
+    expect(reqOk(CATALOG_GET_TRANSCRIPT, { id: UUID, path: '/etc/passwd' })).toBe(false);
+    expect(reqOk(CATALOG_GET_TRANSCRIPT, {})).toBe(false);
+  });
+
+  it('returns a transcript view: a status, a nullable language/text, and ms-timed segments', () => {
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'Hola, te quiero mucho.',
+        segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
+      }),
+    ).toBe(true);
+    // A not-yet-transcribed item: a calm pending view with no words.
+    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'pending', language: null, text: null, segments: [] })).toBe(
+      true,
+    );
+    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'failed', language: null, text: null, segments: [] })).toBe(
+      true,
+    );
+    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'skipped', language: null, text: null, segments: [] })).toBe(
+      true,
+    );
+  });
+
+  it('rejects an unknown status, a missing field, a bad segment, or an extra key', () => {
+    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'weird', language: null, text: null, segments: [] })).toBe(
+      false,
+    );
+    // segments is required (strictObject) — a partial view cannot cross the boundary.
+    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'done', language: null, text: 'hi' })).toBe(false);
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'en',
+        text: 'hi',
+        segments: [{ startMs: -1, endMs: 10, text: 'hi' }],
+      }),
+    ).toBe(false);
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, { status: 'pending', language: null, text: null, segments: [], extra: 1 }),
+    ).toBe(false);
   });
 });
 

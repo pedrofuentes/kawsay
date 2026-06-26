@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createKawsayApi } from '../../electron/preload/api';
 import {
   APP_GET_VERSION,
+  CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
@@ -52,6 +53,12 @@ function fakeInvoke() {
       lastItem: null,
     },
     [TRANSCRIPTION_CANCEL]: { cancelled: true },
+    [CATALOG_GET_TRANSCRIPT]: {
+      status: 'done',
+      language: 'es',
+      text: 'Hola, te quiero mucho.',
+      segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
+    },
   };
   const invoke = vi.fn((channel: string, payload: unknown) => {
     calls.push({ channel, payload });
@@ -81,6 +88,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     const startRun = await api.startTranscription();
     const runStatus = await api.getTranscriptionStatus();
     const cancelRun = await api.cancelTranscription();
+    const transcript = await api.getTranscript({ id: UUID });
 
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
@@ -94,6 +102,12 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     });
     expect(runStatus.state).toBe('running');
     expect(cancelRun).toEqual({ cancelled: true });
+    expect(transcript).toEqual({
+      status: 'done',
+      language: 'es',
+      text: 'Hola, te quiero mucho.',
+      segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
+    });
     expect(calls.map((c) => c.channel)).toEqual([
       APP_GET_VERSION,
       LIBRARY_CREATE,
@@ -110,6 +124,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       TRANSCRIPTION_START,
       TRANSCRIPTION_STATUS,
       TRANSCRIPTION_CANCEL,
+      CATALOG_GET_TRANSCRIPT,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
@@ -120,6 +135,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(calls[12].payload).toEqual({});
     expect(calls[13].payload).toEqual({});
     expect(calls[14].payload).toEqual({});
+    expect(calls[15].payload).toEqual({ id: UUID });
   });
 
   it('wires onModelDownloadProgress onto the model-download event subscription', () => {
@@ -174,6 +190,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'getAppVersion',
         'getThumbnail',
         'getTimeline',
+        'getTranscript',
         'getTranscriptionStatus',
         'isTranscriptionModelReady',
         'onImportProgress',

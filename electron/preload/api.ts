@@ -7,6 +7,7 @@
 
 import {
   APP_GET_VERSION,
+  CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
@@ -60,6 +61,7 @@ export function createKawsayApi(
     getTimeline: (input) => invoke(CATALOG_TIMELINE, input),
     searchCatalog: (input) => invoke(CATALOG_SEARCH, input),
     getThumbnail: (input) => invoke(CATALOG_THUMBNAIL, input),
+    getTranscript: (input) => invoke(CATALOG_GET_TRANSCRIPT, input),
     startImport: (input) => invoke(IMPORT_START, input),
     cancelImport: (input) => invoke(IMPORT_CANCEL, input),
     openDirectory: (options) => invoke(DIALOG_OPEN_DIRECTORY, options ?? {}),

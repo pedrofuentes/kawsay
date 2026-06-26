@@ -265,6 +265,7 @@ function renderRow(row: Row): ReactElement {
 }
 
 function MemoryCard({ item }: { item: ItemCardDTO }): ReactElement {
+  const { navigate, view } = useNavigation();
   const date = parseDate(item.captureDate);
   const dateText = date === null ? UNDATED_LABEL : DAY_FMT.format(date);
   const typeLabel = MEDIA_LABEL[item.mediaType];
@@ -278,28 +279,38 @@ function MemoryCard({ item }: { item: ItemCardDTO }): ReactElement {
       aria-label={accessibleName}
       className="flex h-full items-center gap-4 rounded-lg border border-border-subtle bg-surface-raised p-4 shadow-sm"
     >
-      <MediaThumbnail
-        item={item}
-        icon={MEDIA_ICON[item.mediaType]}
-        className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
-        iconClassName="h-7 w-7"
-      />
-      <div className="flex min-w-0 flex-col gap-1">
-        <p className="truncate font-body text-md text-text-primary">{caption.length > 0 ? caption : typeLabel}</p>
-        <p className="flex items-center gap-2 font-body text-sm text-text-secondary">
-          <span>{typeLabel}</span>
-          <span aria-hidden>·</span>
-          <span>{dateText}</span>
-          {durationText !== null ? (
-            <>
-              <span aria-hidden>·</span>
-              <span>{durationText}</span>
-            </>
-          ) : null}
-        </p>
-      </div>
+      {/* The whole tile is one button that opens the memory on its own view. The
+          favourite heart stays OUTSIDE it so we never nest an interactive control
+          (axe nested-interactive); the global :focus-visible ring covers focus. */}
+      <button
+        type="button"
+        onClick={() => navigate({ name: 'item', item, from: view })}
+        aria-label={`Open ${caption.length > 0 ? caption : typeLabel}`}
+        className="flex min-w-0 flex-1 items-center gap-4 rounded-md text-left"
+      >
+        <MediaThumbnail
+          item={item}
+          icon={MEDIA_ICON[item.mediaType]}
+          className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
+          iconClassName="h-7 w-7"
+        />
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className="truncate font-body text-md text-text-primary">{caption.length > 0 ? caption : typeLabel}</p>
+          <p className="flex items-center gap-2 font-body text-sm text-text-secondary">
+            <span>{typeLabel}</span>
+            <span aria-hidden>·</span>
+            <span>{dateText}</span>
+            {durationText !== null ? (
+              <>
+                <span aria-hidden>·</span>
+                <span>{durationText}</span>
+              </>
+            ) : null}
+          </p>
+        </div>
+      </button>
       {item.isFavourite ? (
-        <Icon name="heart" label="Favourite" className="ml-auto h-5 w-5 shrink-0 text-clay-500" />
+        <Icon name="heart" label="Favourite" className="h-5 w-5 shrink-0 text-clay-500" />
       ) : null}
     </article>
   );
