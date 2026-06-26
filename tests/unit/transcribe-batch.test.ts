@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { installEgressSpies } from '../ac4/egress-spies';
 import {
   runTranscriptionBatch,
@@ -309,6 +309,31 @@ describe('runTranscriptionBatch idempotence (re-run safe, no duplicate work — 
     ]);
     expect(summary.transcribed).toBe(2);
     expect(summary.skipped).toBe(1);
+  });
+
+  it('warns with a diagnostic when a skipWhen predicate throws so a persistent fault is observable (#155)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const transcribe = recordingTranscribe((item) => ok(item.id));
+
+      const summary = await runTranscriptionBatch({
+        transcribe,
+        items: items('a', 'b'),
+        skipWhen: (item) => {
+          if (item.id === 'b') throw new Error('transcript_status lookup exploded');
+          return false;
+        },
+      });
+
+      // Fail-closed behavior is unchanged — the throw is still contained and the
+      // item is treated as not-done — but the swallowed error must now leave a
+      // trace so a persistently-throwing predicate is diagnosable, not silent.
+      expect(summary.transcribed).toBe(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.join(' ')).toMatch(/skipWhen|transcript_status lookup exploded/i);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

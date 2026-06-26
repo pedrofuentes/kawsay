@@ -133,6 +133,19 @@ describe('ItemView — transcript status states are calm, never technical (#136)
 
     expect(await screen.findByText(/no (spoken )?words|nothing was said|no words to capture/i)).toBeInTheDocument();
   });
+
+  it('stays calm — "looking for the words" — when the transcript read is rejected (#164)', async () => {
+    const item = makeItemCard({ mediaType: 'audio', title: 'Unreadable note' });
+    const api = makeFakeApi({
+      getTranscript: vi.fn(() => Promise.reject(new Error('transcript read failed'))),
+    });
+    renderItem(item, api);
+
+    // A failed read must never surface an error — the item view keeps its gentle
+    // placeholder so the page stays calm (#164, mirrors use-transcript's catch).
+    expect(await screen.findByText(/looking for the words/i)).toBeInTheDocument();
+    expect(api.getTranscript).toHaveBeenCalledWith({ id: item.id });
+  });
 });
 
 describe('ItemView — only audio/video carry a transcript', () => {

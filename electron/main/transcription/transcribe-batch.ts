@@ -119,7 +119,15 @@ async function isAlreadyDone(
   if (!skipWhen) return false;
   try {
     return await skipWhen(item);
-  } catch {
+  } catch (error) {
+    // Fail-closed (treat as "not done") so a throwing predicate never aborts the
+    // batch (#150), but leave a diagnostic so a PERSISTENTLY-throwing transcript_
+    // status hook is observable rather than silently swallowed (#155).
+    console.warn(
+      '[kawsay] transcription skipWhen predicate threw; treating as not-done. item:',
+      item.id,
+      error,
+    );
     return false;
   }
 }

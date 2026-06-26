@@ -40,4 +40,38 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
     expect(() => store.isOptedIn()).not.toThrow();
     expect(store.isOptedIn()).toBe(false);
   });
+
+  it('does not throw when persisting fails — writes are best-effort (#160)', () => {
+    // The header contract promises a write failure "must not crash the calm main
+    // process". A read-only / unwritable location surfaces as a throwing
+    // mkdirSync or writeFileSync; setOptedIn must swallow it (fail-closed: the
+    // choice simply is not persisted) rather than propagate.
+    const failingMkdir = createConsentStore({
+      filePath,
+      fs: {
+        readFileSync: () => {
+          throw new Error('unused');
+        },
+        writeFileSync: () => undefined,
+        mkdirSync: () => {
+          throw new Error('EACCES: permission denied, mkdir');
+        },
+      },
+    });
+    expect(() => failingMkdir.setOptedIn(true)).not.toThrow();
+
+    const failingWrite = createConsentStore({
+      filePath,
+      fs: {
+        readFileSync: () => {
+          throw new Error('unused');
+        },
+        writeFileSync: () => {
+          throw new Error('EROFS: read-only file system, write');
+        },
+        mkdirSync: () => undefined,
+      },
+    });
+    expect(() => failingWrite.setOptedIn(true)).not.toThrow();
+  });
 });

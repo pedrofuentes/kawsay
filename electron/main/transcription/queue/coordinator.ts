@@ -110,6 +110,14 @@ export function createTranscriptionCoordinator(
 
   return {
     start(job) {
+      // Defense in depth: a duplicate active jobId would overwrite the handle map
+      // and ORPHAN the previous worker (it would never be terminated). The
+      // orchestrator already serialises runs so this should never happen, but
+      // refuse it LOUDLY rather than silently leak a thread — mirroring the
+      // contract-violation posture of the audio-extract seam.
+      if (handles.has(job.jobId)) {
+        throw new Error(`transcription job already active: ${job.jobId}`);
+      }
       const handle = spawn();
       handles.set(job.jobId, handle);
       handle.onMessage((message) => onMessage(job, handle, message));

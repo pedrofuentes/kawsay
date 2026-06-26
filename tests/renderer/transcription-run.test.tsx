@@ -18,7 +18,9 @@ function snapshot(over: Partial<TranscriptionSnapshotDTO> = {}): TranscriptionSn
 }
 
 function startResult(over: Partial<TranscriptionStartResultDTO> = {}): TranscriptionStartResultDTO {
-  return { outcome: 'idle', reason: null, counts: counts(), ...over };
+  // Every call site passes a valid {outcome, reason} pairing; the cast keeps this
+  // tiny builder ergonomic against the discriminated-union start result (#160).
+  return { outcome: 'idle', reason: null, counts: counts(), ...over } as TranscriptionStartResultDTO;
 }
 
 function setup(api: FakeApi = makeFakeApi()): {

@@ -8,7 +8,7 @@
 //   • Spanish aggregate WER ....... 15.2%        (→ ceiling 22%)
 //   • overall aggregate WER ....... 13.6%        (→ ceiling 18%)
 //   • language auto-detect ........ 7/8 = 87.5%  (→ floor 75%)
-//   • mean RTF .................... 0.26×         (≈3.8× faster than real time)
+//   • mean RTF .................... 0.25×         (≈4× faster than real time)
 //
 // whisper.cpp greedy decoding is deterministic, so WER is stable run-to-run; the
 // ceilings sit just above the measured numbers (with a little cross-platform
