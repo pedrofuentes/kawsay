@@ -43,6 +43,20 @@ export const DIALOG_OPEN_DIRECTORY = 'dialog:openDirectory';
 export const DIALOG_OPEN_FILE = 'dialog:openFile';
 
 /**
+ * IPC channel: start the opt-in transcription-model download (AC-17). Caller-
+ * initiated only — the renderer must explicitly invoke it (the consent UI is
+ * card #132); it is NEVER auto-triggered. Resolves immediately with whether a
+ * download was `started` or the model was `already-present`; byte-level progress
+ * and the terminal result stream over {@link TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS}.
+ */
+export const TRANSCRIPTION_DOWNLOAD_MODEL = 'transcription:downloadModel';
+/**
+ * IPC channel: query whether the transcription model is present AND integrity-
+ * verified (a capability gate for the UI). Resolves `{ ready }`.
+ */
+export const TRANSCRIPTION_MODEL_STATUS = 'transcription:modelStatus';
+
+/**
  * The renderer-controllable options for a native open dialog (W2). This is the
  * ENTIRE surface the sandboxed renderer may influence: a friendly title and an
  * optional starting directory — nothing else. `properties` (file vs directory),
@@ -133,6 +147,16 @@ export const ipcContract = {
   [DIALOG_OPEN_FILE]: {
     request: dialogOpenRequestSchema,
     response: dialogOpenResponseSchema,
+  },
+  [TRANSCRIPTION_DOWNLOAD_MODEL]: {
+    request: z.strictObject({}),
+    // `started` ⇒ a download is now in flight (watch the progress event);
+    // `already-present` ⇒ a verified model is on disk, nothing to do.
+    response: z.strictObject({ status: z.enum(['started', 'already-present']) }),
+  },
+  [TRANSCRIPTION_MODEL_STATUS]: {
+    request: z.strictObject({}),
+    response: z.strictObject({ ready: z.boolean() }),
   },
 } as const;
 
