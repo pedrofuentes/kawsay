@@ -8,6 +8,7 @@ import type {
   ItemCardDTO,
   KawsayAPI,
   LibrarySummaryDTO,
+  ModelDownloadProgressEvent,
   SearchResultDTO,
 } from '@shared/kawsay-api';
 
@@ -89,6 +90,8 @@ export interface FakeApi extends KawsayAPI {
   emitProgress(event: ImportProgressEvent): void;
   /** Number of live import-progress subscribers (asserts clean unsubscribe). */
   subscriberCount(): number;
+  /** Push a model-download progress event to every onModelDownloadProgress subscriber. */
+  emitModelDownloadProgress(event: ModelDownloadProgressEvent): void;
 }
 
 export interface FakeApiOptions {
@@ -103,11 +106,14 @@ export interface FakeApiOptions {
   openDirectory?: KawsayAPI['openDirectory'];
   openFile?: KawsayAPI['openFile'];
   getThumbnail?: KawsayAPI['getThumbnail'];
+  downloadTranscriptionModel?: KawsayAPI['downloadTranscriptionModel'];
+  isTranscriptionModelReady?: KawsayAPI['isTranscriptionModelReady'];
 }
 
 /** Build a fully typed fake KawsayAPI whose methods are spies (vi.fn). */
 export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
   const listeners = new Set<(event: ImportProgressEvent) => void>();
+  const modelListeners = new Set<(event: ModelDownloadProgressEvent) => void>();
   const jobId = opts.jobId ?? FAKE_JOB_ID;
 
   return {
@@ -139,9 +145,25 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         listeners.delete(listener);
       };
     },
+    // Default to "not ready" + "already-present" so transcription-agnostic tests
+    // see no model state; #132's consent UI tests inject their own behaviour.
+    downloadTranscriptionModel:
+      opts.downloadTranscriptionModel ??
+      vi.fn(() => Promise.resolve({ status: 'already-present' as const })),
+    isTranscriptionModelReady:
+      opts.isTranscriptionModelReady ?? vi.fn(() => Promise.resolve(false)),
+    onModelDownloadProgress: (listener) => {
+      modelListeners.add(listener);
+      return () => {
+        modelListeners.delete(listener);
+      };
+    },
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },
     subscriberCount: () => listeners.size,
+    emitModelDownloadProgress: (event) => {
+      for (const listener of [...modelListeners]) listener(event);
+    },
   };
 }

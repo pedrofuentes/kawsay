@@ -10,6 +10,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_DOWNLOAD_MODEL,
+  TRANSCRIPTION_MODEL_STATUS,
 } from '@shared/ipc/contract';
 import {
   registerIpcHandlers,
@@ -40,6 +42,8 @@ const otherHandlers = {
   [IMPORT_CANCEL]: () => ({ cancelled: false }),
   [DIALOG_OPEN_DIRECTORY]: () => null,
   [DIALOG_OPEN_FILE]: () => null,
+  [TRANSCRIPTION_DOWNLOAD_MODEL]: () => ({ status: 'already-present' as const }),
+  [TRANSCRIPTION_MODEL_STATUS]: () => ({ ready: false }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
