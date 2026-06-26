@@ -162,6 +162,35 @@ function seedAudioWithStatus(catalogPath: string, status: 'pending' | 'failed' |
   return id;
 }
 
+/** Seed an audio item whose status says `done` but whose transcript ROW is absent
+ *  (a torn/corrupt write the read path must survive calmly, #164). */
+function seedDoneButRowless(catalogPath: string): string {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const transcripts = createTranscriptRepo(db);
+  const id = repo.insertItem({ mediaType: 'audio', contentHash: 'h-rowless', durationSec: 9 });
+  transcripts.setStatus(id, 'done');
+  db.close();
+  return id;
+}
+
+/** Seed a `done` transcript, then corrupt its stored segments JSON so a load throws (#164). */
+function seedDoneWithBadSegments(catalogPath: string): string {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const transcripts = createTranscriptRepo(db);
+  const id = repo.insertItem({ mediaType: 'audio', contentHash: 'h-badseg', durationSec: 9 });
+  transcripts.saveTranscript({
+    itemId: id,
+    text: 'Hola.',
+    language: 'es',
+    segments: [{ startMs: 0, endMs: 1000, text: 'Hola.' }],
+  });
+  db.prepare('UPDATE transcripts SET segments = ? WHERE item_id = ?').run('{ not valid json', id);
+  db.close();
+  return id;
+}
+
 describe('createCatalogSession (the IPC application service)', () => {
   let parent: string;
   let root: string;
@@ -401,6 +430,36 @@ describe('createCatalogSession (the IPC application service)', () => {
       text: null,
       segments: [],
     });
+  });
+
+  it('getTranscript returns a calm non-done view when a done item has no transcript row (#164)', async () => {
+    session.createLibrary({ path: root });
+    const id = seedDoneButRowless(join(root, 'catalog.sqlite3'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const view = await session.getTranscript({ id });
+
+    expect(transcriptViewSchema.safeParse(view).success).toBe(true);
+    expect(view.status).not.toBe('done');
+    expect(view.text).toBeNull();
+    expect(view.segments).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('getTranscript returns a calm non-done view when stored segments JSON is malformed (#164)', async () => {
+    session.createLibrary({ path: root });
+    const id = seedDoneWithBadSegments(join(root, 'catalog.sqlite3'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const view = await session.getTranscript({ id });
+
+    expect(transcriptViewSchema.safeParse(view).success).toBe(true);
+    expect(view.status).not.toBe('done');
+    expect(view.text).toBeNull();
+    expect(view.segments).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('getTranscript rejects an unknown item id (a transcript read never invents an item)', async () => {
