@@ -28,29 +28,51 @@
 
 ---
 
-### ADR-0027: M2 on-device transcription — whisper.cpp via a bundled `whisper-cli` binary + a bundled multilingual `ggml` model (`base` vs `small` — open) on the F3c worker/ffmpeg seam (bundle, never download)
-**Date**: 2026-06-25
+### ADR-0027: M2 on-device transcription — whisper.cpp via a bundled `whisper-cli` binary + an **opt-in, on-demand, checksum-verified download** of the multilingual **`small`** `ggml` model on the F3c worker/ffmpeg seam (binary bundled; model downloaded on opt-in)
+**Date**: 2026-06-25 (revised 2026-06-25 after the cofounder locked the open decisions)
 **Status**: Proposed — 🚨 **HUMAN-REQUIRED** (@pedrofuentes sign-off required before any building). This is the
 **M2 architecture gate artifact**; it is research + design only (no product code). An independent **red-team** pass
-(verdict **SOUND-WITH-FIXES**) has been **incorporated**: fabricated Spanish-WER figures removed, the subprocess
+(verdict **SOUND-WITH-FIXES**) was **incorporated**: fabricated Spanish-WER figures removed, the subprocess
 zero-egress *proof* scoped to a net-new OS-deny harness (M2-7), and consent (AC-22), NOTICES (AC-23), binary
-provenance, long-media, and the FTS-rebuild cost added. Supersedes nothing; extends ADR-0004 (off-thread
-ingestion), ADR-0012 (bundled ffmpeg/ffprobe), ADR-0003 (catalog/FTS), ADR-0007/0023 (packaging), and ADR-0008
-(zero-egress invariant).
-**Tier**: **human-required** (MISSION §9). Two independent triggers fire: (1) a **heavy/unusual dependency** — a
-platform-specific native binary plus a 142 MiB–466 MiB model file that ~doubles-to-triples the installer; and
-(2) **privacy-data capability** design — turning a deceased person's voice into stored, searchable text. Either
-alone gates; both together make this a deliberate, blocking cofounder decision. The **time-boxed** M2 default
-(ROADMAP) holds **only while the design stays fully on-device**; this ADR keeps it on-device, so the gate here is
-the heavy-dep + privacy sign-off, not an egress exception.
+provenance, long-media, and the FTS-rebuild cost added.
+**Revised — the cofounder has now LOCKED the three open decisions, and they PIVOT the model-delivery design:**
+(1) **model = `small`** (~466 MiB), multilingual; (2) **policy = opt-in** (no silent/automatic transcription); and
+(3) **delivery = the app auto-downloads the `small` model on first opt-in** — it is **NOT** bundled in the installer
+(bundling was explicitly rejected: *"is going to become a huge app to download and install"*; the cofounder
+confirmed option **(b) "App auto-downloads on opt-in — smooth UX, one audited egress"** over **(c)** manual import).
+**This revision supersedes the prior "bundle, never download" stance *within this same ADR*** (Decisions 6–7 below;
+the bundle and manual-import options are now recorded as **Alternatives rejected by the cofounder**). The
+**`whisper-cli` binary stays bundled** (built from source in CI) and the **installer stays ~200 MB**; only the
+**model file** is fetched. Because this narrows the egress policy, it **touches the `network-guard` egress policy +
+the AC-4 harness (`ac4-egress.yml`)** → it is the gate artifact for a **final cofounder confirm of the specific
+pinned host + hard-coded SHA-256 + scoped-allowlist mechanism** before any building.
+Extends ADR-0004 (off-thread ingestion), ADR-0012 (bundled ffmpeg/ffprobe), ADR-0003 (catalog/FTS), ADR-0007/0023
+(packaging); **supersedes (within itself) its own earlier bundle-only packaging stance**; and **narrows ADR-0008
+(zero-egress invariant) by exactly one user-initiated, data-free model fetch** — user memories remain absolutely
+non-egressing (see Decision 7).
+**Tier**: **human-required** (MISSION §9). **Three** independent triggers now fire: (1) a **heavy/unusual
+dependency** — a platform-specific native binary plus a ~466 MiB `small` model; (2) **privacy-data capability**
+design — turning a deceased person's voice into stored, searchable text; and (3) **a new product-runtime network
+egress / external origin** — the opt-in model download narrows the §5 *product* network allowlist from **"None —
+fully offline"** to **exactly one** pinned host (MISSION §5/§9: "any action that would add network egress … →
+human-required"). Any one alone gates; together they make this a deliberate, blocking cofounder decision. The
+**time-boxed** M2 default (ROADMAP) holds **only while user data stays fully on-device** — and it does: **all
+transcription runs 100% locally and no loved-one's audio or memories ever leave the machine.** What the design now
+adds is a single, **data-free**, user-initiated model-file fetch, so the gate here is heavy-dep + privacy + the
+**scoped-egress-policy** sign-off.
 
 **Context**
 ROADMAP **M2** ("the #1 post-v1 candidate", MISSION §4) is approved in principle: transcribe WhatsApp voice notes
 and audio/video **on-device** so a grieving user needn't listen to every recording. The cofounder specifically
 asked about **Whisper** and whether it is **"too heavy?"**. The binding constraints are non-negotiable:
 - **AC-4 zero-egress is load-bearing** (MISSION §5, NEVER list): "a loved one's memories must never leave the
-  machine," surfaced in-product as "your memories never leave this computer." Any cloud STT, or any **model
-  download at install or runtime**, is network egress that breaks AC-4 and is **human-required** (ROADMAP M2).
+  machine," surfaced in-product as "your memories never leave this computer." **This promise is about *user data* —
+  the loved one's audio and memories — and it remains absolute and CI-enforced.** Any **cloud STT** still breaks it
+  outright (it ships a deceased person's voice off-device) and stays on the NEVER list. A **model download**,
+  however, carries **no user data** — it is a plain GET of the app's **own public software component** (the `ggml`
+  weights) — so the cofounder has accepted it as a **narrowly-scoped, opt-in, human-required** egress that does
+  **not** move memories. (Distinguish: *user-data egress* = NEVER; *the app fetching its own model file* = one
+  permitted, data-free, checksum-verified, single-host exception — Decisions 6–7.)
 - **Off-UI-thread** (AC-9): heavy media work runs in the F3c `worker_threads` harness with
   `ffmpeg`/`ffprobe` as bounded subprocesses — never on the renderer thread.
 - **Searchable + attached to items** (AC-6/AC-7): the FTS5 index `items_fts` (tokenize `unicode61`, which already
@@ -59,8 +81,8 @@ asked about **Whisper** and whether it is **"too heavy?"**. The binding constrai
   (`electron/main/db/migrations/001_initial.sql`).
 - **Resilience + integrity** (AC-15/AC-14): a failed item is skipped/reported, never aborts the run, and originals
   are never altered.
-The question this ADR answers: **which engine, which Node integration, which model, and how is it packaged across
-macOS (arm64+x64) + Windows — without breaking AC-4?**
+The question this ADR answers: **which engine, which Node integration, which model, and how is the model delivered
+across macOS (arm64+x64) + Windows — without ever moving the user's memories off the device (AC-4)?**
 
 **Decision** *(all subject to the human-required sign-off + red-team)*
 1. **Engine — whisper.cpp** (`ggml-org/whisper.cpp`, **MIT**, stable **v1.9.1**, 2025). It is a dependency-free
@@ -76,29 +98,32 @@ macOS (arm64+x64) + Windows — without breaking AC-4?**
 3. **Audio extraction — reuse the bundled `ffmpeg`** to decode any voice note (`.opus`), audio, or video audio
    track to the **16 kHz mono PCM `s16le` WAV** that `whisper-cli` requires (`ffmpeg -i in -ar 16000 -ac 1 -c:a
    pcm_s16le out.wav`), via the same hardened `spawn` seam. No new media dependency.
-4. **Model — bundle one multilingual `ggml` model; `base` (142 MiB) vs `small` (466 MiB) is an OPEN decision**
-   deferred to the **M2-0 empirical spike** on real Spanish WhatsApp-style voice notes (it is **not** pre-decided
-   here). Both candidates are multilingual (a model **without** the `.en` suffix) because the audience is
-   international (Spanish **and** others); Whisper does language-ID + transcription across ~99 languages. What the
-   evidence does and does not support:
+4. **Model — the multilingual `small` `ggml` model (LOCKED by the cofounder).** The open `base`-vs-`small` question
+   is **resolved: `small`** (~466 MiB; exact download **487,601,967 bytes**). It is multilingual (a model **without**
+   the `.en` suffix) because the audience is international (Spanish **and** others); Whisper does language-ID +
+   transcription across ~99 languages. The evidence supports choosing `small` over `base` for grief-critical,
+   one-shot memories:
    - **Accuracy is monotonic in model size:** `tiny` < `base` < `small` < `medium` (larger = lower word-error
      rate). Any claim that `base` matches or beats `small` is wrong and **inverts** this ordering.
    - **Clean-benchmark Spanish WER (read-speech, upper-bound reference only):** on OpenAI's published Common Voice
      per-language breakdown, Spanish WER is roughly **`tiny` ~24%, `base` ~16% (≈15–17%), `small` ~10–11%,
      `medium` ~8%, `large` ~5–6%** (source: OpenAI Whisper paper, Radford et al. 2022, Appendix E / `openai/whisper`
      model card, Common Voice 15). **Treat these as optimistic clean read-speech upper bounds — not field
-     accuracy.** (The earlier "`base` ~6.9%" figure was wrong: real `base` Spanish WER is ~15–17%, well above
-     `small`.)
+     accuracy.** **`base` Spanish WER (~15–17%) sits well above `small` (~10–11%)** — the gap that motivated picking
+     `small`.
    - **Real WhatsApp voice notes will be worse:** spontaneous, accented, code-switched, compressed `.opus`,
-     background noise → expect materially higher WER than the clean-benchmark figures above. This is exactly why
-     `base`-vs-`small` is decided **empirically on real samples (M2-0)**, not asserted from benchmarks.
-   - **Implication for the floor:** because real `base` Spanish WER sits well above the ~10% range, "is `base` good
-     enough for grief-critical content, or must we ship `small` (~3.3× the footprint)?" is a genuine
-     accuracy-vs-size trade-off the cofounder signs off on **after** M2-0 — not a foregone conclusion. A **quantized
-     `q5_0`** variant (quantization cut `large-v2` 2.9 GiB→1.1 GiB and `large-v3-turbo` 1.5 GiB→547 MiB upstream)
-     is the middle option to **measure** in the spike rather than assert here.
-   - **`medium` (1.5 GiB) / `large` (2.9 GiB)** remain rejected as the bundled default: installer bloat for a
-     non-technical "in an afternoon" audience, and too slow on Windows CPU.
+     background noise → expect materially higher WER than the clean-benchmark figures above. Choosing the **larger of
+     the two practical models** buys accuracy headroom precisely where field conditions erode it.
+   - **Why `small` is now affordable:** the prior reason to hesitate on `small` was the **+233% installer** it
+     implied when *bundled*. With the model **no longer in the installer** (Decision 6), that objection is gone — the
+     installer stays ~200 MB and the size cost becomes a **one-time, opt-in ~466 MiB download**, not weight every
+     user carries. So `small`'s accuracy is taken with **no installer penalty**.
+   - **M2-0 is now a *validation* spike, not a choice:** it confirms `small` clears the WER ceiling on **real
+     Spanish samples** and locks the **AC-21** threshold (it no longer decides `base` vs `small`). A quantized
+     `q5_0` `small` variant may be measured later as an optional footprint optimization, but **full `small` is the
+     default**.
+   - **`medium` (1.5 GiB) / `large` (2.9 GiB)** remain rejected: too large even as a download, and too slow on
+     Windows CPU for a non-technical "in an afternoon" audience.
 5. **Transcript storage + FTS** — transcripts **attach to the existing media item** (audio/video), never create new
    items. `items_fts` is an **external-content FTS5** table (`content='items'`) trigger-bound to `items`
    (`electron/main/db/migrations/001_initial.sql`), so the chosen seam is to **feed transcript text into the
@@ -109,31 +134,81 @@ macOS (arm64+x64) + Windows — without breaking AC-4?**
    `ALTER`;** and a *separate* `transcripts` table would **not** be covered by the existing `items` triggers and
    would need its own FTS sync. This schema change is a **DB migration → HUMAN-REQUIRED** (AGENTS.md),
    dedup-with-provenance aware (ADR-0003), and its FTS-rebuild cost is sequenced into M2-4.
-6. **Packaging — bundle, do not download.** The `whisper-cli` binary and the chosen `ggml` model ship **inside the
-   installer** via `electron-builder` `extraResources` (the model/binary are data, resolved at runtime through
-   `process.resourcesPath`) and/or `asarUnpack` (consistent with how `ffmpeg-static`/`ffprobe-static`/
-   `better-sqlite3` are unpacked today), built on the **per-arch native runners** already in CI (macOS arm64 +
-   x64, Windows x64). There is **NO model fetch at install or at runtime.**
-7. **AC-4 preservation — design argument (sound) vs. proof status (gap to close).**
-   **(a) By construction (the sound part):** everything ships *inside* the installer; `whisper-cli` is spawned
-   **local-file-only** (an array argv of file paths, never URLs); there is **no model-download path, no
-   network-capable code, and no auto-updater anywhere on the transcription path**. The runtime network guard
-   (`network-guard.ts`) and renderer CSP (`connect-src 'none'`) are **untouched**. The design therefore adds
-   **zero** network surface.
-   **(b) Proof status (do NOT overstate):** the existing in-process `net`/`dgram`/`dns` spies + `nock`
-   (`tests/ac4/egress-spies.ts`) are, by their own docs, the proof for the **main process only** — they
-   **cannot observe a separate OS process** ("the subprocess path the in-process spies cannot see",
-   `tests/ac4/egress-subprocess.mjs`). The **OS-level deny firewall** is the *authoritative* layer for
-   subprocesses, but it is implemented **Linux-only** (`.github/workflows/ac4-egress.yml` is
-   `runs-on: ubuntu-latest`), and the AC-4 subprocess positive control (`tests/ac4/egress-subprocess.mjs`) is a
-   **cooperative Node self-reporting** stand-in — a real `whisper-cli` binary will **not** self-report. Because
-   Kawsay ships **macOS arm64/x64 + Windows x64 only** (no Linux target, `electron-builder.yml`), there is
-   currently **no OS-level egress proof for the native subprocess on any shipping platform.** The earlier claim
-   that the harness "already spies on the subprocess and extends directly" is therefore **withdrawn**: standing up
-   a **macOS/Windows OS-deny egress harness that exercises the *real* binary is net-new harness work** (not a
-   trivial "extend"), tracked in **M2-7** — and, because it edits the AC-4 CI workflow, **HUMAN-REQUIRED**
-   (harness integrity, MISSION §9). **AC-17** is split accordingly into a static/packaging guarantee (provable now)
-   plus a runtime OS-deny assertion (gated on M2-7).
+6. **Packaging & model delivery — bundle the binary, download the model on opt-in (the pivoted core decision).**
+   The `whisper-cli` **binary** still ships **inside the installer** via `electron-builder` `extraResources` /
+   `asarUnpack` (resolved at runtime through `process.resourcesPath`, consistent with how `ffmpeg-static`/
+   `ffprobe-static`/`better-sqlite3` are unpacked today), built on the **per-arch native runners** already in CI
+   (macOS arm64 + x64, Windows x64). The **`small` `ggml` model is NOT bundled** — it is **fetched once, on the
+   user's first opt-in**, into the app's data dir. Installer stays **~200 MB**. Four parts specify the fetch:
+   - **(a) Pinned trusted host + provenance — Kawsay's own GitHub Release asset re-hosting upstream.** The model is
+     served from **Kawsay's OWN GitHub Release assets**, e.g.
+     `https://github.com/pedrofuentes/kawsay/releases/download/models-v1/ggml-small.bin` (exact tag pinned at M2-1),
+     re-hosting the upstream `ggml-org` / Hugging Face `ggerganov/whisper.cpp` `ggml-small.bin` **byte-for-byte**.
+     Preferred over fetching Hugging Face directly because: (i) **we control availability + the URL** (no
+     third-party rename, rate-limit, or takedown mid-grief); (ii) **GitHub Releases is already Kawsay's trusted,
+     pre-authorized distribution origin** (MISSION §3/§5 — the installers themselves ship from there), so it is
+     **not a new external party**, only a narrowing of the *product* runtime allowlist; (iii) we **pin one immutable
+     URL + version** and own the checksum. Upstream provenance (source repo + file + version + size + SHA-256) is
+     recorded for NOTICES (Decision 10 / AC-23). *(Direct-from-Hugging-Face is the documented fallback if we choose
+     not to re-host; it trades control for one fewer hop and is the cofounder's call at confirm.)*
+   - **(b) Integrity (mandatory, non-negotiable).** The **expected SHA-256 is hard-coded in the app** and the file
+     is **verified before first use** — the app **never runs an unverified model**. The upstream `ggml-small.bin`
+     (the bytes we re-host) has SHA-256 **`1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`**, size
+     **487,601,967 bytes** (the upstream Hugging Face LFS `oid` — this exact value is what the cofounder confirms and
+     what the build pins). Install is **atomic**: download to a **temp file → verify SHA-256 → `rename()` into
+     place**, so a partially-written or mismatched file is never visible as "the model." The download is
+     **resumable** (HTTP range / restart) so a dropped connection on ~466 MiB doesn't restart from zero. A **corrupt
+     or mismatched file is rejected and re-fetched**; repeated failure surfaces a calm error (never a crash) and the
+     feature stays disabled. → **AC-24**.
+   - **(c) Consent UX — explicit opt-in before any byte leaves.** Before **any** download, an explicit **opt-in**
+     screen (calm, non-technical copy) states: the **one-time ~466 MB** download; that **this is the only time the
+     app ever uses the network**; that **your memories never leave this computer** (the model is the app's own
+     software, not your data); and **what transcription enables** (readable, searchable text for voice notes / audio
+     / video). It shows **progress**, handles **offline/failure gracefully** (a clear retry, no crash, no
+     half-state), and the transcription feature **stays disabled until the model is present and verified**. No opt-in
+     ⇒ no download ⇒ no network, ever. → **AC-22**.
+   - **(d) Scoped egress design — one host, data-free, main-process only.** The runtime guard (`network-guard.ts`)
+     **allowlists EXACTLY the single pinned model host** (the GitHub Releases asset origin, e.g.
+     `github.com` / `objects.githubusercontent.com`) **and only for the user-initiated model-download code path** — a
+     **data-free GET** of a public file. **Everything else stays denied** by the existing deny-by-default guard. The
+     download runs in the **main process** (a single-purpose downloader over Node's outbound primitives), **not the
+     renderer**, so the renderer **CSP `connect-src 'none'` is unchanged** — the renderer still cannot make *any*
+     network request. The allowlist entry is **outbound-only, GET-only, to one pinned host, carrying no request body,
+     no query of user content, and no headers derived from user data** — so it is **structurally incapable of
+     exfiltrating a memory**: the only thing that can travel out is the request for a public, named model file, and
+     the only thing that returns is that file (rejected unless its SHA-256 matches). This single entry — plus the
+     matching AC-4 harness change — is the **🚨 HUMAN-REQUIRED** mechanism the cofounder confirms (Decision 7).
+7. **AC-4 preservation — reframed: zero *user-data* egress is still absolute; the ONLY permitted outbound is the
+   opt-in model fetch.**
+   **(a) The invariant that never bends:** **no user audio, no memory, and no derived transcript ever leaves the
+   device.** Transcription runs **100% locally**: `whisper-cli` is spawned **local-file-only** (an array argv of
+   file paths, never URLs), with **no network-capable code on the transcription path** and **no auto-updater**. This
+   is **CI-enforced** (the AC-4 harness) and is the promise surfaced as "your memories never leave this computer."
+   The model download moves **the app's own software component**, never the user's data — so the promise **remains
+   true by construction.**
+   **(b) The one narrowly-scoped exception:** the previously-absolute "zero network egress" is **narrowed** to permit
+   **exactly one** kind of outbound traffic — an **optional, user-initiated, checksum-verified, data-free GET of the
+   model file from a single pinned trusted host** (Decision 6). This is the **only** network the app ever makes: it
+   is gated by opt-in (AC-22), verified by hard-coded SHA-256 (AC-24), and confined to one host by the
+   `network-guard` allowlist (Decision 6d). **Net statement: user-data egress = 0, forever; app-model egress = at
+   most one optional, data-free fetch.**
+   **(c) Proof status for the native subprocess (unchanged red-team finding — still a gap to close):** the existing
+   in-process `net`/`dgram`/`dns` spies + `nock` (`tests/ac4/egress-spies.ts`) prove the **main process only** and
+   **cannot observe a separate OS process** (`tests/ac4/egress-subprocess.mjs`). The **OS-level deny firewall** is
+   authoritative for subprocesses but is **Linux-only** (`.github/workflows/ac4-egress.yml` is
+   `runs-on: ubuntu-latest`), while Kawsay ships **macOS arm64/x64 + Windows x64** — so a macOS/Windows OS-deny
+   harness exercising the **real** `whisper-cli` binary is **net-new** work (**M2-7**, HUMAN-REQUIRED). **AC-17** is
+   split into a static/packaging guarantee (provable now) + a runtime OS-deny assertion (gated on M2-7).
+   **(d) Harness change this revision forces (🚨 HUMAN-REQUIRED):** because the model fetch is now a *permitted*
+   egress, the AC-4 harness must move from "**deny all**" to "**deny all except a data-free GET to the one pinned
+   model host**." Concretely this edits the **`network-guard` egress policy** (the single allowlist entry in
+   `electron/main/security/network-guard.ts`), the **in-process spies** (`tests/ac4/egress-spies.ts` /
+   `tests/ac4/no-egress.node.test.ts`) so they assert that **only** that one host is reachable and everything else
+   still trips, and **`.github/workflows/ac4-egress.yml`** (the OS-deny firewall). Editing the egress policy + the
+   AC-4 CI workflow is **harness-integrity → HUMAN-REQUIRED** (MISSION §9; §5 "any action that would add network
+   egress → human-required"). The renderer **CSP is NOT** in this set (it stays `connect-src 'none'`). **This ADR is
+   the gate artifact for the cofounder's final confirm of that exact host + checksum + allowlist mechanism before
+   any of these files are touched.**
 8. **Transcription is a net-new per-item queue, not a "verbatim reuse" of import.** We reuse the *seam* (the
    hardened `spawn`, the off-thread F3c coordinator/protocol), but per-media-item transcription **after** import is a
    **net-new design**: a `transcript_status` column + drain on `items`, **analogous to the existing `thumb_status`
@@ -143,19 +218,25 @@ macOS (arm64+x64) + Windows — without breaking AC-4?**
    records** (`electron/main/importers/workers/ingestion-job.ts`), **not** mid-file — neither fits multi-minute
    transcription. Long media therefore needs a **duration-scaled timeout (or chunking), partial/checkpoint output,
    and `whisper-cli` child-kill on cancel**, under concurrency limits (Metal ≈ serial; Windows CPU few cores). → **AC-20**.
-9. **User control / consent over transcription (privacy capability).** Turning a deceased loved one's voice into
-   stored, searchable text is a privacy-sensitive act, so transcription **must not run without an explicit user
-   choice**: a clear first-run/global toggle (and ideally per-item control), and **nothing auto-transcribes
-   silently**. → **AC-22**. The *policy* — opt-in default vs automatic-with-toggle — is **deferred to the cofounder**
-   (Decisions block); this ADR fixes only that user control must exist.
-10. **Attribution / NOTICES for bundled third-party artifacts.** Shipping the `whisper-cli` binary (whisper.cpp,
-    **MIT**) and the `ggml` weights (derived from OpenAI Whisper, **MIT**) requires bundled license
-    attribution/NOTICES, with each artifact's provenance recorded. → **AC-23**; surfaced in packaging increment M2-1.
+9. **User control / consent over transcription — opt-in (LOCKED by the cofounder).** Turning a deceased loved one's
+   voice into stored, searchable text is a privacy-sensitive act, so transcription **runs only after an explicit
+   user opt-in**: a clear first-run/global toggle (and ideally per-item control), and **nothing auto-transcribes
+   silently**. The earlier "opt-in vs automatic-with-toggle" question is **resolved: opt-in** (no silent/automatic
+   transcription). The **same opt-in also gates the model download** — no opt-in ⇒ no model fetch ⇒ no network
+   (Decision 6c). → **AC-22** (consent) **+ AC-24** (the download it gates).
+10. **Attribution / NOTICES for third-party artifacts (bundled *and* downloaded).** Shipping the `whisper-cli`
+    binary (whisper.cpp, **MIT**) requires bundled license attribution/NOTICES; the `small` `ggml` **weights**
+    (derived from OpenAI Whisper, **MIT**) — now a **downloaded** artifact rather than a bundled one — **still
+    require the same license/attribution NOTICES**, with the weights' provenance (upstream repo + file + version +
+    size + the pinned SHA-256) recorded for the artifact the app fetches. → **AC-23**; surfaced in M2-1.
 
-**Binary provenance & integrity** *(open decision — first-class, not a footnote)*
-The plan needs a **per-arch prebuilt `whisper-cli`** (macOS arm64 + x64 with Metal, Windows x64). How that binary is
-produced is an unresolved supply-chain decision with two viable postures, both within MISSION §5's **agent egress
-allowlist** (GitHub + npm registry):
+**Binary provenance & integrity** *(first-class, not a footnote — unchanged by the model-download pivot)*
+**The `whisper-cli` binary stays bundled** in the installer regardless of the model pivot; only the *model* is
+downloaded. (The model's own integrity — hard-coded SHA-256, verify-before-use, atomic + resumable install — is
+**Decision 6b**, a separate story from the binary's.) The plan needs a **per-arch prebuilt `whisper-cli`** (macOS
+arm64 + x64 with Metal, Windows x64). How that binary is produced is a supply-chain decision with two viable
+postures, both within MISSION §5's **agent egress allowlist** (GitHub + npm registry); the cofounder's "binary stays
+bundled, **built from source in CI**" framing **favors P1**:
 - **(P1) Build whisper.cpp from source in CI per arch.** Maximal provenance (we compile from pinned source, no
   third-party binary trust), and consistent with `electron-builder.yml`'s `buildDependenciesFromSource: true` for
   `better-sqlite3`. **Cost:** reintroduces the *exact* toolchain-fragility risk we cited to reject `nodejs-whisper`
@@ -181,11 +262,14 @@ allowlist** (GitHub + npm registry):
   worker (and risk the main process), whereas a **subprocess** fault is a typed, contained failure (better AC-15
   resilience). Revisit for performance once the subprocess baseline ships.
 - **`nodejs-whisper` (CLI wrapper, MIT, v0.3.0)** — ergonomic and CLI-based like our choice, but **rejected**
-  **primarily** because it ships a **model auto-download** path (`npx nodejs-whisper download`,
-  `autoDownloadModelName`) — a **latent egress vector** sitting right next to the privacy boundary — and it
-  **compiles whisper.cpp from source at `npm install`**. We prefer no network-capable code on that path at all.
-  *(Note: build-from-source is not disqualifying per se — see **Binary provenance & integrity** above, where P1
-  builds from source in our own CI; the decisive objection to `nodejs-whisper` is the bundled download path.)*
+  **primarily** because it ships an **implicit, uncontrolled model auto-download** path (`npx nodejs-whisper
+  download`, `autoDownloadModelName`) wired **right onto the transcription path**, and it **compiles whisper.cpp
+  from source at `npm install`**. *(Reconciling with our own opt-in download: the objection was never "a model is
+  fetched" — it was an **unpinned, unverified, non-consensual fetch living next to the privacy boundary**. Our
+  design is the **opposite on every axis**: a **single pinned host**, a **hard-coded SHA-256 verified before use**,
+  **explicit opt-in**, **data-free**, in a **single-purpose main-process downloader** the transcription path never
+  touches. Choosing an opt-in download here is therefore **consistent** with rejecting `nodejs-whisper`, not in
+  tension with it — and build-from-source is not disqualifying per se, see **Binary provenance & integrity** P1.)*
 - **Vosk (Kaldi, Apache-2.0)** — genuinely offline, small models (Spanish small ~48 MB, large ~833 MB), mature
   Node binding. **Rejected** because real-world accuracy on **accented/noisy WhatsApp voice notes** and
   multilingual breadth are materially below Whisper; grief-critical, one-shot memories warrant the better model
@@ -197,44 +281,79 @@ allowlist** (GitHub + npm registry):
   established "spawn a bundled native binary" pattern (ADR-0012).
 - **Cloud STT (OpenAI / Google / AWS Transcribe)** — **rejected outright**: network egress that **breaks AC-4** and
   sends a deceased person's voice off-device — squarely on the MISSION §5 / AGENTS.md **NEVER** list.
-- **Runtime/first-run model download (any engine, any size)** — **rejected**: a download is egress; it would move
-  M2 from time-boxed to **human-required** and break the offline guarantee the product promises in copy. Bundling
-  is the deliberate, AC-4-preserving choice.
+- **Bundle the `small` model in the installer (this ADR's *own* prior stance)** — **rejected by the cofounder:**
+  *"is going to become a huge app to download and install"* (a ~670 MB installer with `small` bundled, +233% on the
+  ~200 MB base). It also makes every user — including those who never opt into transcription — carry ~466 MiB they
+  may never use. **Superseded within this ADR** by the opt-in download (Decision 6).
+- **Manual user import of the model file (option *c*)** — **rejected by the cofounder:** too much friction for a
+  **grieving, non-technical** user (find the right `.bin`, the right version, place it correctly), and error-prone
+  with **no integrity guarantee** (wrong / corrupt / tampered file). The cofounder explicitly chose **option (b)
+  "App auto-downloads on opt-in — smooth UX, one audited egress"** over this.
+- **Opt-in, on-demand model download (the chosen approach)** — *formerly rejected here, now adopted* after the
+  cofounder weighed it against bundling and manual import. It **is** egress, so it stays **human-required**; but it
+  is **data-free, opt-in, single-pinned-host, checksum-verified**, and **does not break the offline promise for user
+  memories** (which never leave — Decision 7). Cloud STT remains rejected because it would send the **user's voice**
+  off-device — the line this design never crosses.
 
 **Consequences**
-- **Installer size grows, quantified and bounded:** ~200 MB today → **~340 MB** with `base` (+~71%) or **~670 MB**
-  with `small` (+~233%). One-time, shipped offline, no runtime fetch. This is the concrete answer to "too heavy?":
-  the size↔accuracy trade between `base` and `small` is an **open decision** resolved by the M2-0 spike, **not**
-  pre-decided here.
-- **New heavy, platform-specific build artifact** (binary + model) per arch (macOS arm64/x64, Windows x64) → larger
-  CI build/sign/notarize surface (signing still deferred per ADR-0025) and the **human-required** sign-off this ADR
-  flags. Apple **Core ML** acceleration, if adopted later, adds an Apple-only encoder artifact (revisit).
-- **AC-4's *design* is preserved by construction** and newly **bound by AC-17** — whose **runtime** half is gated
-  on the **net-new** OS-deny harness (M2-7), the static/packaging half provable now; the off-thread guarantee (AC-9)
-  extends to **AC-18**; audio/video become first-class **searchable** via **AC-19** (MISSION §4's top candidate
-  realized); resilience + **long-media** behavior are bound by **AC-20** and multilingual accuracy by **AC-21**;
-  **user consent/opt-in** by **AC-22**; **license attribution/NOTICES** by **AC-23** (PRD addendum).
+- **Installer size is UNCHANGED (~200 MB):** the model is **no longer bundled**, so the prior +71%/+233% installer
+  jump is **gone**. The "too heavy?" answer becomes: the installer stays light, and the model is a **one-time,
+  opt-in ~466 MiB (≈488 MB on disk) download** to the app's data dir — borne only by users who turn transcription
+  on. The compact `whisper-cli` binary remains bundled.
+- **New platform-specific build artifact** — the **per-arch `whisper-cli` binary** (macOS arm64/x64, Windows x64),
+  built from source in CI → a larger CI build/sign/notarize surface (signing still deferred per ADR-0025) and the
+  **human-required** sign-off this ADR flags. The **model is not a build artifact** anymore — it is a pinned,
+  checksum-verified Release asset fetched at runtime. Apple **Core ML** acceleration, if adopted later, adds an
+  Apple-only encoder artifact (revisit).
+- **A new product-runtime egress + harness change:** the §5 *product* network allowlist goes from **"None — fully
+  offline"** to **exactly one** pinned, data-free model host; the `network-guard` allowlist + the AC-4 harness
+  (`ac4-egress.yml`, the in-process spies, `network-guard.test.ts`) move from **deny-all** to
+  **deny-all-but-one-host** → **🚨 HUMAN-REQUIRED** (harness integrity). User memories remain absolutely
+  non-egressing and CI-enforced.
+- **AC-4 is preserved in spirit and *narrowed* in letter:** zero **user-data** egress stays absolute and
+  CI-enforced (memories never leave); the one permitted outbound is the opt-in, checksum-verified model fetch.
+  AC-4 is now **bound by AC-17** (whose **runtime** half is gated on the net-new OS-deny harness, M2-7; the
+  static/packaging half provable now) and the new **AC-24** (download integrity/resilience). The off-thread
+  guarantee (AC-9) extends to **AC-18**; audio/video become first-class **searchable** via **AC-19** (MISSION §4's
+  top candidate realized); resilience + **long-media** by **AC-20**; multilingual accuracy by **AC-21**; **user
+  consent/opt-in** by **AC-22**; **license attribution/NOTICES** by **AC-23** (PRD addendum).
 - **Transcription is a net-new per-item queue** (a `transcript_status` drain analogous to `thumb_status`), **not** a
   verbatim reuse of the import worker: long-media needs duration-scaled timeout/chunking, partial/checkpoint, and
   `whisper-cli` child-kill on cancel (the reused spawn seam caps children at 30 s and cancels between records only).
 - **A DB migration** (transcript storage) is required → **HUMAN-REQUIRED** per AGENTS.md, sequenced behind the
   engine/packaging work.
-- **Accuracy is model-bound and falsifiable:** AC-21 sets a measurable WER ceiling on a labelled offline fixture
-  set (no telemetry), letting the cofounder choose `base`↔`small` on **evidence from the M2-0 spike** rather than
-  guesswork or the (now-corrected) benchmark numbers.
+- **Accuracy is model-bound and falsifiable:** with **`small` locked**, AC-21 sets a measurable WER ceiling on a
+  labelled offline fixture set (no telemetry); M2-0 now **validates `small`** on real Spanish samples and locks the
+  threshold, rather than choosing `base`↔`small`.
 - **Performance:** short voice notes transcribe comfortably; on Apple Silicon whisper.cpp runs on the GPU (Metal)
-  multiples faster than realtime, and on Windows CPU a `base`-class model is near-realtime — and because it runs
-  **off-thread in the background after import**, even slower-than-realtime inference never blocks the UI.
+  multiples faster than realtime, and on Windows CPU `small` runs near-to-slightly-slower than realtime — and
+  because it runs **off-thread in the background after import**, even slower-than-realtime inference never blocks
+  the UI.
 
-**Decisions required from @pedrofuentes (sign-off)**
-1. **Model default — `base` (~142 MiB) vs `small` (~466 MiB); one bundled, or both** (~800 MB+) — pending the M2-0 empirical spike on real Spanish voice notes.
-2. **Transcription policy — automatic-on-import vs explicit opt-in / per-item control** (the privacy-capability decision; AC-22).
-3. **Heavy-dependency + provenance posture — accept the +71%/+233% installer jump and a per-arch prebuilt/built-in-CI unsigned `whisper-cli` binary** whose macOS/Windows zero-egress is provable only by-construction until the new OS-firewall harness (M2-7) lands.
+**Decisions LOCKED by @pedrofuentes (this revision)**
+1. **Model = `small`** (~466 MiB), multilingual — the `base`-vs-`small` question is closed.
+2. **Policy = opt-in** — no silent/automatic transcription; the same opt-in gates the model download.
+3. **Delivery = the app auto-downloads the model on opt-in** (option *b*) — **not** bundled (rejected as too big),
+   not manual import (rejected as too much friction). The `whisper-cli` binary stays bundled.
 
-**Remaining open items for the red-team / build:** transcript schema detail (`search_meta` feed vs a dedicated
-FTS-synced column, with the `items_fts` rebuild cost); whether to also bundle the Core ML encoder for Apple Silicon;
-binary provenance mechanics (P1 build-from-source-in-CI vs P2 pinned-checksum download); long-media chunking vs
-duration-scaled timeout.
+**Final confirm still required from @pedrofuentes before any building (this ADR is that gate artifact)**
+1. **The exact pinned host + URL** — recommended: Kawsay's own GitHub Release asset
+   (`…/releases/download/models-v1/ggml-small.bin`) re-hosting upstream `ggerganov/whisper.cpp`, vs fetching Hugging
+   Face directly.
+2. **The hard-coded SHA-256** — `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b` (487,601,967
+   bytes), pinned in the app and verified before first use.
+3. **The scoped-allowlist mechanism** — the single `network-guard` allowlist entry (one host, GET-only, data-free,
+   main-process) **+** the matching AC-4 harness edits (`ac4-egress.yml`, the in-process spies) → **🚨
+   HUMAN-REQUIRED** (egress policy + harness integrity).
+4. **Heavy-dependency / unsigned-binary posture** — accept a per-arch built-in-CI **unsigned** `whisper-cli` binary
+   whose macOS/Windows zero-egress is provable only by-construction until the net-new OS-firewall harness (M2-7)
+   lands.
+
+**Remaining open items for the red-team / build:** the exact Release tag + asset URL to pin (and whether to re-host
+vs fetch Hugging Face directly); resumable-download + offline-retry mechanics and the consent-screen copy; transcript
+schema detail (`search_meta` feed vs a dedicated FTS-synced column, with the `items_fts` rebuild cost); whether to
+also bundle the Core ML encoder for Apple Silicon; binary provenance mechanics (P1 build-from-source-in-CI vs P2
+pinned-checksum download); long-media chunking vs duration-scaled timeout.
 
 ---
 

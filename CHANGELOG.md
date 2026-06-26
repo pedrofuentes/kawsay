@@ -306,18 +306,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Docs / architecture (no code, no user-facing change):** proposed the **M2 on-device transcription**
-  architecture as a gate artifact for cofounder sign-off — **ADR-0027** (whisper.cpp via a bundled
-  `whisper-cli` binary + a bundled multilingual `ggml` model — **`base` vs `small` an open, M2-0-pending
-  decision** — on the existing off-thread `worker_threads` + `ffmpeg` seam; **bundle, never download** —
-  preserving the zero-egress guarantee, AC-4 **by construction**), a **PRD acceptance addendum (AC-17 … AC-23)**
-  incl. **user opt-in/consent (AC-22)** and **NOTICES/attribution (AC-23)**, and an **M2 increment breakdown**
-  in `ROADMAP.md`. Incorporates an independent **red-team** pass: removed fabricated Spanish WER figures (real
-  `base` ≈15–17% on clean Common Voice, worse on real audio; accuracy rises with model size), scoped the native
-  subprocess zero-egress **proof** to a **net-new macOS/Windows OS-deny harness (M2-7)** rather than the existing
-  main-process spies, and surfaced binary-provenance, long-media-queue, and FTS-rebuild work. **Proposed / 🚨
-  HUMAN-REQUIRED** (heavy bundled dependency + privacy-data capability); awaiting @pedrofuentes approval before
-  any building. No dependencies added, no runtime network egress.
+- **Docs / architecture (no code, no user-facing change):** revised the **M2 on-device transcription** gate
+  artifact after the cofounder **locked the three open decisions, pivoting model delivery**. **ADR-0027** now
+  specifies whisper.cpp via a **bundled** per-arch `whisper-cli` binary **+ an opt-in, on-demand,
+  checksum-verified download of the multilingual `small` `ggml` model** (superseding the prior "bundle, never
+  download" stance within the same ADR). Locked: **model = `small`**, **policy = opt-in**, **delivery = the app
+  auto-downloads the model on first opt-in** (bundling rejected as "a huge app to download and install"; manual
+  import rejected as too much friction for a grieving, non-technical user). The **binary stays bundled and the
+  installer stays ~200 MB**; the model is a one-time ~466 MB download to the app's data dir, **SHA-256-verified
+  before use** (atomic, resumable, corrupt→refetch). **Your memories never leave this computer** — transcription
+  runs 100% locally and no audio/memory ever egresses; the previously-absolute zero-egress is **narrowed** to
+  permit **exactly one** outbound: a **data-free** GET of the public model file from a **single pinned host** (the
+  app's own GitHub Release asset). Updates the **PRD acceptance addendum (AC-17 … AC-24)** — AC-17 reframed (zero
+  user-data egress; only egress = the model fetch), AC-22 ties the download behind opt-in, new **AC-24** (download
+  integrity/resilience), AC-23 NOTICES for the downloaded weights — and the **M2 increment breakdown** in
+  `ROADMAP.md` (M2-1 = download manager + integrity + consent UX + scoped `network-guard` allowlist; M2-7 = zero
+  user-data egress everywhere + the one pinned data-free host). The scoped egress touches the **`network-guard`
+  policy + the AC-4 harness (`ac4-egress.yml`)** → **🚨 HUMAN-REQUIRED**; this revised ADR is the gate artifact for
+  a **final cofounder confirm of the host + checksum + allowlist mechanism** before any building. No dependencies
+  added; renderer CSP `connect-src 'none'` unchanged.
 
 ### Fixed
 
