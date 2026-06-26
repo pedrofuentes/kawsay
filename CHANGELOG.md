@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Kawsay can now decode any WhatsApp voice note (`.opus`), audio file, or video soundtrack into the exact
   audio shape the upcoming on-device transcription engine needs (16 kHz mono), reusing the same bundled,
   offline media tooling that already makes thumbnails — **no new downloads and no network access** (AC-4). A
-  recording with no sound, or one that is unreadable or corrupt, is quietly skipped and noted rather than
-  interrupting anything, and long recordings are given the time they need to finish instead of being cut off.
+  recording with no sound, or one that is unreadable, corrupt, or that can't be written to Kawsay's working
+  space, is quietly skipped and noted rather than interrupting anything, and long recordings are given the
+  time they need to finish instead of being cut off.
   Your original files are never changed. This is internal groundwork only: the transcription itself — the
   on-device model, the off-thread worker, and the opt-in controls — arrives in later steps.
 - **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new

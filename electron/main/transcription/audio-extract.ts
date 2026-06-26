@@ -73,8 +73,8 @@ export function audioExtractTimeoutMs(durationSec: number | null | undefined): n
 
 /**
  * Build the ffmpeg argv that decodes a single LOCAL media file to the 16 kHz
- * mono PCM s16le WAV `whisper-cli` requires (ADR-0027 §3:
- * `ffmpeg -i in -ar 16000 -ac 1 -c:a pcm_s16le out.wav`).
+ * mono PCM s16le WAV `whisper-cli` requires (ADR-0027 §3, fully hardened:
+ * `ffmpeg -y -loglevel error -protocol_whitelist file -i in -vn -ar 16000 -ac 1 -c:a pcm_s16le -f wav out.wav`).
  *
  * Pure, and crucially an ARRAY argv: the input and output are discrete elements,
  * never concatenated into a flag or a shell string, so an attacker-controlled
