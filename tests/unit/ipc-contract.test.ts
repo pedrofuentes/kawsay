@@ -504,6 +504,30 @@ describe('ipcContract — transcription:start / status / cancel (#157, gated run
     expect(resOk(TRANSCRIPTION_START, { outcome: 'started', reason: null })).toBe(false);
   });
 
+  it('start ties reason to outcome (a discriminated union, not an independent field) (#160)', () => {
+    // A non-refused outcome must carry reason: null; only `refused` may name a
+    // refusal reason. The previous flat schema let any reason pair with any
+    // outcome, so {started, not-opted-in} wrongly validated.
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'started', reason: 'not-opted-in', counts })).toBe(
+      false,
+    );
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'idle', reason: 'model-not-ready', counts })).toBe(
+      false,
+    );
+    // And a refusal must actually carry a reason — null is not a valid refusal.
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'refused', reason: null, counts })).toBe(false);
+  });
+
+  it('start rejects an inFlight above 1 — the worker runs items serially (#160)', () => {
+    expect(
+      resOk(TRANSCRIPTION_START, {
+        outcome: 'started',
+        reason: null,
+        counts: { total: 3, transcribed: 0, failed: 0, skipped: 0, inFlight: 2 },
+      }),
+    ).toBe(false);
+  });
+
   it('status returns the run state and counts', () => {
     expect(reqOk(TRANSCRIPTION_STATUS, {})).toBe(true);
     expect(resOk(TRANSCRIPTION_STATUS, { state: 'idle', counts, lastItem: null })).toBe(true);
