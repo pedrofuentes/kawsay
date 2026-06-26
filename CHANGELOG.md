@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Read your memories' words on screen — and find them by what was said** (card #136, M2 · ADR-0027,
+  **AC-13 / AC-19 / AC-22**): the last piece a grieving person actually sees. A calm **Start transcribing**
+  control turns transcription loose on the library, with **gentle live progress** in a polite live region
+  ("Transcribing your recordings… 12 of 40") and a soft **Stop**; reopening the window **reflects a run already
+  in progress or finished** instead of starting over, and **nothing ever auto-starts**. When transcription isn't
+  ready the screen **guides kindly rather than alarming** — "turn it on first" or "it's still setting up", never
+  an alert or a raw reason code (AC-22). On each audio or video memory you can now **read the spoken words**,
+  read-only (no player, nothing editable) and **tagged with the detected language** so a screen reader pronounces
+  them correctly (AC-13), with calm states for transcribing, not-done-yet, couldn't-transcribe, and nothing-said.
+  And **search now reaches what was said** (AC-19): a recording that matched on its transcript rather than its
+  caption shows a gentle **"Found in what was said"** hint, so a quiet-looking result is never puzzling — and a
+  transcript-matched item still appears just once, with no duplicate tiles. A renderer-safe read path
+  (`catalog:getTranscript`) hands back only the words for an item id — **no file path or media byte ever crosses**
+  (AC-4). No new dependencies, no database migration, and **no network access**.
+- **Transcription, wired end to end — opt-in, off the main thread, and never on its own** (card #157, M2 ·
+  ADR-0027, **AC-22 / AC-20 / AC-4**): the keystone that turns the merged transcription pieces into a working
+  feature. A main-process **orchestrator** walks the library's audio and video items, **skips anything already
+  transcribed** (#135), runs the rest through the **off-thread worker** (#134), **saves each outcome** — a
+  transcript on success, a calm `failed`/`skipped` status otherwise — and **streams gentle progress** (running
+  totals for transcribed, failed, skipped, and in-flight) to the screen. It is **doubly gated and never
+  auto-starts** (AC-22): it quietly refuses, with no side effects, unless transcription has been **opted into**
+  _and_ the on-device model is **present and verified** — opt-in is checked before the model is ever probed, and
+  merely constructing it does nothing. **Cancelling is cooperative** — the recording in progress is stopped and
+  whatever already finished stays saved. **Resilient by design** (AC-20): a failed, corrupt, or unsupported item
+  is recorded and the run carries on, and an error saving one item never aborts the batch. Your **originals are
+  never touched** (AC-14) and every collaborator is local — **zero network access** (AC-4). App code only — **no
+  database migration and no new dependencies**.
 - **An honest answer to "is the `small` model good enough?" — measured, not guessed** (card #137, M2 · ADR-0027,
   **AC-21 / AC-18**): a fully-offline accuracy/performance harness now measures how well the bundled transcription
   engine actually does. Run locally against the real engine + `small` model over a small set of **labeled,
@@ -39,6 +66,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   *only-the-pinned-download* guarantee continues to be proven by the app's request allowlist plus the Linux backstop.
   Harness only — no app code or runtime network behaviour changes.
 
+- **Transcripts saved to the catalog — and findable by what was said** (card #135 / #150, M2 · ADR-0027,
+  **AC-19 / AC-20**): the words the transcription engine (#134) produces are now **kept with the memory and made
+  searchable**. Each finished transcript — full text, per-segment timestamps, and the detected language — is
+  **saved to the catalog, attached to the existing audio or video item** (never a duplicate, and **your original
+  file is never altered**, AC-14), and its **spoken words are folded into the search you already use**: they feed
+  the catalog's existing search index (the `search_meta` field) so a recording can be found by **something that was
+  said in it**, not just its caption (AC-19). A per-item **`transcript_status`** (pending → done / failed /
+  skipped) tracks where each recording is — mirroring the existing thumbnail drain — so already-imported audio and
+  video become eligible, and **re-running is safe**: a finished item is skipped and the index never grows on a
+  re-save (AC-20). This ships with a new, **non-destructive forward database migration** (`002_transcripts.sql`)
+  that adds the status column and a 1:1 transcript table **without rewriting or losing any existing data**. It also
+  fixes a batch-resilience bug (#150) where a throwing skip-check could abort an entire run. This is the
+  storage-and-search layer — the on-screen controls and results arrive with card #136.
 - **On-device transcription engine — voices turned to text, off the main thread** (card #134, M2 · ADR-0027,
   **AC-18 / AC-20 / AC-24**): the engine that actually transcribes now exists — it composes the on-device
   model (#131), the 16 kHz audio extraction (#133), and the bundled `whisper-cli` engine (#129) into one
