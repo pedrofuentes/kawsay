@@ -21,7 +21,7 @@ const clipSchema = z.object({
   /** Whisper/ISO-639-1 language code of the spoken audio, e.g. `es`, `de`, `ru`. */
   language: z.string().min(1),
   /** Local filename the fetch script writes the clip to, e.g. `es_941424.mp3`. */
-  file: z.string().min(1),
+  file: z.string().regex(/^[A-Za-z0-9._-]+$/),
   /** Pinned HTTPS source URL the clip is fetched + sha256-verified from. */
   url: z.string().regex(/^https:\/\/\S+$/, 'must be an https URL'),
   /** Pinned lowercase-hex SHA-256 of the clip (fail-closed integrity, like egress). */
@@ -181,6 +181,17 @@ export function buildMeasurement(clip: MeasurementClip, timed: TimedTranscriptio
     };
   }
   const { transcript } = timed.result;
+  if (!Number.isFinite(timed.audioDurationSec) || timed.audioDurationSec <= 0) {
+    // A broken / zero-length decode would make RTF undefined (computeRtf throws).
+    // Carry it as a non-fatal skip so one bad clip never aborts the batch (AC-20).
+    return {
+      ok: false,
+      id: clip.id,
+      language: clip.language,
+      reason: 'zero-duration-audio',
+      message: `audio duration must be a positive finite number, got ${timed.audioDurationSec}`,
+    };
+  }
   const wer = computeWer(clip.transcript, transcript.text);
   return {
     ok: true,
