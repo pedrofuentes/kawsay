@@ -14,6 +14,10 @@ export default defineConfig({
             __dirname,
             'electron/main/importers/workers/ingestion-worker.ts',
           ),
+          'transcription-worker': resolve(
+            __dirname,
+            'electron/main/transcription/workers/transcription-worker.ts',
+          ),
         },
       },
       rollupOptions: {
