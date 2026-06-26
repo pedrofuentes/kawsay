@@ -91,7 +91,7 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
         // calm main process. Fail closed — the choice simply is not persisted (a
         // relaunch reads the prior/absent value, defaulting to opted-OUT) — and
         // leave a diagnostic rather than throwing out of the seam.
-        console.warn(`[kawsay] could not persist transcription consent to ${filePath}:`, error);
+        console.warn('[kawsay] could not persist transcription consent:', filePath, error);
       }
     },
   };

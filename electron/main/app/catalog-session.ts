@@ -266,7 +266,8 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         record = transcripts.loadTranscript(input.id);
       } catch (error) {
         console.warn(
-          `[kawsay] item ${input.id} is marked done but its transcript could not be read; showing a non-done view:`,
+          '[kawsay] item is marked done but its transcript could not be read; showing a non-done view. item:',
+          input.id,
           error,
         );
         return transcriptViewSchema.parse({ status: 'pending', language: null, text: null, segments: [] });
