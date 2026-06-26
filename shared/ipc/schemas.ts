@@ -148,15 +148,16 @@ export type TranscriptionRunStateDTO = z.infer<typeof transcriptionRunStateSchem
 
 /**
  * The live counts for a run. `total` is the whole transcribable corpus; the rest
- * are settled tallies plus `inFlight` (0 or 1 — the worker runs items serially).
- * Every field is a non-negative integer, so an adversarial negative is refused.
+ * are settled tallies plus `inFlight` (0 or 1 — the worker runs items serially, so
+ * the schema bounds it to at most one). Every field is a non-negative integer, so
+ * an adversarial negative (or an impossible second concurrent item) is refused.
  */
 export const transcriptionCountsSchema = z.strictObject({
   total: z.number().int().nonnegative(),
   transcribed: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
   skipped: z.number().int().nonnegative(),
-  inFlight: z.number().int().nonnegative(),
+  inFlight: z.number().int().min(0).max(1),
 });
 export type TranscriptionCountsDTO = z.infer<typeof transcriptionCountsSchema>;
 
@@ -183,13 +184,28 @@ export type TranscriptionRefusalReasonDTO = z.infer<typeof transcriptionRefusalR
 /**
  * The result of `transcription:start`: `started` (a run is now in flight), `idle`
  * (nothing to do — empty or everything already done), or `refused` (gated, with a
- * typed `reason`). `counts` reflects the corpus at the moment of the call.
+ * typed `reason`). A DISCRIMINATED UNION on `outcome` ties `reason` to the
+ * outcome: only `refused` carries a refusal reason, while `started`/`idle` carry
+ * `reason: null` — so `{outcome:'started',reason:'not-opted-in'}` is invalid.
+ * `counts` reflects the corpus at the moment of the call.
  */
-export const transcriptionStartResultSchema = z.strictObject({
-  outcome: z.enum(['started', 'idle', 'refused']),
-  reason: transcriptionRefusalReasonSchema.nullable(),
-  counts: transcriptionCountsSchema,
-});
+export const transcriptionStartResultSchema = z.discriminatedUnion('outcome', [
+  z.strictObject({
+    outcome: z.literal('started'),
+    reason: z.null(),
+    counts: transcriptionCountsSchema,
+  }),
+  z.strictObject({
+    outcome: z.literal('idle'),
+    reason: z.null(),
+    counts: transcriptionCountsSchema,
+  }),
+  z.strictObject({
+    outcome: z.literal('refused'),
+    reason: transcriptionRefusalReasonSchema,
+    counts: transcriptionCountsSchema,
+  }),
+]);
 export type TranscriptionStartResultDTO = z.infer<typeof transcriptionStartResultSchema>;
 
 // ── Per-item transcript view (M2, #136 — ADR-0027 / AC-13·19) ─────────────────
