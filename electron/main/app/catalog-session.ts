@@ -32,6 +32,9 @@ import {
   type ItemRow,
   type TimelineCursor,
 } from '../db/catalog-repo';
+import { createTranscriptRepo } from '../db/transcript-repo';
+import { createTranscriptionLibrary } from '../transcription/transcription-library';
+import type { TranscriptionLibraryPort } from '../transcription/transcription-orchestrator';
 import {
   createThumbnailService,
   type ImageThumbnailer,
@@ -89,6 +92,8 @@ export interface CatalogSession {
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
   beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
+  /** The host-side transcription library port for the OPEN library (#157). */
+  transcription(): TranscriptionLibraryPort;
   /** Close the open library and tear down every in-flight import (window-close). */
   dispose(): void;
 }
@@ -98,6 +103,7 @@ interface OpenLibrary {
   db: CatalogDatabase;
   repo: CatalogRepo;
   thumbnails: ThumbnailService;
+  transcription: TranscriptionLibraryPort;
 }
 
 const timelineCursorSchema = z.strictObject({
@@ -167,13 +173,20 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
   function adopt(summary: LibrarySummary): LibrarySummaryDTO {
     closeCurrent();
     const db = openCatalog(summary.catalogPath);
+    const repo = createCatalogRepo(db);
     const thumbnails = createThumbnailService({
       db,
       root: summary.root,
       image: thumbnailers.image,
       video: thumbnailers.video,
     });
-    current = { summary, db, repo: createCatalogRepo(db), thumbnails };
+    const transcription = createTranscriptionLibrary({
+      db,
+      root: summary.root,
+      catalog: repo,
+      transcripts: createTranscriptRepo(db),
+    });
+    current = { summary, db, repo, thumbnails, transcription };
     return toLibraryDto(summary);
   }
 
@@ -244,6 +257,9 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     },
     cancelImport(input) {
       return { cancelled: coordinator.cancel(input.jobId) };
+    },
+    transcription() {
+      return requireOpen().transcription;
     },
     dispose() {
       coordinator.disposeAll();

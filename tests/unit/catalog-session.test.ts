@@ -44,7 +44,11 @@ function seedItems(catalogPath: string): void {
   const db = openCatalog(catalogPath);
   const repo = createCatalogRepo(db);
   const sourceId = repo.registerSource({ sourceKey: 'seed', type: 'folder', label: 'Seed' });
-  const dates = ['2020-01-01T00:00:00.000Z', '2020-02-01T00:00:00.000Z', '2020-03-01T00:00:00.000Z'];
+  const dates = [
+    '2020-01-01T00:00:00.000Z',
+    '2020-02-01T00:00:00.000Z',
+    '2020-03-01T00:00:00.000Z',
+  ];
   dates.forEach((captureDate, i) => {
     const itemId = repo.insertItem({
       mediaType: 'photo',
@@ -81,7 +85,12 @@ function seedMultiSource(catalogPath: string): void {
     title: 'Folder memory',
     description: 'familia con la abuela',
   });
-  repo.addOccurrence({ itemId: fo, sourceId: folder, sourceRef: 'fold/1', originalKind: 'in_place' });
+  repo.addOccurrence({
+    itemId: fo,
+    sourceId: folder,
+    sourceRef: 'fold/1',
+    originalKind: 'in_place',
+  });
   db.close();
 }
 
@@ -92,7 +101,31 @@ function seedPhotoWithLocalOriginal(catalogPath: string, originalPath: string): 
   const repo = createCatalogRepo(db);
   const src = repo.registerSource({ sourceKey: 'photos', type: 'folder', label: 'Photos' });
   const id = repo.insertItem({ mediaType: 'photo', contentHash: 'h-real', originalExt: '.jpg' });
-  repo.addOccurrence({ itemId: id, sourceId: src, sourceRef: 'p/1', originalKind: 'in_place', originalPath });
+  repo.addOccurrence({
+    itemId: id,
+    sourceId: src,
+    sourceRef: 'p/1',
+    originalKind: 'in_place',
+    originalPath,
+  });
+  db.close();
+  return id;
+}
+
+/** Seed one audio item whose original is a real local file (in_place), returning
+ *  its opaque id so the transcription port can resolve + enumerate it (#157). */
+function seedAudioWithLocalOriginal(catalogPath: string, originalPath: string): string {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const src = repo.registerSource({ sourceKey: 'voices', type: 'folder', label: 'Voices' });
+  const id = repo.insertItem({ mediaType: 'audio', contentHash: 'h-voice', durationSec: 12 });
+  repo.addOccurrence({
+    itemId: id,
+    sourceId: src,
+    sourceRef: 'v/1',
+    originalKind: 'in_place',
+    originalPath,
+  });
   db.close();
   return id;
 }
@@ -177,7 +210,12 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(new Set(all.items.map((i) => i.source))).toEqual(new Set(['whatsapp', 'folder']));
 
     // Filtered to one connector: only that source’s memories survive.
-    const onlyWhatsapp = session.search({ query: 'familia', limit: 10, offset: 0, source: 'whatsapp' });
+    const onlyWhatsapp = session.search({
+      query: 'familia',
+      limit: 10,
+      offset: 0,
+      source: 'whatsapp',
+    });
     expect(onlyWhatsapp.total).toBe(1);
     expect(onlyWhatsapp.items.map((i) => i.source)).toEqual(['whatsapp']);
   });
@@ -246,9 +284,9 @@ describe('createCatalogSession (the IPC application service)', () => {
   });
 
   it('getThumbnail resolves a memory by id through the injected thumbnailer (data URL, no path leak)', async () => {
-    const image = vi.fn<(absPath: string, maxDimension: number) => Promise<{ data: Buffer; mimeType: 'image/jpeg' }>>(
-      async () => ({ data: Buffer.from('IMG'), mimeType: 'image/jpeg' }),
-    );
+    const image = vi.fn<
+      (absPath: string, maxDimension: number) => Promise<{ data: Buffer; mimeType: 'image/jpeg' }>
+    >(async () => ({ data: Buffer.from('IMG'), mimeType: 'image/jpeg' }));
     const s = createCatalogSession({
       coordinator: coordinator.coordinator,
       thumbnailers: { image, video: vi.fn(async () => null) },
@@ -273,5 +311,22 @@ describe('createCatalogSession (the IPC application service)', () => {
   it('getThumbnail refuses when no library is open', async () => {
     const s = createCatalogSession({ coordinator: coordinator.coordinator });
     await expect(s.getThumbnail({ id: JOB_ID })).rejects.toThrow();
+  });
+
+  it('exposes a transcription library port that enumerates the audio/video originals (#157)', () => {
+    session.createLibrary({ path: root });
+    const voice = join(parent, 'voice.m4a');
+    writeFileSync(voice, 'AUDIO-BYTES');
+    seedAudioWithLocalOriginal(join(root, 'catalog.sqlite3'), voice);
+
+    const items = session.transcription().listItems();
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.sourcePath).toBe(voice);
+  });
+
+  it('refuses to hand out a transcription port when no library is open (#157)', () => {
+    const s = createCatalogSession({ coordinator: coordinator.coordinator });
+    expect(() => s.transcription()).toThrow();
   });
 });

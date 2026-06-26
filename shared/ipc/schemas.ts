@@ -125,3 +125,69 @@ export const importSummarySchema = z.strictObject({
   cancelled: z.boolean(),
 });
 export type ImportSummaryDTO = z.infer<typeof importSummarySchema>;
+
+// ── Transcription run (M2, #157 — ADR-0027 / AC-18·19·20) ─────────────────────
+//
+// The renderer-facing projection of a transcription run: an overall state, a live
+// tally, and the last item that settled. The run itself executes off-thread (the
+// #134 worker) and persists host-side (#135); these DTOs are all the sandboxed
+// renderer (#136) ever sees — no paths, no transcripts, just calm progress.
+
+/**
+ * The per-item terminal status the UI may show on the last settled item. Only the
+ * three RENDERABLE outcomes cross the boundary; the run-internal `cancelled` and
+ * `pending` states are deliberately absent (a re-run picks them up) and so are
+ * rejected by this enum.
+ */
+export const transcriptionItemStatusSchema = z.enum(['transcribed', 'failed', 'skipped']);
+export type TranscriptionItemStatusDTO = z.infer<typeof transcriptionItemStatusSchema>;
+
+/** The overall state of a transcription run, reflected by the UI on launch. */
+export const transcriptionRunStateSchema = z.enum(['idle', 'running', 'complete']);
+export type TranscriptionRunStateDTO = z.infer<typeof transcriptionRunStateSchema>;
+
+/**
+ * The live counts for a run. `total` is the whole transcribable corpus; the rest
+ * are settled tallies plus `inFlight` (0 or 1 — the worker runs items serially).
+ * Every field is a non-negative integer, so an adversarial negative is refused.
+ */
+export const transcriptionCountsSchema = z.strictObject({
+  total: z.number().int().nonnegative(),
+  transcribed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  inFlight: z.number().int().nonnegative(),
+});
+export type TranscriptionCountsDTO = z.infer<typeof transcriptionCountsSchema>;
+
+/**
+ * A snapshot of a transcription run — the payload of both `transcription:status`
+ * and the `transcription:progress` event. `lastItem` is the most recently settled
+ * item (id + renderable status) or null before anything has settled.
+ */
+export const transcriptionSnapshotSchema = z.strictObject({
+  state: transcriptionRunStateSchema,
+  counts: transcriptionCountsSchema,
+  lastItem: z.strictObject({ id: z.uuid(), status: transcriptionItemStatusSchema }).nullable(),
+});
+export type TranscriptionSnapshotDTO = z.infer<typeof transcriptionSnapshotSchema>;
+
+/**
+ * Why a gated `transcription:start` was refused — a calm, branchable reason the UI
+ * surfaces (never an exception): the user has not opted in, or the model is not
+ * present-and-verified. Anything else is a hard validation error.
+ */
+export const transcriptionRefusalReasonSchema = z.enum(['not-opted-in', 'model-not-ready']);
+export type TranscriptionRefusalReasonDTO = z.infer<typeof transcriptionRefusalReasonSchema>;
+
+/**
+ * The result of `transcription:start`: `started` (a run is now in flight), `idle`
+ * (nothing to do — empty or everything already done), or `refused` (gated, with a
+ * typed `reason`). `counts` reflects the corpus at the moment of the call.
+ */
+export const transcriptionStartResultSchema = z.strictObject({
+  outcome: z.enum(['started', 'idle', 'refused']),
+  reason: transcriptionRefusalReasonSchema.nullable(),
+  counts: transcriptionCountsSchema,
+});
+export type TranscriptionStartResultDTO = z.infer<typeof transcriptionStartResultSchema>;

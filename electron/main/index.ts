@@ -12,13 +12,25 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
+  TRANSCRIPTION_START,
+  TRANSCRIPTION_STATUS,
 } from '@shared/ipc/contract';
-import { IMPORT_PROGRESS, TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS } from '@shared/ipc/events';
+import {
+  IMPORT_PROGRESS,
+  TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
+  TRANSCRIPTION_PROGRESS,
+} from '@shared/ipc/events';
 import { handleGetVersion } from './ipc/handlers/app';
 import { handleOpenDirectory, handleOpenFile, type ShowOpenDialog } from './ipc/handlers/dialog';
 import { handleDownloadModel, handleModelStatus } from './ipc/handlers/transcription';
+import {
+  handleCancelTranscription,
+  handleStartTranscription,
+  handleTranscriptionStatus,
+} from './ipc/handlers/transcription-run';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
@@ -30,6 +42,14 @@ import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-ser
 import { createModelDownloader } from './transcription/model-download';
 import { createElectronModelFetcher } from './transcription/electron-net-fetcher';
 import { MODEL_FILE_NAME } from './transcription/model-source';
+import { createConsentStore, type ConsentStore } from './transcription/consent-store';
+import { createTranscriptionCoordinator } from './transcription/queue/coordinator';
+import { createWorkerThreadsSpawner as createTranscriptionWorkerThreadsSpawner } from './transcription/queue/worker-threads-transport';
+import { resolveWhisperCliPath } from './transcription/whisper-cli';
+import {
+  createTranscriptionOrchestrator,
+  type TranscriptionOrchestrator,
+} from './transcription/transcription-orchestrator';
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
 import { installNetworkGuard } from './security/network-guard';
 import {
@@ -84,6 +104,36 @@ function requireModelController(): ReturnType<typeof createModelDownloader> {
     throw new Error('the transcription model downloader is not initialised yet');
   }
   return modelDownloader;
+}
+
+// The off-thread transcription engine (AC-18, #157). The coordinator owns the
+// worker_threads lifecycle and relays each job's events onto a sink — wired here
+// to the orchestrator via a forward-reference closure (the orchestrator is built
+// in bootstrap(), once the model + consent stores exist). The coordinator itself
+// is inert until `start()` spawns a worker, so building it at module load is safe.
+const transcriptionCoordinator = createTranscriptionCoordinator({
+  spawn: createTranscriptionWorkerThreadsSpawner({
+    scriptPath: join(moduleDir, 'transcription-worker.js'),
+  }),
+  emit: (event) => transcriptionOrchestrator?.handleWorkerEvent(event),
+});
+
+// The gated transcription RUN orchestrator (#157) + the durable opt-in store it
+// reads. Both are built in bootstrap() (they need the `userData` path and the
+// model downloader); the run IPC handlers reach them through these requires.
+let transcriptionOrchestrator: TranscriptionOrchestrator | undefined;
+let transcriptionConsentStore: ConsentStore | undefined;
+function requireTranscriptionController(): TranscriptionOrchestrator {
+  if (transcriptionOrchestrator === undefined) {
+    throw new Error('the transcription orchestrator is not initialised yet');
+  }
+  return transcriptionOrchestrator;
+}
+function requireConsentStore(): ConsentStore {
+  if (transcriptionConsentStore === undefined) {
+    throw new Error('the transcription consent store is not initialised yet');
+  }
+  return transcriptionConsentStore;
 }
 
 // The thumbnail decoders (U4), injected into the catalog session so it stays
@@ -144,8 +194,20 @@ const ipcHandlers: IpcHandlerMap = {
   [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
   [DIALOG_OPEN_DIRECTORY]: (request) => handleOpenDirectory({ showOpenDialog }, request),
   [DIALOG_OPEN_FILE]: (request) => handleOpenFile({ showOpenDialog }, request),
-  [TRANSCRIPTION_DOWNLOAD_MODEL]: () => handleDownloadModel({ controller: requireModelController() }),
+  [TRANSCRIPTION_DOWNLOAD_MODEL]: () => {
+    // Downloading the model IS the explicit opt-in action (AC-22): record the
+    // durable consent here so a later `transcription:start` is permitted. The
+    // renderer reaches this only by the user choosing to enable transcription.
+    requireConsentStore().setOptedIn(true);
+    return handleDownloadModel({ controller: requireModelController() });
+  },
   [TRANSCRIPTION_MODEL_STATUS]: () => handleModelStatus({ controller: requireModelController() }),
+  [TRANSCRIPTION_START]: () =>
+    handleStartTranscription({ controller: requireTranscriptionController() }),
+  [TRANSCRIPTION_STATUS]: () =>
+    handleTranscriptionStatus({ controller: requireTranscriptionController() }),
+  [TRANSCRIPTION_CANCEL]: () =>
+    handleCancelTranscription({ controller: requireTranscriptionController() }),
 };
 
 function createMainWindow(): void {
@@ -166,8 +228,9 @@ function createMainWindow(): void {
   });
   mainWindow = window;
   window.on('closed', () => {
-    // Terminate any in-flight import worker so none is orphaned (AC-9 teardown).
+    // Terminate any in-flight worker so none is orphaned (AC-9 / AC-18 teardown).
     ingestionCoordinator.disposeAll();
+    transcriptionCoordinator.disposeAll();
     if (mainWindow === window) {
       mainWindow = undefined;
     }
@@ -195,6 +258,40 @@ async function bootstrap(): Promise<void> {
     fetcher: createElectronModelFetcher(net, session.defaultSession),
     modelPath: join(app.getPath('userData'), 'models', MODEL_FILE_NAME),
     onProgress: (progress) => emitEvent(TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS, progress),
+  });
+
+  // The durable opt-in record (AC-22) and the gated run orchestrator (#157). The
+  // orchestrator NEVER auto-starts — it runs only when `transcription:start` is
+  // invoked AND both gates pass (opted in + model present-and-verified). It drives
+  // the off-thread coordinator over the open library's audio/video, persists each
+  // outcome host-side (#135), and streams a calm progress snapshot to the renderer.
+  transcriptionConsentStore = createConsentStore({
+    filePath: join(app.getPath('userData'), 'transcription-consent.json'),
+  });
+  transcriptionOrchestrator = createTranscriptionOrchestrator({
+    gate: {
+      isOptedIn: () => requireConsentStore().isOptedIn(),
+      isModelReady: () => requireModelController().isModelReady(),
+    },
+    getLibrary: () => catalogSession.transcription(),
+    worker: {
+      start: (job) => transcriptionCoordinator.start(job),
+      cancel: (jobId) => transcriptionCoordinator.cancel(jobId),
+    },
+    resolveJobConfig: () => ({
+      modelPath: join(app.getPath('userData'), 'models', MODEL_FILE_NAME),
+      // Resolved per-run: throws only in a dev/CI checkout without the built
+      // binary (packaged builds ship it under resourcesPath).
+      whisperCliPath: resolveWhisperCliPath({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        projectRoot: app.getAppPath(),
+      }),
+      // App-local, confined scratch for extracted WAVs — the user's originals are
+      // never written to (AC-14); the worker confines extraction under here.
+      scratchDir: join(app.getPath('userData'), 'transcription-scratch'),
+    }),
+    emitProgress: (snapshot) => emitEvent(TRANSCRIPTION_PROGRESS, snapshot),
   });
 
   registerIpcHandlers(ipcMain, ipcHandlers, senderOptions);

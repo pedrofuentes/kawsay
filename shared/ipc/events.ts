@@ -6,7 +6,7 @@
 // dropping any payload that fails — so a malformed event can never reach React.
 
 import { z } from 'zod';
-import { importSummarySchema } from './schemas';
+import { importSummarySchema, transcriptionSnapshotSchema } from './schemas';
 
 /** IPC event: streamed ingestion progress for an in-flight import. */
 export const IMPORT_PROGRESS = 'import:progress';
@@ -75,10 +75,22 @@ export const modelDownloadProgressEventSchema = z.strictObject({
 });
 export type ModelDownloadProgressEvent = z.infer<typeof modelDownloadProgressEventSchema>;
 
+/**
+ * IPC event: the polite per-item transcription progress stream (#157). Each tick
+ * is a full {@link transcriptionSnapshotSchema} snapshot (state + counts + the
+ * last settled item), so a late subscriber needs no replay — the latest event is
+ * the whole truth. Mirrors the model-download stream's "terminal folded in"
+ * shape: a `complete` state is just the final snapshot.
+ */
+export const TRANSCRIPTION_PROGRESS = 'transcription:progress';
+export const transcriptionProgressEventSchema = transcriptionSnapshotSchema;
+export type TranscriptionProgressEvent = z.infer<typeof transcriptionProgressEventSchema>;
+
 /** The complete one-way event contract. */
 export const ipcEventContract = {
   [IMPORT_PROGRESS]: importProgressEventSchema,
   [TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS]: modelDownloadProgressEventSchema,
+  [TRANSCRIPTION_PROGRESS]: transcriptionProgressEventSchema,
 } as const;
 
 export type IpcEventContract = typeof ipcEventContract;

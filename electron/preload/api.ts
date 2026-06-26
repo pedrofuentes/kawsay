@@ -16,8 +16,11 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
+  TRANSCRIPTION_START,
+  TRANSCRIPTION_STATUS,
   type IpcChannel,
   type IpcRequest,
   type IpcResponse,
@@ -25,6 +28,7 @@ import {
 import {
   IMPORT_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
+  TRANSCRIPTION_PROGRESS,
   type IpcEventChannel,
   type IpcEventPayload,
 } from '@shared/ipc/events';
@@ -68,5 +72,9 @@ export function createKawsayApi(
     },
     onModelDownloadProgress: (listener) =>
       subscribe(TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS, listener),
+    startTranscription: () => invoke(TRANSCRIPTION_START, {}),
+    getTranscriptionStatus: () => invoke(TRANSCRIPTION_STATUS, {}),
+    cancelTranscription: () => invoke(TRANSCRIPTION_CANCEL, {}),
+    onTranscriptionProgress: (listener) => subscribe(TRANSCRIPTION_PROGRESS, listener),
   };
 }

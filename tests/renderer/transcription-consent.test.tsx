@@ -29,7 +29,9 @@ describe('TranscriptionConsent — explains and asks before anything downloads (
     setup();
     // What it does: voice notes/audio/video → readable, searchable text.
     expect(await screen.findByText(/voice notes/i)).toBeInTheDocument();
-    expect(screen.getByText(/read and search|searchable/i)).toBeInTheDocument();
+    // The heading above is always present, so await the intro-only copy directly to let
+    // useModelDownload's checking→intro settle land before asserting (else this races it).
+    expect(await screen.findByText(/read and search|searchable/i)).toBeInTheDocument();
     // 100% on-device + memories never leave.
     expect(screen.getByText(/never leave this computer/i)).toBeInTheDocument();
     // One-time ~465 MB download (derived from MODEL_SIZE_BYTES) — the only network the app makes.
@@ -285,8 +287,10 @@ describe('TranscriptionConsent — the feature is gated on a present + verified 
   it('keeps the global transcription toggle disabled and shows it is not set up yet', async () => {
     const { api } = setup();
     const toggle = await screen.findByRole('switch', { name: /transcrib/i });
+    // The switch is always rendered, so await the intro-only status copy to let the
+    // checking→intro settle land before asserting the disabled gate (else this races it).
+    expect(await screen.findByText(/isn't set up yet/i)).toBeInTheDocument();
     expect(toggle).toBeDisabled();
-    expect(screen.getByText(/isn't set up yet/i)).toBeInTheDocument();
     expect(api.downloadTranscriptionModel).not.toHaveBeenCalled();
   });
 

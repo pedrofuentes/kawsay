@@ -12,6 +12,8 @@ import {
   sourceTypeSchema,
   thumbnailDataUrlSchema,
   timelinePageSchema,
+  transcriptionSnapshotSchema,
+  transcriptionStartResultSchema,
 } from './schemas';
 
 /** IPC channel: request the running application version. */
@@ -55,6 +57,28 @@ export const TRANSCRIPTION_DOWNLOAD_MODEL = 'transcription:downloadModel';
  * verified (a capability gate for the UI). Resolves `{ ready }`.
  */
 export const TRANSCRIPTION_MODEL_STATUS = 'transcription:modelStatus';
+
+/**
+ * IPC channel: start the gated transcription run over the library's audio/video
+ * (#157 — ADR-0027 / AC-18·19·20). Caller-initiated only and DOUBLY gated: it
+ * refuses unless the user has opted in AND the model is present-and-verified, and
+ * it never auto-starts. Idempotent — items already `done` are skipped. Resolves
+ * with whether a run `started`, there was nothing to do (`idle`), or it was
+ * `refused` (with a typed reason); per-item progress streams over
+ * {@link TRANSCRIPTION_PROGRESS}.
+ */
+export const TRANSCRIPTION_START = 'transcription:start';
+/**
+ * IPC channel: query the overall transcription run state (idle/running/complete +
+ * counts) so the UI can reflect it on launch. Resolves a snapshot.
+ */
+export const TRANSCRIPTION_STATUS = 'transcription:status';
+/**
+ * IPC channel: cooperatively cancel an in-flight transcription run. The worker
+ * SIGKILLs the in-flight child and the batch stops; whatever completed is already
+ * persisted. Resolves `{ cancelled }` (false when nothing was running).
+ */
+export const TRANSCRIPTION_CANCEL = 'transcription:cancel';
 
 /**
  * The renderer-controllable options for a native open dialog (W2). This is the
@@ -157,6 +181,18 @@ export const ipcContract = {
   [TRANSCRIPTION_MODEL_STATUS]: {
     request: z.strictObject({}),
     response: z.strictObject({ ready: z.boolean() }),
+  },
+  [TRANSCRIPTION_START]: {
+    request: z.strictObject({}),
+    response: transcriptionStartResultSchema,
+  },
+  [TRANSCRIPTION_STATUS]: {
+    request: z.strictObject({}),
+    response: transcriptionSnapshotSchema,
+  },
+  [TRANSCRIPTION_CANCEL]: {
+    request: z.strictObject({}),
+    response: z.strictObject({ cancelled: z.boolean() }),
   },
 } as const;
 

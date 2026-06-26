@@ -138,6 +138,17 @@ export interface SearchResult {
   total: number;
 }
 
+/**
+ * A transcribable media item (#157): an audio or video row the orchestrator may
+ * hand to the off-thread worker, with its duration (when known) so the worker can
+ * scale the per-item timeout (AC-20). Carries NO path — original resolution +
+ * confinement happen separately through `resolveOriginal` (AC-14).
+ */
+export interface TranscribableItem {
+  id: string;
+  durationSec: number | null;
+}
+
 export interface CatalogRepo {
   insertItem(input: ItemInput): string;
   addOccurrence(input: OccurrenceInput): OccurrenceResult;
@@ -145,6 +156,8 @@ export interface CatalogRepo {
   registerSource(input: SourceInput): string;
   queryTimeline(query: TimelineQuery): TimelinePage;
   search(query: SearchQuery): SearchResult;
+  /** Enumerate every audio/video item (id + duration) for transcription (#157). */
+  listTranscribableItems(): TranscribableItem[];
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
@@ -428,6 +441,13 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     WHERE items_fts MATCH @match
       AND ${sourceFilter('i')}
   `);
+  // Audio + video only (the transcribable media types), newest-agnostic stable id
+  // order so a re-run dispatches the same sequence (#157).
+  const listTranscribableStmt = db.prepare(`
+    SELECT id, duration_sec FROM items
+    WHERE media_type IN ('audio', 'video')
+    ORDER BY id
+  `);
 
   return {
     insertItem(input) {
@@ -531,6 +551,11 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
       );
       const raws = searchStmt.all<RawItemRow>({ match, limit, offset, source: sourceParam });
       return { rows: raws.map(mapItemRow), total };
+    },
+
+    listTranscribableItems() {
+      const rows = listTranscribableStmt.all<{ id: string; duration_sec: number | null }>();
+      return rows.map((row) => ({ id: row.id, durationSec: row.duration_sec }));
     },
   };
 }
