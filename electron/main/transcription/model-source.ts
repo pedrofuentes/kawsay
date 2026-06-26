@@ -40,5 +40,8 @@ export const MODEL_DOWNLOAD_REDIRECT_HOST = 'release-assets.githubusercontent.co
  */
 export const MODEL_SHA256 = '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b';
 
-/** The exact expected byte size of `ggml-small.bin` (a cheap pre-hash integrity gate). */
-export const MODEL_SIZE_BYTES = 487_601_967;
+/** The exact expected byte size of `ggml-small.bin` (a cheap pre-hash integrity
+ * gate). Defined in `@shared/transcription` so the consent UI can quote the same
+ * size without importing from the main process, and re-exported here so this stays
+ * the canonical entry point for the model facts. */
+export { MODEL_SIZE_BYTES } from '@shared/transcription';
