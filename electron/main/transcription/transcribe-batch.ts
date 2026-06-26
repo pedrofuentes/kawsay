@@ -64,7 +64,9 @@ export interface RunTranscriptionBatchOptions {
  * throw — becomes a typed skip and the batch continues), cancellable (a fired
  * signal kills the in-flight child via the executor, then the rest are marked
  * cancelled without dispatch), and idempotent (a duplicate id within the run, or a
- * `skipWhen` hit, is `skipped-existing`).
+ * `skipWhen` hit, is `skipped-existing`). The `skipWhen` predicate (the #135
+ * transcript_status hook) is consulted defensively: a throw/rejection is contained
+ * and treated as "not done" so it can never abort the batch (#150).
  */
 export async function runTranscriptionBatch(
   options: RunTranscriptionBatchOptions,
@@ -83,7 +85,7 @@ export async function runTranscriptionBatch(
     if (signal?.aborted) {
       // A cancel stops the QUEUE: the remaining items are reported, never worked.
       outcome = { id: item.id, status: 'cancelled', transcript: null };
-    } else if (dispatched.has(item.id) || (skipWhen ? await skipWhen(item) : false)) {
+    } else if (dispatched.has(item.id) || (await isAlreadyDone(skipWhen, item))) {
       // Already handled this id in-run, or the caller says it is already done.
       outcome = { id: item.id, status: 'skipped-existing', transcript: null };
     } else {
@@ -100,6 +102,26 @@ export async function runTranscriptionBatch(
   const skipped = total - transcribed - cancelled;
   emit({ phase: 'batch-done', total, transcribed, skipped, cancelled });
   return { total, transcribed, skipped, cancelled, outcomes };
+}
+
+/**
+ * Evaluate the optional `skipWhen` idempotence predicate (#135) DEFENSIVELY. The
+ * predicate is the transcript_status hook (a DB lookup), so it can throw or reject;
+ * that must NEVER abort the batch (#150 — the 'batch never aborts' contract). A
+ * throw is contained here and treated as "not done" (`false`), so the item is
+ * processed normally and the run carries on. The `dispatched` short-circuit in the
+ * caller means this is only consulted for ids not already handled in-run.
+ */
+async function isAlreadyDone(
+  skipWhen: ((item: TranscribeItem) => boolean | Promise<boolean>) | undefined,
+  item: TranscribeItem,
+): Promise<boolean> {
+  if (!skipWhen) return false;
+  try {
+    return await skipWhen(item);
+  } catch {
+    return false;
+  }
 }
 
 /**

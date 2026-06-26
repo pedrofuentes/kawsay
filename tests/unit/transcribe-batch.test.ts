@@ -260,6 +260,56 @@ describe('runTranscriptionBatch idempotence (re-run safe, no duplicate work — 
     expect(transcribe.calls.map((c) => c.id)).toEqual(['b']);
     expect(summary.outcomes[0]).toMatchObject({ id: 'a', status: 'skipped-existing' });
   });
+
+  // ── #150: a throwing/rejecting skipWhen must NOT abort the whole batch ───────
+
+  it('contains a THROWING skipWhen and still processes the rest of the batch (#150)', async () => {
+    const transcribe = recordingTranscribe((item) => ok(item.id));
+
+    const summary = await runTranscriptionBatch({
+      transcribe,
+      items: items('a', 'b', 'c'),
+      skipWhen: (item) => {
+        if (item.id === 'b') throw new Error('transcript_status lookup exploded');
+        return false;
+      },
+    });
+
+    // The throw on 'b' is contained: treated as "not done" → 'b' is transcribed,
+    // and the batch carries on to 'c' instead of aborting (the 'batch never aborts'
+    // contract — the predicate is the #135 transcript_status seam).
+    expect(transcribe.calls.map((c) => c.id)).toEqual(['a', 'b', 'c']);
+    expect(summary.outcomes.map((o) => o.status)).toEqual([
+      'transcribed',
+      'transcribed',
+      'transcribed',
+    ]);
+    expect(summary.transcribed).toBe(3);
+    expect(summary.cancelled).toBe(0);
+  });
+
+  it('contains a REJECTING async skipWhen and still processes the rest (#150)', async () => {
+    const transcribe = recordingTranscribe((item) => ok(item.id));
+
+    const summary = await runTranscriptionBatch({
+      transcribe,
+      items: items('a', 'b', 'c'),
+      skipWhen: async (item) => {
+        if (item.id === 'a') throw new Error('async db error');
+        return item.id === 'c'; // 'c' legitimately already done
+      },
+    });
+
+    // 'a' rejects → treated as not done → transcribed; 'b' transcribed; 'c' skipped.
+    expect(transcribe.calls.map((c) => c.id)).toEqual(['a', 'b']);
+    expect(summary.outcomes.map((o) => o.status)).toEqual([
+      'transcribed',
+      'transcribed',
+      'skipped-existing',
+    ]);
+    expect(summary.transcribed).toBe(2);
+    expect(summary.skipped).toBe(1);
+  });
 });
 
 // ── no egress (AC-4) ────────────────────────────────────────────────────────

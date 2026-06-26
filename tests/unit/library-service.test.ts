@@ -33,7 +33,7 @@ describe('library lifecycle (ADR-0008 layout)', () => {
     expect(existsSync(join(root, 'library.json'))).toBe(true);
 
     expect(summary.name).toBe('Mum');
-    expect(summary.schemaVersion).toBe(1);
+    expect(summary.schemaVersion).toBe(2);
     expect(summary.catalogPath).toBe(join(root, 'catalog.sqlite3'));
     // createdAt is a canonical ISO-8601 UTC instant.
     expect(new Date(summary.createdAt).toISOString()).toBe(summary.createdAt);
@@ -46,11 +46,11 @@ describe('library lifecycle (ADR-0008 layout)', () => {
       string,
       unknown
     >;
-    expect(manifest).toMatchObject({ app: 'kawsay', name: 'Abuela', schemaVersion: 1 });
+    expect(manifest).toMatchObject({ app: 'kawsay', name: 'Abuela', schemaVersion: 2 });
 
     const opened = openLibrary({ root });
     expect(opened.name).toBe('Abuela');
-    expect(opened.schemaVersion).toBe(1);
+    expect(opened.schemaVersion).toBe(2);
     expect(opened.createdAt).toBe(created.createdAt);
   });
 
@@ -62,7 +62,7 @@ describe('library lifecycle (ADR-0008 layout)', () => {
       const repo = createCatalogRepo(db);
       const id = repo.insertItem({ mediaType: 'photo', contentHash: 'h' });
       expect(typeof id).toBe('string');
-      expect(Number(db.pragma('user_version', { simple: true }))).toBe(1);
+      expect(Number(db.pragma('user_version', { simple: true }))).toBe(2);
     } finally {
       db.close();
     }

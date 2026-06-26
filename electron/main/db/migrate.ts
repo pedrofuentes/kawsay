@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import initial001 from './migrations/001_initial.sql?raw';
+import transcripts002 from './migrations/002_transcripts.sql?raw';
 
 export interface Migration {
   /** Stable, ordered name recorded in the `migrations` table for provenance. */
@@ -14,7 +15,10 @@ export interface Migration {
  * edit a shipped one (authoring a migration is a HUMAN-REQUIRED action gated by
  * ADR-0008; ARCHITECTURE §4.3).
  */
-export const MIGRATIONS: readonly Migration[] = [{ name: '001_initial', sql: initial001 }];
+export const MIGRATIONS: readonly Migration[] = [
+  { name: '001_initial', sql: initial001 },
+  { name: '002_transcripts', sql: transcripts002 },
+];
 
 /**
  * Apply every migration whose 1-based version exceeds the catalog's current
