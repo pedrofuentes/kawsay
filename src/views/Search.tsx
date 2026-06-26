@@ -24,6 +24,7 @@ import { SOURCES, getSource } from '@renderer/onboarding/sources';
 import { cx } from '@renderer/lib/cx';
 import { useKawsayApi } from '@renderer/lib/kawsay-api';
 import { useLibrary } from '@renderer/lib/library';
+import { useNavigation } from '@renderer/lib/navigation';
 
 /** Quiet pause after the last keystroke before a search runs (USER_FLOWS §E). */
 const SEARCH_DEBOUNCE_MS = 200;
@@ -77,6 +78,23 @@ function captionOf(item: ItemCardDTO): string {
   const text = item.title ?? item.description;
   if (text !== null && text.trim() !== '') return text;
   return `${TYPE_META[item.mediaType].label} memory`;
+}
+
+/**
+ * Did this audio/video result surface because the term was in its TRANSCRIPT, not
+ * its visible caption? The catalog FTS indexes transcript text into `search_meta`
+ * (#135), so a recording can match a word that is nowhere in its title/description.
+ * When that happens we add a gentle "found in what was said" hint (AC-19) so the
+ * person understands why a silent-looking tile answered a text search. Only
+ * audio/video carry words; for everything else this is always false.
+ */
+function matchedInTranscript(item: ItemCardDTO, term: string): boolean {
+  if (item.mediaType !== 'audio' && item.mediaType !== 'video') return false;
+  const needle = term.trim().toLowerCase();
+  if (needle === '') return false;
+  const inTitle = (item.title ?? '').toLowerCase().includes(needle);
+  const inDescription = (item.description ?? '').toLowerCase().includes(needle);
+  return !inTitle && !inDescription;
 }
 
 /**
@@ -437,38 +455,57 @@ export function Search(): ReactElement {
 }
 
 function ResultCard({ item, term }: { item: ItemCardDTO; term: string }): ReactElement {
+  const { navigate, view } = useNavigation();
   const meta = TYPE_META[item.mediaType];
   const date = formatDate(item.captureDate);
   // Provenance label, drawn from the shared source set; null when no source survives.
   const sourceMeta = item.source !== null ? getSource(item.source) : null;
+  const caption = captionOf(item);
+  const transcriptMatch = matchedInTranscript(item, term);
   return (
     <article className="flex h-full flex-col gap-3 rounded-lg border border-border-subtle bg-surface-raised p-6">
-      {/* Lazy media tile: a real thumbnail for a renderable result, fetched by
-          OPAQUE id over the zero-egress `catalog:thumbnail` channel, with the calm
-          type icon as the fallback while loading, on error, or for non-visual items
-          — so the renderer still reaches for no file path and no network. */}
-      <MediaThumbnail
-        item={item}
-        icon={meta.icon}
-        className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
-        iconClassName="h-9 w-9"
-      />
-      <p className="font-body text-base text-text-primary">{highlight(captionOf(item), term)}</p>
-      <p className="flex flex-wrap items-center gap-x-2 font-body text-sm text-text-secondary">
-        <span>{meta.label}</span>
-        {date !== null ? (
-          <>
-            <span aria-hidden>·</span>
-            <span>{date}</span>
-          </>
-        ) : null}
-        {sourceMeta !== null ? (
-          <>
-            <span aria-hidden>·</span>
-            <span>{sourceMeta.title}</span>
-          </>
-        ) : null}
-      </p>
+      {/* The whole result is one button that opens the memory on its own view. */}
+      <button
+        type="button"
+        onClick={() => navigate({ name: 'item', item, from: view })}
+        aria-label={`Open ${caption}`}
+        className="flex flex-col gap-3 rounded-md text-left"
+      >
+        {/* Lazy media tile: a real thumbnail for a renderable result, fetched by
+            OPAQUE id over the zero-egress `catalog:thumbnail` channel, with the calm
+            type icon as the fallback while loading, on error, or for non-visual items
+            — so the renderer still reaches for no file path and no network. */}
+        <MediaThumbnail
+          item={item}
+          icon={meta.icon}
+          className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
+          iconClassName="h-9 w-9"
+        />
+        <p className="font-body text-base text-text-primary">{highlight(caption, term)}</p>
+        <p className="flex flex-wrap items-center gap-x-2 font-body text-sm text-text-secondary">
+          <span>{meta.label}</span>
+          {date !== null ? (
+            <>
+              <span aria-hidden>·</span>
+              <span>{date}</span>
+            </>
+          ) : null}
+          {sourceMeta !== null ? (
+            <>
+              <span aria-hidden>·</span>
+              <span>{sourceMeta.title}</span>
+            </>
+          ) : null}
+        </p>
+      </button>
+      {/* AC-19: this recording matched on its spoken words, not its caption — say so
+          gently so the person isn't puzzled by a "silent" tile in a text search. */}
+      {transcriptMatch ? (
+        <p className="inline-flex items-center gap-1.5 font-body text-sm text-text-secondary">
+          <Icon name="audio" className="h-4 w-4 shrink-0 text-sage-600" />
+          Found in what was said
+        </p>
+      ) : null}
     </article>
   );
 }

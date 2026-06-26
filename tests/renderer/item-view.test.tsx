@@ -185,6 +185,27 @@ describe('ItemView — moving back', () => {
     await user.click(await screen.findByRole('button', { name: /back/i }));
     expect(screen.getByTestId('active-view')).toHaveTextContent('search');
   });
+
+  it('falls back to the timeline when there is no remembered origin', async () => {
+    const item = makeItemCard({ mediaType: 'audio', title: 'A voice note' });
+    const api = makeFakeApi({
+      getTranscript: vi.fn(() => Promise.resolve(makeTranscriptView({ status: 'done', language: 'en', text: 'Hi.' }))),
+    });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(
+        <>
+          <ItemView />
+          <ViewProbe />
+        </>,
+        api,
+        { name: 'item', item },
+      ),
+    );
+
+    await user.click(await screen.findByRole('button', { name: /back/i }));
+    expect(screen.getByTestId('active-view')).toHaveTextContent('timeline');
+  });
 });
 
 describe('ItemView — accessibility (WCAG 2.1 AA)', () => {

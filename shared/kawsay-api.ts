@@ -11,6 +11,7 @@ import type {
   TimelinePageDTO,
   TranscriptionSnapshotDTO,
   TranscriptionStartResultDTO,
+  TranscriptViewDTO,
 } from '@shared/ipc/schemas';
 import type {
   ImportProgressEvent,
@@ -46,6 +47,16 @@ export interface KawsayAPI {
    * so nothing filesystem- or network-bound crosses the bridge (AC-4).
    */
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
+
+  /**
+   * Read ONE item's transcript by its opaque catalog id (#136). Resolves the
+   * renderer-safe {@link TranscriptViewDTO}: the item's `status` and, when `done`,
+   * the spoken `text`, the detected `language` (for the `lang` attribute so a
+   * screen reader pronounces it, AC-13), and ms-timed `segments`. The renderer
+   * passes only the id (never a path); no audio byte or filesystem path crosses
+   * back (AC-4). Audio/video only — callers gate on the item's media type.
+   */
+  getTranscript(input: { id: string }): Promise<TranscriptViewDTO>;
 
   /** Start an off-thread import; resolves with the new job id. */
   startImport(input: { sourceType: SourceType; inputPath: string }): Promise<{ jobId: string }>;
@@ -141,6 +152,9 @@ export type {
   TranscriptionRunStateDTO,
   TranscriptionItemStatusDTO,
   TranscriptionRefusalReasonDTO,
+  TranscriptViewDTO,
+  TranscriptStatusDTO,
+  TranscriptSegmentDTO,
 } from '@shared/ipc/schemas';
 export type { ImportProgressEvent } from '@shared/ipc/events';
 export type { ModelDownloadProgressEvent } from '@shared/ipc/events';

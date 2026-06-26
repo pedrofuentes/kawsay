@@ -5,6 +5,7 @@
 // there is nothing to sign in to.
 import type { ReactElement } from 'react';
 import { TranscriptionConsent } from '@renderer/components/TranscriptionConsent';
+import { TranscriptionRun } from '@renderer/components/TranscriptionRun';
 import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 
 export function Settings(): ReactElement {
@@ -24,6 +25,7 @@ export function Settings(): ReactElement {
         </p>
       </header>
       <TranscriptionConsent />
+      <TranscriptionRun />
     </section>
   );
 }

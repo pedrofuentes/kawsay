@@ -12,6 +12,7 @@ import {
   sourceTypeSchema,
   thumbnailDataUrlSchema,
   timelinePageSchema,
+  transcriptViewSchema,
   transcriptionSnapshotSchema,
   transcriptionStartResultSchema,
 } from './schemas';
@@ -34,6 +35,14 @@ export const CATALOG_SEARCH = 'catalog:search';
  * self-contained image `data:` URL or null (U4).
  */
 export const CATALOG_THUMBNAIL = 'catalog:thumbnail';
+/**
+ * IPC channel: read ONE item's transcript by its opaque catalog id (#136). The
+ * request carries only the id — never a path — and the response is a renderer-safe
+ * {@link transcriptViewSchema}: a status plus, when done, the spoken words, the
+ * whisper-detected language (for the `lang` attribute, AC-13), and ms-timed
+ * segments. No filesystem path or audio byte crosses back (AC-4).
+ */
+export const CATALOG_GET_TRANSCRIPT = 'catalog:getTranscript';
 /** IPC channel: start an off-thread import; resolves with the new job id. */
 export const IMPORT_START = 'import:start';
 /** IPC channel: cooperatively cancel an in-flight import by job id. */
@@ -152,6 +161,12 @@ export const ipcContract = {
       size: z.number().int().min(THUMBNAIL_MIN_SIZE).max(THUMBNAIL_MAX_SIZE).optional(),
     }),
     response: thumbnailDataUrlSchema,
+  },
+  [CATALOG_GET_TRANSCRIPT]: {
+    // The renderer names only an opaque catalog id — never a path — so a traversal
+    // string can never validate, mirroring catalog:thumbnail.
+    request: z.strictObject({ id: z.uuid() }),
+    response: transcriptViewSchema,
   },
   [IMPORT_START]: {
     request: z.strictObject({

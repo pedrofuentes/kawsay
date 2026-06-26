@@ -15,10 +15,12 @@ import { z } from 'zod';
 import type { SourceType } from '@shared/catalog';
 import {
   itemCardSchema,
+  transcriptViewSchema,
   type ItemCardDTO,
   type LibrarySummaryDTO,
   type SearchResultDTO,
   type TimelinePageDTO,
+  type TranscriptViewDTO,
 } from '@shared/ipc/schemas';
 import {
   createLibrary as createLibraryOnDisk,
@@ -32,7 +34,7 @@ import {
   type ItemRow,
   type TimelineCursor,
 } from '../db/catalog-repo';
-import { createTranscriptRepo } from '../db/transcript-repo';
+import { createTranscriptRepo, type TranscriptRepo } from '../db/transcript-repo';
 import { createTranscriptionLibrary } from '../transcription/transcription-library';
 import type { TranscriptionLibraryPort } from '../transcription/transcription-orchestrator';
 import {
@@ -90,6 +92,14 @@ export interface CatalogSession {
   }): SearchResultDTO;
   /** Render one memory's bounded thumbnail by opaque id (U4), or null. */
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
+  /**
+   * Read ONE item's transcript by opaque id (#136) — the renderer-safe view a
+   * screen reader can read (status + words + detected language + ms segments).
+   * Rejects with {@link CatalogSessionError} when no library is open or the id
+   * is unknown; resolves a non-`done` placeholder (no text) for pending/failed/
+   * skipped items.
+   */
+  getTranscript(input: { id: string }): Promise<TranscriptViewDTO>;
   beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
   /** The host-side transcription library port for the OPEN library (#157). */
@@ -103,6 +113,7 @@ interface OpenLibrary {
   db: CatalogDatabase;
   repo: CatalogRepo;
   thumbnails: ThumbnailService;
+  transcripts: TranscriptRepo;
   transcription: TranscriptionLibraryPort;
 }
 
@@ -180,13 +191,14 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       image: thumbnailers.image,
       video: thumbnailers.video,
     });
+    const transcripts = createTranscriptRepo(db);
     const transcription = createTranscriptionLibrary({
       db,
       root: summary.root,
       catalog: repo,
-      transcripts: createTranscriptRepo(db),
+      transcripts,
     });
-    current = { summary, db, repo, thumbnails, transcription };
+    current = { summary, db, repo, thumbnails, transcripts, transcription };
     return toLibraryDto(summary);
   }
 
@@ -228,6 +240,29 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       // promise so the IPC layer surfaces it as a normal rejected invoke.
       const { thumbnails } = requireOpen();
       return thumbnails.getThumbnail(input.id, input.size);
+    },
+    async getTranscript(input) {
+      // `async` so requireOpen's synchronous throw becomes a rejected invoke,
+      // exactly like getThumbnail above.
+      const { transcripts } = requireOpen();
+      const status = transcripts.getStatus(input.id);
+      // null == the id names no item: a hard error (the renderer asked for a
+      // memory that isn't in this library), surfaced as a rejected invoke.
+      if (status === null) {
+        throw new CatalogSessionError(`no such item: ${input.id}`);
+      }
+      // Only a `done` item has words to read; for pending/failed/skipped we return
+      // the status alone (no text/segments) so the UI can show its calm state.
+      if (status !== 'done') {
+        return transcriptViewSchema.parse({ status, language: null, text: null, segments: [] });
+      }
+      const record = transcripts.loadTranscript(input.id);
+      return transcriptViewSchema.parse({
+        status,
+        language: record?.language ?? null,
+        text: record?.text ?? null,
+        segments: record?.segments ?? [],
+      });
     },
     beginImport(input) {
       const library = requireOpen();

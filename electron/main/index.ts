@@ -3,6 +3,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, session } from 'electron';
 import {
   APP_GET_VERSION,
+  CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
@@ -190,6 +191,7 @@ const ipcHandlers: IpcHandlerMap = {
   [CATALOG_TIMELINE]: (request) => catalogSession.getTimeline(request),
   [CATALOG_SEARCH]: (request) => catalogSession.search(request),
   [CATALOG_THUMBNAIL]: (request) => catalogSession.getThumbnail(request),
+  [CATALOG_GET_TRANSCRIPT]: (request) => catalogSession.getTranscript(request),
   [IMPORT_START]: (request) => catalogSession.beginImport(request),
   [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
   [DIALOG_OPEN_DIRECTORY]: (request) => handleOpenDirectory({ showOpenDialog }, request),

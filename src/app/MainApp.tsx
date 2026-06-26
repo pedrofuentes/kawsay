@@ -14,6 +14,7 @@ import { useNavigation } from '@renderer/lib/navigation';
 import { Search } from '@renderer/views/Search';
 import { Settings } from '@renderer/views/Settings';
 import { Timeline } from '@renderer/views/Timeline';
+import { ItemView } from '@renderer/views/ItemView';
 import { Sidebar } from './Sidebar';
 
 export function MainApp(): ReactElement {
@@ -52,6 +53,10 @@ export function MainApp(): ReactElement {
         );
       case 'settings':
         return <Settings key="settings" />;
+      case 'item':
+        // Keyed by item id so opening a different memory remounts the view (its
+        // <h1> auto-focus re-runs, and the transcript re-reads for the new id).
+        return <ItemView key={`item-${view.item.id}`} />;
       case 'timeline':
         return <Timeline />;
       // Onboarding is routed by the top-level <Router/> (App.tsx) and never reaches

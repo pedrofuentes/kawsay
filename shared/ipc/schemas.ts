@@ -191,3 +191,48 @@ export const transcriptionStartResultSchema = z.strictObject({
   counts: transcriptionCountsSchema,
 });
 export type TranscriptionStartResultDTO = z.infer<typeof transcriptionStartResultSchema>;
+
+// ── Per-item transcript view (M2, #136 — ADR-0027 / AC-13·19) ─────────────────
+//
+// The renderer-facing projection of ONE item's transcript, returned by
+// `catalog:getTranscript`. The full text + ms-timed segments live host-side
+// (#135); this read path is all the sandboxed item view ever sees — no file
+// paths, no audio bytes, just the words and their detected language so a screen
+// reader can pronounce Spanish/etc. correctly (the `lang` attribute, AC-13).
+
+/**
+ * The persisted transcription status of ONE item (mirrors `items.transcript_status`,
+ * #135): `pending` (not transcribed yet, or in flight), `done` (words available),
+ * `failed` (the run could not transcribe it), or `skipped` (nothing to capture).
+ */
+export const transcriptStatusSchema = z.enum(['pending', 'done', 'failed', 'skipped']);
+export type TranscriptStatusDTO = z.infer<typeof transcriptStatusSchema>;
+
+/**
+ * One contiguous, millisecond-timed segment of a transcript. `startMs`/`endMs`
+ * are non-negative integers (ms from the media start) and `text` is the words
+ * spoken in that span. Carried so a future player could seek to a line; the UI
+ * needs at least the full text to read.
+ */
+export const transcriptSegmentSchema = z.strictObject({
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().nonnegative(),
+  text: z.string(),
+});
+export type TranscriptSegmentDTO = z.infer<typeof transcriptSegmentSchema>;
+
+/**
+ * The renderer-facing view of an item's transcript. `status` is always present;
+ * `text` and `language` are non-null only once `status === 'done'` (`language` is
+ * the whisper-detected tag, e.g. `es`, or null when undetected), and `segments`
+ * is empty unless done. The text is deliberately UNBOUNDED — a long recording's
+ * transcript is legitimately large, and it crosses only as the words themselves,
+ * never as a path or handle (consistent with itemCardSchema's unbounded title).
+ */
+export const transcriptViewSchema = z.strictObject({
+  status: transcriptStatusSchema,
+  language: z.string().max(NAME_MAX_LENGTH).nullable(),
+  text: z.string().nullable(),
+  segments: z.array(transcriptSegmentSchema),
+});
+export type TranscriptViewDTO = z.infer<typeof transcriptViewSchema>;

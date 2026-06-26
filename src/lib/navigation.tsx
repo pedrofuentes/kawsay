@@ -4,6 +4,7 @@
 // view here and call `navigate()` to move between the main sections.
 import { createContext, useContext, useMemo, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
+import type { ItemCardDTO } from '@shared/kawsay-api';
 
 /** The discrete screens the renderer can show. */
 export type View =
@@ -11,7 +12,10 @@ export type View =
   | { name: 'timeline' }
   | { name: 'search' }
   | { name: 'add-memories' }
-  | { name: 'settings' };
+  | { name: 'settings' }
+  // One memory opened on its own (#136) — carries the tile the user activated so
+  // the view needs no re-fetch, plus where they came from so "back" returns there.
+  | { name: 'item'; item: ItemCardDTO; from?: View };
 
 export interface NavigationValue {
   view: View;

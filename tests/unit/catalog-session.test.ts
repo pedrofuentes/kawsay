@@ -140,7 +140,6 @@ function seedTranscribedAudio(
   const db = openCatalog(catalogPath);
   const repo = createCatalogRepo(db);
   const transcripts = createTranscriptRepo(db);
-  const src = repo.registerSource({ sourceKey: 'voices', type: 'folder', label: 'Voices' });
   const id = repo.insertItem({ mediaType: 'audio', contentHash: 'h-done', durationSec: 12 });
   transcripts.saveTranscript({
     itemId: id,
