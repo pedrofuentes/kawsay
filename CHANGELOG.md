@@ -314,14 +314,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   auto-downloads the model on first opt-in** (bundling rejected as "a huge app to download and install"; manual
   import rejected as too much friction for a grieving, non-technical user). The **binary stays bundled and the
   installer stays ~200 MB**; the model is a one-time ~466 MB download to the app's data dir, **SHA-256-verified
-  before use** (atomic, resumable, corrupt→refetch). **Your memories never leave this computer** — transcription
+  before use** (atomic, resumable, corrupt→refetch; re-verified before each transcription run). **Your memories
+  never leave this computer** — transcription
   runs 100% locally and no audio/memory ever egresses; the previously-absolute zero-egress is **narrowed** to
-  permit **exactly one** outbound: a **data-free** GET of the public model file from a **single pinned host** (the
-  app's own GitHub Release asset). Updates the **PRD acceptance addendum (AC-17 … AC-24)** — AC-17 reframed (zero
+  permit **exactly one** outbound: a **data-free** `GET` of the public model file at an **exact pinned URL**, issued
+  through **Electron `net.request` on the guarded session** so `network-guard.ts`'s `webRequest` handler is the real
+  chokepoint (matching method + exact URL + empty body — not merely a host), allowing the origin **+ its
+  signed-CDN redirect target** (GitHub `release-assets.githubusercontent.com`, or the HF fallback `*.cdn.hf.co`).
+  Because nothing publishes the model today, a **publication pre-step** (verify `sha256`/size → publish a `models-v1`
+  Release asset with NOTICES, publish-time `hash==pinned`-checked) is sequenced **before** the downloader. Updates
+  the **PRD acceptance addendum (AC-17 … AC-24)** — AC-17 reframed (zero
   user-data egress; only egress = the model fetch), AC-22 ties the download behind opt-in, new **AC-24** (download
-  integrity/resilience), AC-23 NOTICES for the downloaded weights — and the **M2 increment breakdown** in
-  `ROADMAP.md` (M2-1 = download manager + integrity + consent UX + scoped `network-guard` allowlist; M2-7 = zero
-  user-data egress everywhere + the one pinned data-free host). The scoped egress touches the **`network-guard`
+  integrity/resilience — exact-URL request-shape assertion, on-disk re-verify, disk-full/second-instance/expiring-CDN
+  edge cases), AC-23 NOTICES + publication for the downloaded weights — and the **M2 increment breakdown** in
+  `ROADMAP.md` (M2-1 = publish-then-download manager + integrity + consent UX + scoped `webRequest` allowlist; M2-7 =
+  zero user-data egress everywhere + the one exact-URL `GET`). The scoped egress touches the **`network-guard`
   policy + the AC-4 harness (`ac4-egress.yml`)** → **🚨 HUMAN-REQUIRED**; this revised ADR is the gate artifact for
   a **final cofounder confirm of the host + checksum + allowlist mechanism** before any building. No dependencies
   added; renderer CSP `connect-src 'none'` unchanged.

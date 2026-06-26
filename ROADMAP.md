@@ -54,7 +54,7 @@ addendum).
 **Architecture gate:** **ADR-0027** (whisper.cpp via a **bundled** `whisper-cli` binary + an **opt-in,
 on-demand, checksum-verified download** of the multilingual **`small`** `ggml` model on the F3c
 worker/ffmpeg seam — **binary bundled; model downloaded on opt-in**) — **status: proposed; the cofounder
-locked model=`small` / policy=opt-in / delivery=download, and a final confirm of the pinned host +
+locked model=`small` / policy=opt-in / delivery=download, and a final confirm of the pinned host(s) + exact URL +
 checksum + scoped-allowlist mechanism is pending.**
 **Authorization:** time-boxed **only while user data stays on-device** — and it does (transcription is
 100% local; memories never leave). ADR-0027 is **🚨 HUMAN-REQUIRED** on **three** triggers: a **heavy
@@ -69,17 +69,26 @@ egress of user data, remains **never**).
    be measured as an optional footprint optimization). *Confirms `small` clears the floor; no longer a
    `base`-vs-`small` choice.*
 2. **M2-1 · Model download manager + integrity + consent/opt-in UX + scoped egress (+ binary packaging,
-   provenance/NOTICES).** Build the **main-process model downloader**: an **opt-in/consent screen** gating
-   any fetch (one-time ~466 MB; "the only time the app uses the network"; "your memories never leave");
-   **SHA-256 verify-before-use** (hard-coded `1be3a9b2…fffea987b`); **atomic** install (temp→verify→rename);
-   **resumable**; corrupt→reject+refetch; graceful **offline/retry**; feature disabled until present →
-   **AC-22/AC-24**. Add the **single pinned-host allowlist entry to `network-guard.ts`** (data-free GET,
-   main-process only; renderer CSP unchanged) **+** the matching **AC-4 harness** edits (`ac4-egress.yml`,
-   in-process spies) → **🚨 HUMAN-REQUIRED** (egress policy + harness integrity). Still **bundle the per-arch
-   `whisper-cli` binary** (built-from-source-in-CI, P1) via `electron-builder` `extraResources`/`asarUnpack`,
-   resolved through `process.resourcesPath`; ship **license attribution/NOTICES** for the bundled binary +
-   **downloaded** weights with provenance → **AC-23**; packaging-config + allowlist drift tests. *(Extends
-   ADR-0007/0023; supersedes the prior bundle-the-model packaging plan.)*
+   provenance/NOTICES).** **Publish first (prerequisite — chicken-and-egg):** nothing publishes `ggml-small.bin`
+   today (`release.yml` ships only installers), so **before** the downloader can fetch it, a manual or small
+   human-gated step must **fetch upstream `ggml-small.bin` → verify `sha256==1be3a9b2…fffea987b` & `size==487,601,967`
+   → publish a `models-v1` GitHub Release asset with NOTICES**, gated by a **publish-time `hash==pinned` check**
+   (ADR-0027 Decision 6e / AC-23). Then build the **main-process model downloader**: an **opt-in/consent screen**
+   gating any fetch (one-time ~466 MB; "the only time the app uses the network"; "your memories never leave");
+   **SHA-256 verify-before-use + re-verify before each `whisper-cli` spawn** (hard-coded `1be3a9b2…fffea987b`);
+   **atomic** install (temp→verify→rename); **resumable** (incl. re-requesting the origin when a **signed-CDN URL
+   expires** on resume); corrupt→reject+refetch; graceful **offline/retry**; disk-full/second-instance handled;
+   feature disabled until present → **AC-22/AC-24**. Issue the fetch via **Electron `net.request` on the guarded
+   session** and add the **single exact-URL allowlist entry to `network-guard.ts`'s `webRequest` policy** (method
+   `GET` + the exact pinned URL(s) + empty body — origin **+ redirect/CDN target** `{github.com,
+   release-assets.githubusercontent.com}` or HF `{huggingface.co, *.cdn.hf.co}`; **not** a host-only match, **not**
+   a Node-primitive downloader; renderer CSP unchanged) **+** the matching **AC-4 harness** edits (the OS firewall in
+   `ac4-egress.yml`; the **Node in-process spies stay deny-all** and do not observe the Chromium-stack download; a
+   `network-guard` exact-URL unit test) → **🚨 HUMAN-REQUIRED** (egress policy + harness integrity). Still **bundle
+   the per-arch `whisper-cli` binary** (built-from-source-in-CI, P1) via `electron-builder`
+   `extraResources`/`asarUnpack`, resolved through `process.resourcesPath`; ship **license attribution/NOTICES** for
+   the bundled binary + **downloaded** weights with provenance → **AC-23**; packaging-config + allowlist drift
+   tests. *(Extends ADR-0007/0023; supersedes the prior bundle-the-model packaging plan.)*
 3. **M2-2 · Audio-extraction pipeline.** Extend the bundled-`ffmpeg` seam to decode any voice note/
    audio/video to **16 kHz mono PCM WAV** (array argv, `-protocol_whitelist file`, timeout, caps).
    *(Extends ADR-0004/0012.)*
@@ -99,12 +108,15 @@ egress of user data, remains **never**).
    **opt-in + download-consent** screen is delivered in M2-1.) → **AC-13/AC-22**.
 7. **M2-6 · Perf/accuracy harness.** Offline labelled fixtures (Spanish + others); WER + RTF/throughput
    on macOS + Windows; lock **AC-21**/**AC-18** thresholds. *(No telemetry; CI fixtures.)*
-8. **M2-7 · Zero-egress proof — user data everywhere; one allowed host (net-new harness · 🚨 HUMAN-REQUIRED).**
+8. **M2-7 · Zero-egress proof — user data everywhere; one allowed exact-URL `GET` (net-new harness · 🚨 HUMAN-REQUIRED).**
    Stand up a **macOS + Windows OS-deny egress harness that exercises the *real* `whisper-cli` binary** and
-   asserts **zero user-data egress everywhere** (the in-process spies cover the **main process only**; the
-   existing OS-deny firewall is **Linux-only** and Kawsay ships no Linux target). Assert the **only** permitted
-   outbound anywhere is the **data-free GET to the single pinned model host** (carrying no user data);
-   everything else still trips. Because it **edits `.github/workflows/ac4-egress.yml`** + the `network-guard`
+   asserts **zero user-data egress everywhere** (the in-process **Node** spies cover **main-process Node outbound
+   only**; the existing OS-deny firewall is **Linux-only** and Kawsay ships no Linux target). Assert the **only**
+   permitted outbound anywhere is the **data-free `GET` to the exact pinned model URL** (method + URL + empty body;
+   origin **+ its redirect/CDN host** — `{github.com, release-assets.githubusercontent.com}` or HF `{huggingface.co,
+   *.cdn.hf.co}`), asserted at the **`webRequest` allowlist + the OS firewall** (the model download uses Electron
+   `net.request` over Chromium's stack, so the **Node spies do not observe it** — they stay deny-all); everything
+   else still trips. Because it **edits `.github/workflows/ac4-egress.yml`** + the `network-guard`
    allowlist, it is **🚨 HUMAN-REQUIRED** (harness integrity, MISSION §9) — the same gate as M2-4's DB
    migration. The static/packaging half of AC-17 lands earlier (M2-1). → **AC-17 (+ AC-24's egress assertion).**
 

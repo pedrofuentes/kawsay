@@ -32,9 +32,16 @@
 **Date**: 2026-06-25 (revised 2026-06-25 after the cofounder locked the open decisions)
 **Status**: Proposed — 🚨 **HUMAN-REQUIRED** (@pedrofuentes sign-off required before any building). This is the
 **M2 architecture gate artifact**; it is research + design only (no product code). An independent **red-team** pass
-(verdict **SOUND-WITH-FIXES**) was **incorporated**: fabricated Spanish-WER figures removed, the subprocess
-zero-egress *proof* scoped to a net-new OS-deny harness (M2-7), and consent (AC-22), NOTICES (AC-23), binary
-provenance, long-media, and the FTS-rebuild cost added.
+(verdict **SOUND-WITH-FIXES**) was **incorporated**: fabricated Spanish-WER figures **relabeled as illustrative
+clean-benchmark upper bounds** (no longer load-bearing — AC-21 fixes the threshold empirically, see Decision 4), the
+subprocess zero-egress *proof* scoped to a net-new OS-deny harness (M2-7), and consent (AC-22), NOTICES (AC-23),
+binary provenance, long-media, and the FTS-rebuild cost added. A **second red-team** pass (verdict
+**SOUND-WITH-FIXES**, **0 blocking**) was then incorporated, correcting how the design is described **against the
+real code**: the model download must flow through **Electron `net.request` on the guarded `session`** (so
+`network-guard.ts`'s `webRequest` handler — *not* a Node-primitive downloader — is the real chokepoint; Decision
+6d/7), the allowlist is scoped to **method + exact URL + empty body** (6d), the **CDN/redirect hosts** are corrected
+(`release-assets.githubusercontent.com` / `*.cdn.hf.co`; 6a), and the **model-asset publication** is sequenced
+**before** the downloader (new Decision 6e).
 **Revised — the cofounder has now LOCKED the three open decisions, and they PIVOT the model-delivery design:**
 (1) **model = `small`** (~466 MiB), multilingual; (2) **policy = opt-in** (no silent/automatic transcription); and
 (3) **delivery = the app auto-downloads the `small` model on first opt-in** — it is **NOT** bundled in the installer
@@ -45,7 +52,7 @@ the bundle and manual-import options are now recorded as **Alternatives rejected
 **`whisper-cli` binary stays bundled** (built from source in CI) and the **installer stays ~200 MB**; only the
 **model file** is fetched. Because this narrows the egress policy, it **touches the `network-guard` egress policy +
 the AC-4 harness (`ac4-egress.yml`)** → it is the gate artifact for a **final cofounder confirm of the specific
-pinned host + hard-coded SHA-256 + scoped-allowlist mechanism** before any building.
+pinned host(s) + exact URL + hard-coded SHA-256 + scoped-allowlist mechanism** before any building.
 Extends ADR-0004 (off-thread ingestion), ADR-0012 (bundled ffmpeg/ffprobe), ADR-0003 (catalog/FTS), ADR-0007/0023
 (packaging); **supersedes (within itself) its own earlier bundle-only packaging stance**; and **narrows ADR-0008
 (zero-egress invariant) by exactly one user-initiated, data-free model fetch** — user memories remain absolutely
@@ -54,7 +61,8 @@ non-egressing (see Decision 7).
 dependency** — a platform-specific native binary plus a ~466 MiB `small` model; (2) **privacy-data capability**
 design — turning a deceased person's voice into stored, searchable text; and (3) **a new product-runtime network
 egress / external origin** — the opt-in model download narrows the §5 *product* network allowlist from **"None —
-fully offline"** to **exactly one** pinned host (MISSION §5/§9: "any action that would add network egress … →
+fully offline"** to **exactly one** pinned, data-free model `GET` (one origin **+ its signed-CDN redirect target**)
+(MISSION §5/§9: "any action that would add network egress … →
 human-required"). Any one alone gates; together they make this a deliberate, blocking cofounder decision. The
 **time-boxed** M2 default (ROADMAP) holds **only while user data stays fully on-device** — and it does: **all
 transcription runs 100% locally and no loved-one's audio or memories ever leave the machine.** What the design now
@@ -105,12 +113,14 @@ across macOS (arm64+x64) + Windows — without ever moving the user's memories o
    one-shot memories:
    - **Accuracy is monotonic in model size:** `tiny` < `base` < `small` < `medium` (larger = lower word-error
      rate). Any claim that `base` matches or beats `small` is wrong and **inverts** this ordering.
-   - **Clean-benchmark Spanish WER (read-speech, upper-bound reference only):** on OpenAI's published Common Voice
-     per-language breakdown, Spanish WER is roughly **`tiny` ~24%, `base` ~16% (≈15–17%), `small` ~10–11%,
-     `medium` ~8%, `large` ~5–6%** (source: OpenAI Whisper paper, Radford et al. 2022, Appendix E / `openai/whisper`
-     model card, Common Voice 15). **Treat these as optimistic clean read-speech upper bounds — not field
-     accuracy.** **`base` Spanish WER (~15–17%) sits well above `small` (~10–11%)** — the gap that motivated picking
-     `small`.
+   - **Clean-benchmark Spanish WER (read-speech — illustrative, NOT asserted; upper-bound reference only):** on
+     OpenAI's published Common Voice per-language breakdown, Spanish WER is roughly **`tiny` ~24%, `base` ~16%
+     (≈15–17%), `small` ~10–11%, `medium` ~8%, `large` ~5–6%** (source: OpenAI Whisper paper, Radford et al. 2022,
+     Appendix E / `openai/whisper` model card, Common Voice 15). **Treat these as optimistic clean read-speech upper
+     bounds — not field accuracy, and NOT a load-bearing claim of this ADR**: AC-21 sets the only binding threshold,
+     **empirically, on real samples** (M2-0). They are kept here purely to **illustrate** the monotonic size→accuracy
+     ordering. On that ordering, **`base` Spanish WER (~15–17%) sits well above `small` (~10–11%)** — the gap that
+     motivated picking `small`.
    - **Real WhatsApp voice notes will be worse:** spontaneous, accented, code-switched, compressed `.opus`,
      background noise → expect materially higher WER than the clean-benchmark figures above. Choosing the **larger of
      the two practical models** buys accuracy headroom precisely where field conditions erode it.
@@ -148,9 +158,18 @@ across macOS (arm64+x64) + Windows — without ever moving the user's memories o
      third-party rename, rate-limit, or takedown mid-grief); (ii) **GitHub Releases is already Kawsay's trusted,
      pre-authorized distribution origin** (MISSION §3/§5 — the installers themselves ship from there), so it is
      **not a new external party**, only a narrowing of the *product* runtime allowlist; (iii) we **pin one immutable
-     URL + version** and own the checksum. Upstream provenance (source repo + file + version + size + SHA-256) is
-     recorded for NOTICES (Decision 10 / AC-23). *(Direct-from-Hugging-Face is the documented fallback if we choose
-     not to re-host; it trades control for one fewer hop and is the cofounder's call at confirm.)*
+     Release tag + asset path** and own the checksum. **Redirect reality (do not assume one immutable URL):** the
+     `github.com/…/releases/download/…` asset URL **302-redirects to a signed, time-limited
+     `release-assets.githubusercontent.com` URL** (verified: a release-asset `GET` returns `302` →
+     `release-assets.githubusercontent.com/…?…&se=<expiry>&sig=…&jwt=…`), so the allowlist must cover **both** the
+     `github.com` origin **and** that redirect/CDN target (Decision 6d), and the signed URL's **expiry can outrun a
+     long-paused resumable download** — a resume after the signature lapses must re-request the `github.com` URL for
+     a fresh redirect. Integrity is unaffected (still a data-free GET, SHA-256-backstopped). Upstream provenance
+     (source repo + file + version + size + SHA-256) is recorded for NOTICES (Decision 10 / AC-23). *(Direct-from-
+     Hugging-Face is the documented fallback if we choose not to re-host; it trades control for one fewer hop —
+     and likewise `huggingface.co/…/resolve/…` **302-redirects to a regional `*.cdn.hf.co` Xet host** (verified:
+     `302` → `us.aws.cdn.hf.co/…?Expires=…&Signature=…&Key-Pair-Id=…`), with the same signed-expiry/resume
+     interaction — and is the cofounder's call at confirm.)*
    - **(b) Integrity (mandatory, non-negotiable).** The **expected SHA-256 is hard-coded in the app** and the file
      is **verified before first use** — the app **never runs an unverified model**. The upstream `ggml-small.bin`
      (the bytes we re-host) has SHA-256 **`1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`**, size
@@ -159,7 +178,13 @@ across macOS (arm64+x64) + Windows — without ever moving the user's memories o
      place**, so a partially-written or mismatched file is never visible as "the model." The download is
      **resumable** (HTTP range / restart) so a dropped connection on ~466 MiB doesn't restart from zero. A **corrupt
      or mismatched file is rejected and re-fetched**; repeated failure surfaces a calm error (never a crash) and the
-     feature stays disabled. → **AC-24**.
+     feature stays disabled. **On-disk re-verification (threat model):** the verified model then lives in the app
+     data dir indefinitely, so **post-install on-disk tampering / corruption / bit-rot** is in scope, not only the
+     download. **Preferred posture: re-validate the model's SHA-256 before each `whisper-cli` spawn** — hashing
+     ~466 MiB adds ~1–2 s to a job that already runs **off-thread** in the background, an acceptable cost for never
+     feeding an unverified model to the engine. The lighter alternative — verify **once after download** and rely on
+     a size/mtime guard thereafter, justified by Kawsay being a **fully-local** app whose data dir is as trusted as
+     the bundled binary — is recorded for the cofounder's call. → **AC-24**.
    - **(c) Consent UX — explicit opt-in before any byte leaves.** Before **any** download, an explicit **opt-in**
      screen (calm, non-technical copy) states: the **one-time ~466 MB** download; that **this is the only time the
      app ever uses the network**; that **your memories never leave this computer** (the model is the app's own
@@ -167,17 +192,47 @@ across macOS (arm64+x64) + Windows — without ever moving the user's memories o
      / video). It shows **progress**, handles **offline/failure gracefully** (a clear retry, no crash, no
      half-state), and the transcription feature **stays disabled until the model is present and verified**. No opt-in
      ⇒ no download ⇒ no network, ever. → **AC-22**.
-   - **(d) Scoped egress design — one host, data-free, main-process only.** The runtime guard (`network-guard.ts`)
-     **allowlists EXACTLY the single pinned model host** (the GitHub Releases asset origin, e.g.
-     `github.com` / `objects.githubusercontent.com`) **and only for the user-initiated model-download code path** — a
-     **data-free GET** of a public file. **Everything else stays denied** by the existing deny-by-default guard. The
-     download runs in the **main process** (a single-purpose downloader over Node's outbound primitives), **not the
-     renderer**, so the renderer **CSP `connect-src 'none'` is unchanged** — the renderer still cannot make *any*
-     network request. The allowlist entry is **outbound-only, GET-only, to one pinned host, carrying no request body,
-     no query of user content, and no headers derived from user data** — so it is **structurally incapable of
-     exfiltrating a memory**: the only thing that can travel out is the request for a public, named model file, and
-     the only thing that returns is that file (rejected unless its SHA-256 matches). This single entry — plus the
-     matching AC-4 harness change — is the **🚨 HUMAN-REQUIRED** mechanism the cofounder confirms (Decision 7).
+   - **(d) Scoped egress design — exact-URL allowlist at the session/`webRequest` chokepoint, data-free,
+     main-process only (Option Y).** The downloader issues the fetch through **Electron's `net.request` on the
+     guarded `session`** (Chromium's native networking stack — **NOT** Node's `http`/`https`/`net`), so the existing
+     `network-guard.ts` **`session.webRequest.onBeforeRequest` handler genuinely IS the single runtime chokepoint**
+     for this request and can inspect the **full URL, method, and `uploadData` (body)**. This corrects a real-code
+     contradiction in the prior wording: `network-guard.ts` installs **only** `session.webRequest.onBeforeRequest`
+     (`electron/main/security/network-guard.ts`), which governs **Chromium/session traffic only** — a downloader
+     built on **Node primitives would bypass `webRequest` entirely** and would **not be governed by
+     `network-guard.ts` at all**. Routing through `net.request` is what makes the guard authoritative.
+     The guard's allowlist matches **method `GET` + the exact pinned model URL(s) + an empty upload body** and
+     **rejects everything else** — *not* merely a host: at the raw socket layer only `host:port` is visible (so a
+     host-only allow would permit a `POST` smuggling a transcript in the body), whereas at the `webRequest` layer the
+     **whole request shape** is visible, so we pin the **shape**. Because every candidate origin **302-redirects to a
+     signed CDN host** (Decision 6a), the allowlist covers the **origin + its redirect/CDN target**: GitHub
+     **`{github.com, release-assets.githubusercontent.com}`** — or, as the documented fallback, Hugging Face
+     **`{huggingface.co, *.cdn.hf.co}`**. Redirects are **followed within the download path**, each hop kept
+     **data-free** (GET, empty body), and the SHA-256 is **re-verified regardless of which CDN served the bytes**.
+     **Everything else stays denied** by the deny-by-default guard, and the renderer **CSP `connect-src 'none'` is
+     unchanged** — the renderer still cannot make *any* network request (the download is in the **main process**).
+     **Observation note (load-bearing):** because the download flows through the **session/`webRequest`** layer
+     rather than Node sockets, the **Node-prototype spies in `tests/ac4/egress-spies.ts` will NOT observe it** —
+     those spies patch `net.Socket.prototype`/`dgram`/`node:dns`/`nock` and stay a pure assertion that
+     **main-process Node outbound remains zero**. The "only permitted outbound" assertion (AC-17 / AC-24) is
+     therefore made by the **`webRequest` guard's exact-URL allowlist + the OS-deny firewall**, **NOT** by the Node
+     spies (we do not claim a Node-level chokepoint that does not exist). The allowlist entry is **GET-only, to the
+     pinned URL(s), carrying no request body, no query of user content, and no headers derived from user data** — so
+     it is **structurally incapable of exfiltrating a memory**: the only thing that can travel out is the request for
+     a public, named model file, and the only thing that returns is that file (rejected unless its SHA-256 matches).
+     This single entry — plus the matching AC-4 harness change — is the **🚨 HUMAN-REQUIRED** mechanism the cofounder
+     confirms (Decision 7).
+   - **(e) Asset publication is a prerequisite increment — publish the model *before* the downloader fetches it
+     (chicken-and-egg).** Today `release.yml` publishes **only the installers** (`pnpm exec electron-builder
+     --publish always`); **nothing publishes `ggml-small.bin`** (verified: no workflow references the model), so the
+     `…/releases/download/models-v1/ggml-small.bin` asset the downloader targets **does not yet exist**. A discrete
+     **pre-step / increment** — a manual run or a small, human-gated workflow, sequenced **before** the downloader
+     integration — must: **fetch upstream `ggml-small.bin` → verify `sha256 == 1be3a9b2…fffea987b` AND
+     `size == 487,601,967` → publish it to a `models-v1` GitHub Release with the weights' NOTICES/attribution**
+     (Decision 10 / AC-23). A **publish-time equality check** (`hash(our_re-hosted_asset) == the pinned SHA-256`)
+     gates the publish, so a corrupt or wrong re-host is caught **before** release — not only at the user's runtime
+     verify (Decision 6b). *(The HF-direct fallback skips this publication step entirely at the cost of a
+     third-party hop; it is the documented alternative.)*
 7. **AC-4 preservation — reframed: zero *user-data* egress is still absolute; the ONLY permitted outbound is the
    opt-in model fetch.**
    **(a) The invariant that never bends:** **no user audio, no memory, and no derived transcript ever leaves the
@@ -188,25 +243,38 @@ across macOS (arm64+x64) + Windows — without ever moving the user's memories o
    true by construction.**
    **(b) The one narrowly-scoped exception:** the previously-absolute "zero network egress" is **narrowed** to permit
    **exactly one** kind of outbound traffic — an **optional, user-initiated, checksum-verified, data-free GET of the
-   model file from a single pinned trusted host** (Decision 6). This is the **only** network the app ever makes: it
-   is gated by opt-in (AC-22), verified by hard-coded SHA-256 (AC-24), and confined to one host by the
-   `network-guard` allowlist (Decision 6d). **Net statement: user-data egress = 0, forever; app-model egress = at
-   most one optional, data-free fetch.**
+   model file from the exact pinned URL(s) at a single trusted origin (+ its signed-CDN redirect)** (Decision 6).
+   This is the **only** network the app ever makes: it
+   is gated by opt-in (AC-22), verified by hard-coded SHA-256 (AC-24), and confined to the **exact pinned URL(s)**
+   (GET + empty body) by the `network-guard` `webRequest` allowlist (Decision 6d). **Net statement: user-data egress
+   = 0, forever; app-model egress = at most one optional, data-free fetch.**
    **(c) Proof status for the native subprocess (unchanged red-team finding — still a gap to close):** the existing
    in-process `net`/`dgram`/`dns` spies + `nock` (`tests/ac4/egress-spies.ts`) prove the **main process only** and
-   **cannot observe a separate OS process** (`tests/ac4/egress-subprocess.mjs`). The **OS-level deny firewall** is
-   authoritative for subprocesses but is **Linux-only** (`.github/workflows/ac4-egress.yml` is
-   `runs-on: ubuntu-latest`), while Kawsay ships **macOS arm64/x64 + Windows x64** — so a macOS/Windows OS-deny
-   harness exercising the **real** `whisper-cli` binary is **net-new** work (**M2-7**, HUMAN-REQUIRED). **AC-17** is
-   split into a static/packaging guarantee (provable now) + a runtime OS-deny assertion (gated on M2-7).
+   **cannot observe a separate OS process** (`tests/ac4/egress-subprocess.mjs`). By the same token they observe only
+   **Node** outbound (they patch `net.Socket.prototype`/`dgram`/`node:dns`/`nock`): the opt-in model download
+   deliberately uses **Electron `net.request` over Chromium's stack** (Decision 6d), so it too is **invisible to
+   these spies** and is asserted instead at the `webRequest` allowlist + the OS firewall — not the Node spies. The
+   **OS-level deny firewall** is authoritative for subprocesses but is **Linux-only**
+   (`.github/workflows/ac4-egress.yml` is `runs-on: ubuntu-latest`), while Kawsay ships **macOS arm64/x64 + Windows
+   x64** — so a macOS/Windows OS-deny harness exercising the **real** `whisper-cli` binary is **net-new** work
+   (**M2-7**, HUMAN-REQUIRED). **AC-17** is split into a static/packaging guarantee (provable now) + a runtime
+   OS-deny assertion (gated on M2-7).
    **(d) Harness change this revision forces (🚨 HUMAN-REQUIRED):** because the model fetch is now a *permitted*
-   egress, the AC-4 harness must move from "**deny all**" to "**deny all except a data-free GET to the one pinned
-   model host**." Concretely this edits the **`network-guard` egress policy** (the single allowlist entry in
-   `electron/main/security/network-guard.ts`), the **in-process spies** (`tests/ac4/egress-spies.ts` /
-   `tests/ac4/no-egress.node.test.ts`) so they assert that **only** that one host is reachable and everything else
-   still trips, and **`.github/workflows/ac4-egress.yml`** (the OS-deny firewall). Editing the egress policy + the
-   AC-4 CI workflow is **harness-integrity → HUMAN-REQUIRED** (MISSION §9; §5 "any action that would add network
-   egress → human-required"). The renderer **CSP is NOT** in this set (it stays `connect-src 'none'`). **This ADR is
+   egress, the AC-4 harness must move from "**deny all**" to "**deny all except a data-free `GET` to the exact pinned
+   model URL(s)**" — but **at the right layer**. Concretely:
+   - **`network-guard.ts`'s `webRequest` policy** gains the **single exact-URL allowlist entry** (method `GET` +
+     pinned URL(s) + empty body, plus the redirect/CDN targets of Decision 6a/6d), since the `session.webRequest`
+     layer is where the `net.request` download is actually observable. A dedicated `network-guard` unit test asserts
+     the entry matches the exact URL/method/empty-body and **rejects a host-only `POST`**.
+   - The **in-process Node spies** (`tests/ac4/egress-spies.ts` / `tests/ac4/no-egress.node.test.ts`) **stay
+     deny-all** — they assert **zero Node-primitive outbound** (`net`/`dgram`/`dns`/`http`); they do **not** (and
+     cannot) observe the Chromium-stack download, so they must **not** be loosened to "allow one host."
+   - **`.github/workflows/ac4-egress.yml`** (the OS-deny firewall) remains the kernel-level backstop that *would*
+     catch the download's socket egress, exercised to confirm the permitted `GET` reaches only the pinned host and
+     everything else still trips.
+   Editing the egress policy + the AC-4 CI workflow is **harness-integrity → HUMAN-REQUIRED** (MISSION §9; §5 "any
+   action that would add network egress → human-required"). The renderer **CSP is NOT** in this set (it stays
+   `connect-src 'none'`). **This ADR is
    the gate artifact for the cofounder's final confirm of that exact host + checksum + allowlist mechanism before
    any of these files are touched.**
 8. **Transcription is a net-new per-item queue, not a "verbatim reuse" of import.** We reuse the *seam* (the
@@ -266,8 +334,9 @@ bundled, **built from source in CI**" framing **favors P1**:
   download`, `autoDownloadModelName`) wired **right onto the transcription path**, and it **compiles whisper.cpp
   from source at `npm install`**. *(Reconciling with our own opt-in download: the objection was never "a model is
   fetched" — it was an **unpinned, unverified, non-consensual fetch living next to the privacy boundary**. Our
-  design is the **opposite on every axis**: a **single pinned host**, a **hard-coded SHA-256 verified before use**,
-  **explicit opt-in**, **data-free**, in a **single-purpose main-process downloader** the transcription path never
+  design is the **opposite on every axis**: a **single pinned URL (method + exact-URL allowlisted)**, a **hard-coded
+  SHA-256 verified before use**, **explicit opt-in**, **data-free**, in a **single-purpose main-process downloader
+  (Electron `net.request` over the guarded session)** the transcription path never
   touches. Choosing an opt-in download here is therefore **consistent** with rejecting `nodejs-whisper`, not in
   tension with it — and build-from-source is not disqualifying per se, see **Binary provenance & integrity** P1.)*
 - **Vosk (Kaldi, Apache-2.0)** — genuinely offline, small models (Spanish small ~48 MB, large ~833 MB), mature
@@ -306,9 +375,11 @@ bundled, **built from source in CI**" framing **favors P1**:
   checksum-verified Release asset fetched at runtime. Apple **Core ML** acceleration, if adopted later, adds an
   Apple-only encoder artifact (revisit).
 - **A new product-runtime egress + harness change:** the §5 *product* network allowlist goes from **"None — fully
-  offline"** to **exactly one** pinned, data-free model host; the `network-guard` allowlist + the AC-4 harness
-  (`ac4-egress.yml`, the in-process spies, `network-guard.test.ts`) move from **deny-all** to
-  **deny-all-but-one-host** → **🚨 HUMAN-REQUIRED** (harness integrity). User memories remain absolutely
+  offline"** to **exactly one** pinned, data-free model **GET** (one origin **+ its redirect/CDN target** —
+  `{github.com, release-assets.githubusercontent.com}`, or HF `{huggingface.co, *.cdn.hf.co}`); the `network-guard`
+  `webRequest` allowlist + the AC-4 harness (`ac4-egress.yml` OS firewall; the in-process Node spies stay deny-all;
+  a `network-guard.test.ts` exact-URL assertion) move from **deny-all** to
+  **deny-all-but-the-exact-pinned-GET** → **🚨 HUMAN-REQUIRED** (harness integrity). User memories remain absolutely
   non-egressing and CI-enforced.
 - **AC-4 is preserved in spirit and *narrowed* in letter:** zero **user-data** egress stays absolute and
   CI-enforced (memories never leave); the one permitted outbound is the opt-in, checksum-verified model fetch.
@@ -337,20 +408,30 @@ bundled, **built from source in CI**" framing **favors P1**:
    not manual import (rejected as too much friction). The `whisper-cli` binary stays bundled.
 
 **Final confirm still required from @pedrofuentes before any building (this ADR is that gate artifact)**
-1. **The exact pinned host + URL** — recommended: Kawsay's own GitHub Release asset
-   (`…/releases/download/models-v1/ggml-small.bin`) re-hosting upstream `ggerganov/whisper.cpp`, vs fetching Hugging
-   Face directly.
+1. **The exact pinned host set + URL** — recommended: Kawsay's own GitHub Release asset
+   (`…/releases/download/models-v1/ggml-small.bin`) re-hosting upstream `ggerganov/whisper.cpp`, which
+   **302-redirects to `release-assets.githubusercontent.com`** → allowlist host set **`{github.com,
+   release-assets.githubusercontent.com}`** (the stale `objects.githubusercontent.com` is corrected) — vs fetching
+   Hugging Face directly (`{huggingface.co, *.cdn.hf.co}`).
 2. **The hard-coded SHA-256** — `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b` (487,601,967
-   bytes), pinned in the app and verified before first use.
-3. **The scoped-allowlist mechanism** — the single `network-guard` allowlist entry (one host, GET-only, data-free,
-   main-process) **+** the matching AC-4 harness edits (`ac4-egress.yml`, the in-process spies) → **🚨
-   HUMAN-REQUIRED** (egress policy + harness integrity).
-4. **Heavy-dependency / unsigned-binary posture** — accept a per-arch built-in-CI **unsigned** `whisper-cli` binary
+   bytes), pinned in the app and verified before first use (and re-validated before each `whisper-cli` spawn,
+   Decision 6b).
+3. **The scoped-allowlist mechanism** — the single `network-guard` **`webRequest`** allowlist entry (**method `GET`
+   + the exact pinned URL(s) + empty body**, via **Electron `net.request` on the guarded session** — *not* a Node
+   downloader, *not* a host-only match) **+** the matching AC-4 harness edits (the OS-deny firewall in
+   `ac4-egress.yml`; the Node spies stay deny-all and do **not** observe this download) → **🚨 HUMAN-REQUIRED**
+   (egress policy + harness integrity).
+4. **The model-asset publication pre-step** (Decision 6e) — that a `models-v1` Release asset is **published and
+   publish-time `hash == pinned`-checked** *before* the downloader increment, since nothing publishes
+   `ggml-small.bin` today.
+5. **Heavy-dependency / unsigned-binary posture** — accept a per-arch built-in-CI **unsigned** `whisper-cli` binary
    whose macOS/Windows zero-egress is provable only by-construction until the net-new OS-firewall harness (M2-7)
    lands.
 
 **Remaining open items for the red-team / build:** the exact Release tag + asset URL to pin (and whether to re-host
-vs fetch Hugging Face directly); resumable-download + offline-retry mechanics and the consent-screen copy; transcript
+vs fetch Hugging Face directly); the **model-asset publication** workflow + its publish-time `hash == pinned` gate
+(Decision 6e); **redirect-following + signed-URL-expiry-vs-resume** mechanics (Decision 6a); resumable-download +
+offline-retry mechanics and the consent-screen copy; transcript
 schema detail (`search_meta` feed vs a dedicated FTS-synced column, with the `items_fts` rebuild cost); whether to
 also bundle the Core ML encoder for Apple Silicon; binary provenance mechanics (P1 build-from-source-in-CI vs P2
 pinned-checksum download); long-media chunking vs duration-scaled timeout.

@@ -297,7 +297,7 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 > ADR-0027. They **augment, never replace** the canonical suite and **must keep AC-1 … AC-16 green** (cumulative
 > acceptance regression). The zero-egress promise (**AC-4**) for **user data / memories stays absolute and is never
 > weakened**; per the cofounder's locked decision it is **narrowed** to permit **exactly one** outbound — an opt-in,
-> checksum-verified, data-free **model download** from a single pinned host (AC-17 + the new **AC-24**).
+> checksum-verified, data-free **model download** from the exact pinned model URL(s) (AC-17 + the new **AC-24**).
 
 **AC-17 — Voice notes / audio / video transcribed fully on-device; user memories never egress.**
 - **Given** a WhatsApp voice note (`.opus`), an audio file, or a video with an audio track, with the `whisper-cli`
@@ -308,9 +308,13 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   ever leaves the machine** — and **transcription itself makes ZERO network calls** — asserted in **two parts**:
   - **(a) Static / packaging guarantee (provable now):** the binary ships in the installer; there is **no
     network-capable code on the transcription path**; transcription reads local files only (array-argv paths, never
-    URLs); the renderer CSP (`connect-src 'none'`) is **unchanged**. The runtime guard (`network-guard.ts`) denies
-    all egress **except** the single pinned, data-free **model-download** host (the only permitted app egress
-    anywhere — ADR-0027 Decision 6d), which is **not** on the transcription path.
+    URLs); the renderer CSP (`connect-src 'none'`) is **unchanged**. The runtime guard (`network-guard.ts`, a
+    `session.webRequest.onBeforeRequest` handler) denies all egress **except a single `GET` to the exact pinned
+    model URL(s)** — the model-download origin **+ its redirect/CDN target** (`{github.com,
+    release-assets.githubusercontent.com}`, or the HF fallback `{huggingface.co, *.cdn.hf.co}`) — the only permitted
+    app egress anywhere (ADR-0027 Decision 6d), which is **not** on the transcription path. The download is issued
+    via **Electron `net.request` on the guarded session** so it actually flows through that `webRequest` chokepoint
+    (a Node-primitive downloader would bypass `webRequest` and is **not** what is specified).
   - **(b) Runtime egress assertion (net-new harness):** the **real** `whisper-cli` subprocess is exercised under an
     **OS-level deny firewall** and records **zero** egress. The existing in-process `net`/`dgram`/`dns` spies prove
     the **main process only** and **cannot observe a separate OS process**, and the existing OS-deny firewall is
@@ -378,26 +382,42 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 **AC-23 — Attribution / NOTICES for third-party artifacts (bundled binary + downloaded model).**
 - **Given** a shipped installer bundling the `whisper-cli` binary (whisper.cpp, **MIT**) and a `small` `ggml` model
   (derived from OpenAI Whisper, **MIT**) that the app **downloads on opt-in**,
-- **When** the app is packaged,
+- **When** the app is packaged **and the model asset is published** (a `models-v1` GitHub Release asset must be
+  **published before** the downloader can fetch it — nothing publishes `ggml-small.bin` today; ADR-0027 Decision
+  6e),
 - **Then** the build includes **license attribution / NOTICES** for the bundled binary **and** for the downloaded
   model weights, each with recorded **provenance** (source + version + size + checksum) — the model's NOTICES travel
-  with the app even though the weights arrive at runtime.
-- **Test kind:** integration / packaging-config. *(New M2 compliance bar; sequenced in M2-1.)*
+  with the app even though the weights arrive at runtime — and the publication step carries the weights' NOTICES and
+  gates on a **publish-time `hash(asset) == pinned SHA-256` check** so a corrupt re-host is caught before release.
+- **Test kind:** integration / packaging-config. *(New M2 compliance bar; sequenced in M2-1, publication before the
+  downloader.)*
 
 **AC-24 — Model-download integrity & resilience (the one permitted egress is safe).**
-- **Given** the opt-in `small` model download from the single pinned host (ADR-0027 Decision 6),
+- **Given** the opt-in `small` model download from the pinned URL(s) (ADR-0027 Decision 6) — issued via **Electron
+  `net.request` on the guarded session**, where the origin **302-redirects to a signed, time-limited CDN host**
+  (`github.com` → `release-assets.githubusercontent.com`, or HF `huggingface.co` → `*.cdn.hf.co`),
 - **When** the model is fetched, verified, and installed — including under a dropped connection, an offline machine,
-  or a corrupt / tampered file,
+  a corrupt / tampered file, a **disk-full** condition mid-download, a **signed-CDN URL that expires** on a
+  long-paused resume, or a **second app instance** racing the same download,
 - **Then** the file's **SHA-256 is verified before first use** (the hard-coded
-  `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`, 487,601,967 bytes) and an **unverified model
-  is never run**; the install is **atomic** (temp → verify → rename, so a partial file is never seen as "the
-  model"); the download is **resumable** (a dropped connection does not restart from zero); a **corrupt / mismatched
-  file is rejected and re-fetched**; an **offline or failed** download surfaces a **calm retry with no crash and no
-  half-state**, leaving the feature disabled until a verified model is present; and the **only** outbound connection
-  observed is the **data-free GET to the pinned host** — every other egress still trips the AC-4 guard.
+  `1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`, 487,601,967 bytes) **and re-validated before
+  each `whisper-cli` spawn** (on-disk tampering is in the threat model — ADR-0027 Decision 6b), and an **unverified
+  model is never run**; the install is **atomic** (temp → verify → rename, so a partial file is never seen as "the
+  model"); the download is **resumable** (a dropped connection does not restart from zero, and an **expired CDN
+  signature on resume re-requests the origin for a fresh redirect**); a **corrupt / mismatched file is rejected and
+  re-fetched**; an **offline or failed** download surfaces a **calm retry with no crash and no half-state**, leaving
+  the feature disabled until a verified model is present; and the **only** outbound observed is a **`GET` to the
+  exact pinned URL with an empty body** — asserted as that **precise request shape** (method + exact URL + no upload
+  body) at the `network-guard` `webRequest` allowlist + the OS-deny firewall (the **Node-prototype in-process spies
+  do not observe a Chromium-stack `net.request` download** — they stay a deny-all assertion that Node outbound is
+  zero), **not** merely "the host is reachable" — so a host-only `POST` smuggling a transcript is rejected. **Edge
+  cases:** **disk-full mid-download** (the ~466 MiB temp file fails closed — clear error, no partial model, retry);
+  a **second app instance** racing the same download is serialized by a **single-instance lock** (no duplicate
+  fetch, no corrupt interleave); an **expiring signed-CDN URL** on a long resume triggers a fresh origin redirect
+  rather than a hard failure.
 - **Test kind:** integration **+** the scoped AC-4 egress harness. *(New M2 integrity bar; the safety envelope
-  around the single egress AC-4 now permits — ties to AC-17 / AC-22; sequenced in M2-1, harness edits
-  HUMAN-REQUIRED.)*
+  around the single egress AC-4 now permits — ties to AC-17 / AC-22; sequenced after the model-asset **publication**
+  pre-step in M2-1, harness edits HUMAN-REQUIRED.)*
 
 ### 4.1 AC traceability table (AC-id → feature → test kind)
 
@@ -426,7 +446,7 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 | **AC-21** | M2 · ADR-0027 | Multilingual coverage + WER floor (Spanish + others), empirically set on real samples, offline-measured | integration / perf |
 | **AC-22** | M2 · ADR-0027 | User control / opt-in over transcription (consent; privacy) | integration / e2e |
 | **AC-23** | M2 · ADR-0027 | NOTICES / attribution for bundled binary + **downloaded** model weights (provenance) | integration / packaging |
-| **AC-24** | M2 · ADR-0027 | Model-download integrity & resilience — SHA-256 verify-before-use, atomic, resumable, corrupt→refetch, offline-safe; only egress = pinned data-free host | integration + scoped AC-4 harness |
+| **AC-24** | M2 · ADR-0027 | Model-download integrity & resilience — SHA-256 verify-before-use **+ re-verify before each spawn**, atomic, resumable, corrupt→refetch, offline-safe; only egress = the **exact pinned-URL `GET`** (method + URL + empty body), origin **+ redirect/CDN host**, asserted at `webRequest` + OS firewall (not the Node spies) | integration + scoped AC-4 harness |
 
 > **AC-17 … AC-24 are M2 (post-v1), proposed, and HUMAN-REQUIRED** — they activate only on @pedrofuentes sign-off of
 > ADR-0027 and must keep AC-1 … AC-16 green (cumulative regression). AC-4's **user-data** zero-egress is **never
