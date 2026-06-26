@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Groundwork for on-device transcription** (card #133, M2 · ADR-0027): the first step toward gently turning
+  a loved one's voice notes and videos into searchable, readable text — **entirely on your own computer**.
+  Kawsay can now decode any WhatsApp voice note (`.opus`), audio file, or video soundtrack into the exact
+  audio shape the upcoming on-device transcription engine needs (16 kHz mono), reusing the same bundled,
+  offline media tooling that already makes thumbnails — **no new downloads and no network access** (AC-4). A
+  recording with no sound, or one that is unreadable or corrupt, is quietly skipped and noted rather than
+  interrupting anything, and long recordings are given the time they need to finish instead of being cut off.
+  Your original files are never changed. This is internal groundwork only: the transcription itself — the
+  on-device model, the off-thread worker, and the opt-in controls — arrives in later steps.
 - **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new
   `.github/workflows/release.yml` builds Kawsay on native **macOS** and **Windows** runners and uploads the
   installers — the macOS `.dmg`/`.zip` (Apple Silicon + Intel) and the Windows `.exe` (NSIS) — as assets of a
