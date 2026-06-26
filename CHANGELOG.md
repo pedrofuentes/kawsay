@@ -308,6 +308,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Two small moments now stay calm instead of stalling silently. When you pick a folder or file with
+  **Browse**, if the chooser can't open for some reason, Kawsay keeps whatever you'd already typed and
+  shows a gentle note inviting you to type the path or try again — rather than doing nothing at all.
+  And while scrolling the **timeline**, if loading the next batch of memories hiccups, a quiet
+  "we couldn't load more just now — try again" appears beneath the memories you're already looking at,
+  so loading no longer just stops with no explanation. Everything already on screen stays put, and
+  nothing ever leaves your computer (#115, #101).
 - Importing is now crash-proof. If the background worker that reads your files hits a fault that even
   its own error handling cannot catch — a corrupt file that crashes a native decoder, an
   out-of-memory condition, or an unexpected shutdown — the app no longer crashes and the import no
