@@ -560,3 +560,78 @@ describe('createTranscriber (verify → extract → whisper → parse → cleanu
     expect(extractAudio.calls).toHaveLength(0);
   });
 });
+
+// ── real whisper-cli integration (OPTIONAL, self-gated) ─────────────────────
+//
+// An OPTIONAL real-binary integration test, mirroring audio-extract's gated
+// real-ffmpeg test. The per-arch `whisper-cli` and the ~488 MB `ggml-small.bin`
+// are NOT present in dev/CI, so this self-skips unless BOTH are resolvable via
+// `WHISPER_CLI_PATH` and `WHISPER_MODEL_PATH` pointing at real files on disk.
+// Where it runs, it proves the whole spawn leg end-to-end against the real
+// binary: our exact argv invokes whisper.cpp, it writes the `-oj` JSON sidecar,
+// and `parseWhisperJson` turns it into a typed transcript. Content is NOT
+// asserted (silence is non-deterministic across models) — only the typed shape.
+function resolveRealWhisperCli(): string | null {
+  const fromEnv = process.env.WHISPER_CLI_PATH;
+  if (fromEnv !== undefined && fromEnv.length > 0 && existsSync(fromEnv)) return fromEnv;
+  return null;
+}
+
+function resolveRealModel(): string | null {
+  const fromEnv = process.env.WHISPER_MODEL_PATH;
+  if (fromEnv !== undefined && fromEnv.length > 0 && existsSync(fromEnv)) return fromEnv;
+  return null;
+}
+
+const realWhisperCli = resolveRealWhisperCli();
+const realModel = resolveRealModel();
+
+describe.skipIf(realWhisperCli === null || realModel === null)(
+  'real whisper-cli transcription (gated, like audio-extract real-ffmpeg)',
+  () => {
+    it('runs the real whisper-cli with our argv and parses its -oj JSON into a typed transcript', async () => {
+      if (realWhisperCli === null || realModel === null) return; // unreachable; narrows the type
+      const scratch = tmp('whisper-real');
+      const wavPath = join(scratch, 'clip.wav');
+      // whisper's required input shape: 16 kHz mono PCM s16le (here, a brief silence).
+      writeFileSync(wavPath, makeMonoWav(16_000, 0.5));
+      const outputPrefix = join(scratch, 'clip');
+
+      await defaultRunWhisper(
+        realWhisperCli,
+        buildWhisperArgs({ modelPath: realModel, wavPath, outputPrefix }),
+        { timeoutMs: transcribeTimeoutMs(0.5) },
+      );
+
+      const jsonPath = `${outputPrefix}.json`;
+      expect(existsSync(jsonPath)).toBe(true);
+      const transcript = parseWhisperJson(JSON.parse(readFileSync(jsonPath, 'utf8')) as WhisperJson);
+      expect(typeof transcript.text).toBe('string');
+      expect(Array.isArray(transcript.segments)).toBe(true);
+      expect(transcript.language === null || typeof transcript.language === 'string').toBe(true);
+    });
+  },
+);
+
+/** A minimal 16 kHz mono PCM s16le WAV of `seconds` (silent) — whisper's input shape. */
+function makeMonoWav(rate: number, seconds: number): Buffer {
+  const channels = 1;
+  const bytesPerSample = 2;
+  const frames = Math.floor(rate * seconds);
+  const dataLen = frames * channels * bytesPerSample;
+  const buf = Buffer.alloc(44 + dataLen);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + dataLen, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20); // PCM
+  buf.writeUInt16LE(channels, 22);
+  buf.writeUInt32LE(rate, 24);
+  buf.writeUInt32LE(rate * channels * bytesPerSample, 28);
+  buf.writeUInt16LE(channels * bytesPerSample, 32);
+  buf.writeUInt16LE(8 * bytesPerSample, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataLen, 40);
+  return buf;
+}
