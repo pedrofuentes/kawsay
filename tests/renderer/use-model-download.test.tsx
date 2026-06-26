@@ -33,6 +33,17 @@ describe('useModelDownload', () => {
     expect(api.downloadTranscriptionModel).not.toHaveBeenCalled();
   });
 
+  it('stays calmly not-ready (no crash) when the model-status check fails', async () => {
+    const api = makeFakeApi({
+      isTranscriptionModelReady: vi.fn(() => Promise.reject(new Error('status failed'))),
+    });
+    const { result } = renderHook(() => useModelDownload(), { wrapper: wrapper(api) });
+
+    await waitFor(() => expect(result.current.status).toBe('idle'));
+    expect(result.current.ready).toBe(false);
+    expect(api.downloadTranscriptionModel).not.toHaveBeenCalled();
+  });
+
   it('enable() starts the download exactly once through the typed api', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { result } = renderHook(() => useModelDownload(), { wrapper: wrapper(api) });

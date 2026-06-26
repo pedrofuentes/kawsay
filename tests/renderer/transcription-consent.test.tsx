@@ -16,7 +16,7 @@ function setup(api: FakeApi = makeFakeApi()): { api: FakeApi; user: UserEvent; c
   return { api, user, container };
 }
 
-async function startDownloading(api: FakeApi, user: UserEvent): Promise<void> {
+async function startDownloading(user: UserEvent): Promise<void> {
   await user.click(await screen.findByRole('button', { name: /enable transcription/i }));
 }
 
@@ -43,7 +43,7 @@ describe('TranscriptionConsent — explains and asks before anything downloads (
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { user } = setup(api);
 
-    await startDownloading(api, user);
+    await startDownloading(user);
 
     expect(api.downloadTranscriptionModel).toHaveBeenCalledTimes(1);
   });
@@ -53,7 +53,7 @@ describe('TranscriptionConsent — calm progress while the model downloads', () 
   it('shows a percentage and byte counts in a polite live region', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { user } = setup(api);
-    await startDownloading(api, user);
+    await startDownloading(user);
 
     api.emitModelDownloadProgress(
       makeModelDownloadProgressEvent({
@@ -77,11 +77,23 @@ describe('TranscriptionConsent — calm progress while the model downloads', () 
   it('reaches a ready state when the download stream completes', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { user } = setup(api);
-    await startDownloading(api, user);
+    await startDownloading(user);
 
     api.emitModelDownloadProgress(makeModelDownloadProgressEvent({ phase: 'done' }));
 
     expect(await screen.findByText(/transcription is ready/i)).toBeInTheDocument();
+  });
+
+  it('reassures the user while the finished download is being checked (verifying)', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    const { user } = setup(api);
+    await startDownloading(user);
+
+    api.emitModelDownloadProgress(makeModelDownloadProgressEvent({ phase: 'verifying' }));
+
+    expect(await screen.findByText(/almost there/i)).toBeInTheDocument();
+    // Still calm and on-device — not yet "ready", no raw status.
+    expect(screen.queryByText(/transcription is ready/i)).not.toBeInTheDocument();
   });
 });
 
@@ -89,7 +101,7 @@ describe('TranscriptionConsent — graceful offline / error handling (never a sc
   it('shows a gentle, plain-language error with a retry — no raw codes', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { user } = setup(api);
-    await startDownloading(api, user);
+    await startDownloading(user);
 
     api.emitModelDownloadProgress(
       makeModelDownloadProgressEvent({
@@ -109,7 +121,7 @@ describe('TranscriptionConsent — graceful offline / error handling (never a sc
     const download = vi.fn(started);
     const api = makeFakeApi({ downloadTranscriptionModel: download });
     const { user } = setup(api);
-    await startDownloading(api, user);
+    await startDownloading(user);
 
     api.emitModelDownloadProgress(
       makeModelDownloadProgressEvent({
@@ -125,7 +137,7 @@ describe('TranscriptionConsent — graceful offline / error handling (never a sc
   it('translates a disk-full failure into calm, non-technical guidance', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { user } = setup(api);
-    await startDownloading(api, user);
+    await startDownloading(user);
 
     api.emitModelDownloadProgress(
       makeModelDownloadProgressEvent({
@@ -136,6 +148,39 @@ describe('TranscriptionConsent — graceful offline / error handling (never a sc
 
     expect(await screen.findByText(/room|space/i)).toBeInTheDocument();
     expect(screen.queryByText(/ENOSPC/)).not.toBeInTheDocument();
+  });
+
+  it('explains a corrupted download gently and promises a fresh copy (integrity)', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    const { user } = setup(api);
+    await startDownloading(user);
+
+    api.emitModelDownloadProgress(
+      makeModelDownloadProgressEvent({
+        phase: 'error',
+        error: { kind: 'integrity', message: 'sha256 checksum mismatch', retryable: true },
+      }),
+    );
+
+    expect(await screen.findByText(/in one piece|fresh copy/i)).toBeInTheDocument();
+    expect(screen.queryByText(/sha256|checksum/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('falls back to a reassuring message for any other interruption', async () => {
+    const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
+    const { user } = setup(api);
+    await startDownloading(user);
+
+    api.emitModelDownloadProgress(
+      makeModelDownloadProgressEvent({
+        phase: 'error',
+        error: { kind: 'http', message: 'HTTP 503 Service Unavailable', retryable: true },
+      }),
+    );
+
+    expect(await screen.findByText(/something interrupted the download/i)).toBeInTheDocument();
+    expect(screen.queryByText(/503/)).not.toBeInTheDocument();
   });
 });
 
@@ -180,7 +225,7 @@ describe('TranscriptionConsent — accessibility (WCAG 2.1 AA)', () => {
   it('downloading has no axe violations', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { user, container } = setup(api);
-    await startDownloading(api, user);
+    await startDownloading(user);
     api.emitModelDownloadProgress(
       makeModelDownloadProgressEvent({ phase: 'downloading', bytesDownloaded: 1_000_000, totalBytes: 488_636_416 }),
     );
@@ -191,7 +236,7 @@ describe('TranscriptionConsent — accessibility (WCAG 2.1 AA)', () => {
   it('error has no axe violations', async () => {
     const api = makeFakeApi({ downloadTranscriptionModel: vi.fn(started) });
     const { user, container } = setup(api);
-    await startDownloading(api, user);
+    await startDownloading(user);
     api.emitModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
