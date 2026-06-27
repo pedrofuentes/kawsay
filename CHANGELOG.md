@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Security
+
+### Removed
+
+## [0.2.0] - 2026-06-27
+
+### Added
+
 - **Read your memories' words on screen — and find them by what was said** (card #136, M2 · ADR-0027,
   **AC-13 / AC-19 / AC-22**): the last piece a grieving person actually sees. A calm **Start transcribing**
   control turns transcription loose on the library, with **gentle live progress** in a polite live region
@@ -143,19 +155,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   time they need to finish instead of being cut off.
   Your original files are never changed. This is internal groundwork only: the transcription itself — the
   on-device model, the off-thread worker, and the opt-in controls — arrives in later steps.
-- **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new
-  `.github/workflows/release.yml` builds Kawsay on native **macOS** and **Windows** runners and uploads the
-  installers — the macOS `.dmg`/`.zip` (Apple Silicon + Intel) and the Windows `.exe` (NSIS) — as assets of a
-  **GitHub Release** for a pushed `v*` tag (e.g. `v0.1.0`). It reuses CI's exact toolchain (Node 22, the
-  SHA-pinned pnpm/Node setup) and electron-builder's own GitHub publishing, rebuilding the native
-  `better-sqlite3` for Electron's ABI just as `pnpm dist` does. **v1 publishes UNSIGNED** (ADR-0025):
-  code-signing auto-discovery is turned off so the build produces unsigned artifacts instead of failing to
-  sign — the one-time "unidentified developer" prompt and deferred signing/notarization are unchanged. The
-  publish runs in a protected `release` environment that **blocks on a required reviewer** (@pedrofuentes),
-  keeping the first production publish a deliberate human act; the workflow token is scoped to
-  `contents: write` (create the release + upload assets) and nothing more, every action is pinned to a full
-  commit SHA, and `package.json`'s `dist*` scripts stay `--publish never` so no local/automated build can
-  ever publish. No new dependencies and no runtime network egress are added (AC-4 untouched) — see ADR-0026.
 - **Transcription groundwork — the `whisper-cli` engine, built from source in CI** (card #129, ADR-0027,
   AC-23): the speech-to-text engine Kawsay will use later is the MIT-licensed **whisper.cpp** `whisper-cli`,
   pinned to **`v1.9.1`** (commit `f049fff…`) and **compiled from source on the CI runners** — macOS
@@ -169,6 +168,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   there is no transcription feature yet, and **no speech model is bundled** (the model is a separate,
   opt-in download handled later). No new runtime dependencies and **no network egress** are added
   (AC-4 untouched); the whisper.cpp attribution is recorded in `NOTICES.md`.
+
+### Changed
+
+- **Docs / architecture (no code, no user-facing change):** revised the **M2 on-device transcription** gate
+  artifact after the cofounder **locked the three open decisions, pivoting model delivery**. **ADR-0027** now
+  specifies whisper.cpp via a **bundled** per-arch `whisper-cli` binary **+ an opt-in, on-demand,
+  checksum-verified download of the multilingual `small` `ggml` model** (superseding the prior "bundle, never
+  download" stance within the same ADR). Locked: **model = `small`**, **policy = opt-in**, **delivery = the app
+  auto-downloads the model on first opt-in** (bundling rejected as "a huge app to download and install"; manual
+  import rejected as too much friction for a grieving, non-technical user). The **binary stays bundled and the
+  installer stays ~200 MB**; the model is a one-time ~465 MB download to the app's data dir, **SHA-256-verified
+  before use** (atomic, resumable, corrupt→refetch; re-verified before each transcription run). **Your memories
+  never leave this computer** — transcription
+  runs 100% locally and no audio/memory ever egresses; the previously-absolute zero-egress is **narrowed** to
+  permit **exactly one** outbound: a **data-free** `GET` of the public model file at an **exact pinned URL**, issued
+  through **Electron `net.request` on the guarded session** so `network-guard.ts`'s `webRequest` handler is the real
+  chokepoint (matching method + exact URL + empty body — not merely a host), allowing the origin **+ its
+  signed-CDN redirect target** (GitHub `release-assets.githubusercontent.com`, or the HF fallback `*.cdn.hf.co`).
+  Because nothing publishes the model today, a **publication pre-step** (verify `sha256`/size → publish a `models-v1`
+  Release asset with NOTICES, publish-time `hash==pinned`-checked) is sequenced **before** the downloader. Updates
+  the **PRD acceptance addendum (AC-17 … AC-24)** — AC-17 reframed (zero
+  user-data egress; only egress = the model fetch), AC-22 ties the download behind opt-in, new **AC-24** (download
+  integrity/resilience — exact-URL request-shape assertion, on-disk re-verify, disk-full/second-instance/expiring-CDN
+  edge cases), AC-23 NOTICES + publication for the downloaded weights — and the **M2 increment breakdown** in
+  `ROADMAP.md` (M2-1 = publish-then-download manager + integrity + consent UX + scoped `webRequest` allowlist; M2-7 =
+  zero user-data egress everywhere + the one exact-URL `GET`). The scoped egress touches the **`network-guard`
+  policy + the AC-4 harness (`ac4-egress.yml`)** → **🚨 HUMAN-REQUIRED**; this revised ADR is the gate artifact for
+  a **final cofounder confirm of the host + checksum + allowlist mechanism** before any building. No dependencies
+  added; renderer CSP `connect-src 'none'` unchanged.
+
+### Fixed
+
+- The release workflow now publishes **exactly one** consolidated GitHub Release per tag, with every
+  platform's installers attached. Previously the macOS and Windows runners each ran electron-builder's
+  publish step independently and **raced** to create the release, producing two split/duplicate releases
+  for `v0.1.0` — each carrying only its own platform's assets — which had to be merged by hand. The
+  macOS + Windows matrix now only **builds** (`electron-builder --publish never`) and uploads its
+  installers as workflow artifacts; a single, **human-gated** publish job (the protected `release`
+  environment, @pedrofuentes approval) then collects them and creates one release carrying the macOS
+  `.dmg`/`.zip`, the Windows `.exe`, the blockmaps, and both platforms' `latest*.yml` auto-update
+  metadata. No matrix leg can create a release, so the race cannot recur (#122). No new app dependencies
+  and no runtime network egress (AC-4 untouched); the added artifact-upload/-download and
+  release-publish GitHub Actions are pinned to full commit SHAs like every other action.
+- Two small moments now stay calm instead of stalling silently. When you pick a folder or file with
+  **Browse**, if the chooser can't open for some reason, Kawsay keeps whatever you'd already typed and
+  shows a gentle note inviting you to type the path or try again — rather than doing nothing at all.
+  And while scrolling the **timeline**, if loading the next batch of memories hiccups, a quiet
+  "we couldn't load more just now — try again" appears beneath the memories you're already looking at,
+  so loading no longer just stops with no explanation. Everything already on screen stays put, and
+  nothing ever leaves your computer (#115, #101).
+
+### Security
+
+### Removed
+
+## [0.1.0] - 2026-06-25
+
+### Added
+
+- **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new
+  `.github/workflows/release.yml` builds Kawsay on native **macOS** and **Windows** runners and uploads the
+  installers — the macOS `.dmg`/`.zip` (Apple Silicon + Intel) and the Windows `.exe` (NSIS) — as assets of a
+  **GitHub Release** for a pushed `v*` tag (e.g. `v0.1.0`). It reuses CI's exact toolchain (Node 22, the
+  SHA-pinned pnpm/Node setup) and electron-builder's own GitHub publishing, rebuilding the native
+  `better-sqlite3` for Electron's ABI just as `pnpm dist` does. **v1 publishes UNSIGNED** (ADR-0025):
+  code-signing auto-discovery is turned off so the build produces unsigned artifacts instead of failing to
+  sign — the one-time "unidentified developer" prompt and deferred signing/notarization are unchanged. The
+  publish runs in a protected `release` environment that **blocks on a required reviewer** (@pedrofuentes),
+  keeping the first production publish a deliberate human act; the workflow token is scoped to
+  `contents: write` (create the release + upload assets) and nothing more, every action is pinned to a full
+  commit SHA, and `package.json`'s `dist*` scripts stay `--publish never` so no local/automated build can
+  ever publish. No new dependencies and no runtime network egress are added (AC-4 untouched) — see ADR-0026.
 - Packaged, installable app (card P1, AC-5): Kawsay can now be built into real installers — a **macOS
   `.dmg`** (and `.zip`) for Apple Silicon and Intel, and a **Windows `.exe`** (NSIS) — with one command,
   `pnpm dist`. The native catalogue engine (`better-sqlite3`, bumped to **12.11.1** for Electron 42
@@ -453,53 +524,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Docs / architecture (no code, no user-facing change):** revised the **M2 on-device transcription** gate
-  artifact after the cofounder **locked the three open decisions, pivoting model delivery**. **ADR-0027** now
-  specifies whisper.cpp via a **bundled** per-arch `whisper-cli` binary **+ an opt-in, on-demand,
-  checksum-verified download of the multilingual `small` `ggml` model** (superseding the prior "bundle, never
-  download" stance within the same ADR). Locked: **model = `small`**, **policy = opt-in**, **delivery = the app
-  auto-downloads the model on first opt-in** (bundling rejected as "a huge app to download and install"; manual
-  import rejected as too much friction for a grieving, non-technical user). The **binary stays bundled and the
-  installer stays ~200 MB**; the model is a one-time ~465 MB download to the app's data dir, **SHA-256-verified
-  before use** (atomic, resumable, corrupt→refetch; re-verified before each transcription run). **Your memories
-  never leave this computer** — transcription
-  runs 100% locally and no audio/memory ever egresses; the previously-absolute zero-egress is **narrowed** to
-  permit **exactly one** outbound: a **data-free** `GET` of the public model file at an **exact pinned URL**, issued
-  through **Electron `net.request` on the guarded session** so `network-guard.ts`'s `webRequest` handler is the real
-  chokepoint (matching method + exact URL + empty body — not merely a host), allowing the origin **+ its
-  signed-CDN redirect target** (GitHub `release-assets.githubusercontent.com`, or the HF fallback `*.cdn.hf.co`).
-  Because nothing publishes the model today, a **publication pre-step** (verify `sha256`/size → publish a `models-v1`
-  Release asset with NOTICES, publish-time `hash==pinned`-checked) is sequenced **before** the downloader. Updates
-  the **PRD acceptance addendum (AC-17 … AC-24)** — AC-17 reframed (zero
-  user-data egress; only egress = the model fetch), AC-22 ties the download behind opt-in, new **AC-24** (download
-  integrity/resilience — exact-URL request-shape assertion, on-disk re-verify, disk-full/second-instance/expiring-CDN
-  edge cases), AC-23 NOTICES + publication for the downloaded weights — and the **M2 increment breakdown** in
-  `ROADMAP.md` (M2-1 = publish-then-download manager + integrity + consent UX + scoped `webRequest` allowlist; M2-7 =
-  zero user-data egress everywhere + the one exact-URL `GET`). The scoped egress touches the **`network-guard`
-  policy + the AC-4 harness (`ac4-egress.yml`)** → **🚨 HUMAN-REQUIRED**; this revised ADR is the gate artifact for
-  a **final cofounder confirm of the host + checksum + allowlist mechanism** before any building. No dependencies
-  added; renderer CSP `connect-src 'none'` unchanged.
-
 ### Fixed
 
-- The release workflow now publishes **exactly one** consolidated GitHub Release per tag, with every
-  platform's installers attached. Previously the macOS and Windows runners each ran electron-builder's
-  publish step independently and **raced** to create the release, producing two split/duplicate releases
-  for `v0.1.0` — each carrying only its own platform's assets — which had to be merged by hand. The
-  macOS + Windows matrix now only **builds** (`electron-builder --publish never`) and uploads its
-  installers as workflow artifacts; a single, **human-gated** publish job (the protected `release`
-  environment, @pedrofuentes approval) then collects them and creates one release carrying the macOS
-  `.dmg`/`.zip`, the Windows `.exe`, the blockmaps, and both platforms' `latest*.yml` auto-update
-  metadata. No matrix leg can create a release, so the race cannot recur (#122). No new app dependencies
-  and no runtime network egress (AC-4 untouched); the added artifact-upload/-download and
-  release-publish GitHub Actions are pinned to full commit SHAs like every other action.
-- Two small moments now stay calm instead of stalling silently. When you pick a folder or file with
-  **Browse**, if the chooser can't open for some reason, Kawsay keeps whatever you'd already typed and
-  shows a gentle note inviting you to type the path or try again — rather than doing nothing at all.
-  And while scrolling the **timeline**, if loading the next batch of memories hiccups, a quiet
-  "we couldn't load more just now — try again" appears beneath the memories you're already looking at,
-  so loading no longer just stops with no explanation. Everything already on screen stays put, and
-  nothing ever leaves your computer (#115, #101).
 - Importing is now crash-proof. If the background worker that reads your files hits a fault that even
   its own error handling cannot catch — a corrupt file that crashes a native decoder, an
   out-of-memory condition, or an unexpected shutdown — the app no longer crashes and the import no
