@@ -482,6 +482,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The release workflow now publishes **exactly one** consolidated GitHub Release per tag, with every
+  platform's installers attached. Previously the macOS and Windows runners each ran electron-builder's
+  publish step independently and **raced** to create the release, producing two split/duplicate releases
+  for `v0.1.0` — each carrying only its own platform's assets — which had to be merged by hand. The
+  macOS + Windows matrix now only **builds** (`electron-builder --publish never`) and uploads its
+  installers as workflow artifacts; a single, **human-gated** publish job (the protected `release`
+  environment, @pedrofuentes approval) then collects them and creates one release carrying the macOS
+  `.dmg`/`.zip`, the Windows `.exe`, the blockmaps, and both platforms' `latest*.yml` auto-update
+  metadata. No matrix leg can create a release, so the race cannot recur (#122). No new app dependencies
+  and no runtime network egress (AC-4 untouched); the added artifact-upload/-download and
+  release-publish GitHub Actions are pinned to full commit SHAs like every other action.
 - Two small moments now stay calm instead of stalling silently. When you pick a folder or file with
   **Browse**, if the chooser can't open for some reason, Kawsay keeps whatever you'd already typed and
   shows a gentle note inviting you to type the path or try again — rather than doing nothing at all.

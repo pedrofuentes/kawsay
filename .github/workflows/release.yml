@@ -1,19 +1,28 @@
 name: Release
 
-# Build the v1 installers on native runners and publish them to GitHub Releases
-# (AC-5 · ADR-0007/0023/0026). Each runner builds with electron-builder and
-# publishes via its native GitHub provider (`--publish always`, configured in
-# electron-builder.yml): macOS .dmg + .zip (arm64 + x64) and Windows NSIS .exe
-# (x64). The native catalog engine (better-sqlite3) is rebuilt from source for
-# the Electron ABI during packaging — node-gyp needs Python (see below).
+# Build the installers on native runners, then publish them as ONE GitHub Release
+# (AC-5 · ADR-0007/0023/0026). Restructured to fix #122: previously the macOS and
+# Windows matrix legs each published independently with electron-builder's `always`
+# policy and RACED to create the GitHub Release for the tag, producing two split/
+# duplicate releases (each carrying only its own platform's assets — I consolidated
+# v0.1.0 by hand).
+#
+# Now the OS matrix only BUILDS (`electron-builder --publish never`) and uploads
+# each platform's installers + update metadata as workflow artifacts; a single
+# `publish` job (needs: build) downloads them all and creates exactly ONE release
+# with every asset via softprops/action-gh-release. No matrix leg ever creates a
+# release, so the race cannot recur. The native catalog engine (better-sqlite3) is
+# rebuilt from source for the Electron ABI during packaging — node-gyp needs
+# Python (see below).
 #
 # v1 ships UNSIGNED (ADR-0025): macOS code-signing/notarization is a deferred,
 # human-gated step, so signing auto-discovery is turned OFF and electron-builder
 # produces unsigned artifacts instead of failing while trying to sign.
 #
-# The publish job runs in the protected `release` GitHub Environment, so the
-# first production publish blocks on a required reviewer (@pedrofuentes) — the
-# HUMAN-REQUIRED gate from MISSION §9 / PRD AC-5. The workflow token is scoped to
+# The single `publish` job runs in the protected `release` GitHub Environment, so
+# the production publish blocks on a required reviewer (@pedrofuentes) — the
+# HUMAN-REQUIRED gate from MISSION §9 / PRD AC-5. The matrix build legs hold only
+# the default least-privilege token; ONLY the publish job widens to
 # `contents: write` (create the release + upload assets) and nothing more.
 
 on:
@@ -21,7 +30,7 @@ on:
   push:
     tags:
       - 'v*'
-  # Manual fallback (electron-builder derives the tag from package.json version).
+  # Manual fallback (the tag is derived from package.json version — see Resolve tag).
   workflow_dispatch:
 
 # Never cancel an in-progress release, and serialize runs that target the same
@@ -30,22 +39,19 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# Least privilege at the top level; the publish job widens to contents: write.
+# Least privilege at the top level; only the publish job widens to contents: write.
 permissions:
   contents: read
 
 jobs:
-  publish:
-    name: Build & publish (${{ matrix.os }})
+  build:
+    name: Build installers (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    # Required-reviewer gate for the first production publish (ADR-0007, AC-5).
-    environment: release
-    # Create the GitHub Release + upload the installers as assets — nothing more.
-    permissions:
-      contents: write
     strategy:
-      # Build/publish every OS even if one fails, so a partial release is visible.
+      # Build every OS even if one fails, so all platform errors surface in one run.
+      # The publish job needs ALL legs to succeed (default `needs` semantics), so a
+      # failed leg blocks the single release instead of shipping a partial one.
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
@@ -117,15 +123,115 @@ jobs:
             echo "ok: $f ($(wc -c <"$f") bytes)"
           done
 
-      - name: Package & publish to GitHub Releases
-        # electron-builder reads electron-builder.yml: it builds the per-OS targets,
-        # rebuilds the native module for Electron's ABI, and uploads the installers
-        # as assets of the GitHub Release for the tag via its `github` provider.
-        run: pnpm exec electron-builder --publish always
+      - name: Package installers (no publish)
+        # electron-builder reads electron-builder.yml: it builds the per-OS targets
+        # and rebuilds the native module for Electron's ABI. `--publish never` means
+        # NO leg creates or uploads a GitHub Release (this is the #122 fix); it still
+        # writes the installers AND the latest*.yml / blockmap auto-update metadata
+        # into dist/ (that metadata is generated whenever a publish provider is
+        # configured, independent of the publish policy) for the publish job to ship.
+        run: pnpm exec electron-builder --publish never
         env:
-          # GitHub Releases publish token (the repo-scoped Actions token).
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # UNSIGNED v1 (ADR-0025): do NOT auto-discover a macOS signing identity.
           # Without this, electron-builder would try to sign and fail the build;
           # v1 deliberately ships unsigned — signing/notarization is deferred.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload installers
+        # Hand this leg's installers + update metadata to the single publish job.
+        # Only the distributables — NOT the multi-hundred-MB unpacked app dirs.
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kawsay-dist-${{ matrix.os }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest*.yml
+          # Fail the leg if it produced nothing to publish (defence in depth).
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish consolidated GitHub Release
+    needs: [build]
+    # The publisher only collects artifacts + creates the release (no native build),
+    # so it runs on the cheapest hosted runner; the whisper-cli build script is NOT
+    # invoked here (it is macOS/Windows-only and already ran on the build legs).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Required-reviewer gate for the production publish (ADR-0007, AC-5): the single
+    # release is created ONLY after @pedrofuentes approves this job. This is the one
+    # HUMAN-REQUIRED gate, and it guards the one job that actually publishes.
+    environment: release
+    # Create the GitHub Release + upload the installers as assets — nothing more.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        # Needed only to read package.json for the workflow_dispatch tag fallback.
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve release tag
+        id: tag
+        # On a tag push the ref IS the tag; on a manual dispatch derive it from the
+        # package.json version (mirrors the prior electron-builder behaviour). Read
+        # the ref via env, never interpolated into the script, to avoid injection.
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+          else
+            tag="v$(node -p "require('./package.json').version")"
+          fi
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'Resolved release tag: %s\n' "$tag"
+
+      - name: Download all platform installers
+        # Collect every build leg's artifacts into one flat directory.
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-assets
+          pattern: kawsay-dist-*
+          merge-multiple: true
+
+      - name: Verify collected release assets
+        # Provably complete: assert BOTH platforms' installers AND the cross-platform
+        # auto-update metadata are present before publishing, so a missing leg fails
+        # here instead of shipping the partial release that #122 produced.
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd release-assets
+          echo "Collected release assets:"
+          ls -la
+          dmgs=(*.dmg)
+          zips=(*.zip)
+          exes=(*.exe)
+          [ "${#dmgs[@]}" -ge 1 ] || { echo "missing macOS .dmg" >&2; exit 1; }
+          [ "${#zips[@]}" -ge 1 ] || { echo "missing macOS .zip" >&2; exit 1; }
+          [ "${#exes[@]}" -ge 1 ] || { echo "missing Windows .exe" >&2; exit 1; }
+          [ -f latest-mac.yml ] || { echo "missing latest-mac.yml" >&2; exit 1; }
+          [ -f latest.yml ] || { echo "missing latest.yml (Windows update metadata)" >&2; exit 1; }
+          echo "ok: macOS + Windows installers and auto-update metadata all present"
+
+      - name: Publish single consolidated GitHub Release
+        # ONE release for the tag carrying every platform's assets (dmg/zip/exe,
+        # blockmaps, latest*.yml). No matrix leg creates a release, so the #122
+        # publish race cannot recur. fail_on_unmatched_files guards against an empty
+        # upload. The token is the repo-scoped Actions token (contents: write).
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          fail_on_unmatched_files: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
