@@ -47,7 +47,13 @@ const packageJson = JSON.parse(readFileSync(repoRoot('package.json'), 'utf8')) a
 // race-free shape — a build-only OS matrix that uploads artifacts plus a SINGLE,
 // human-gated publish job that downloads them and creates exactly ONE release —
 // so the race cannot silently regress.
-const releaseYml = readFileSync(repoRoot('.github/workflows/release.yml'), 'utf8');
+// Normalize CRLF→LF once at read so the `\n`-based regex assertions below match
+// on a Windows (CRLF) checkout too. Without this, e.g. `permissions:\r\n  contents:
+// read` fails `/permissions:\n {2}contents: read/` only on windows-latest CI (#169).
+const releaseYml = readFileSync(repoRoot('.github/workflows/release.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n',
+);
 
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
