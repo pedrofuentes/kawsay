@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Security
+
+### Removed
+
+## [0.2.0] - 2026-06-27
+
+### Added
+
 - **Read your memories' words on screen — and find them by what was said** (card #136, M2 · ADR-0027,
   **AC-13 / AC-19 / AC-22**): the last piece a grieving person actually sees. A calm **Start transcribing**
   control turns transcription loose on the library, with **gentle live progress** in a polite live region
