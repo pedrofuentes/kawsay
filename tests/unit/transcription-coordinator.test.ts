@@ -168,6 +168,25 @@ describe('createTranscriptionCoordinator (off-thread host orchestration — AC-1
     expect(coordinator.cancel(UUID)).toBe(false); // already finished
   });
 
+  it('rejects a second start with an already-active jobId rather than orphaning the first worker', () => {
+    const workers = [fakeHandle(), fakeHandle()];
+    let spawned = 0;
+    const coordinator = createTranscriptionCoordinator({
+      spawn: () => workers[spawned++].handle,
+      emit: () => {},
+    });
+
+    coordinator.start(job());
+    // A duplicate jobId would otherwise overwrite the handle map and ORPHAN the
+    // first worker (it is never terminated). The guard refuses the duplicate
+    // loudly — the first worker keeps running untouched, and no second worker is
+    // spawned to be leaked.
+    expect(() => coordinator.start(job())).toThrow(/already active/i);
+    expect(spawned).toBe(1); // the second worker was never spawned
+    expect(workers[0].terminations).toBe(0); // first worker still running — not orphaned
+    expect(coordinator.active()).toEqual([UUID]); // exactly one active job for the id
+  });
+
   it('disposeAll terminates every in-flight worker (window-close teardown)', () => {
     const workers = [fakeHandle(), fakeHandle()];
     let i = 0;

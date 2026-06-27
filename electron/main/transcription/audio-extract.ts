@@ -263,7 +263,9 @@ function confinedWavPath(scratchDir: string, key: string): string {
  * stream" / "matches no streams" — a graceful skip, not a crash; everything else
  * (corrupt, truncated, missing, unreadable) is a generic decode failure.
  */
-export function classifyExtractFailure(stderr: string): Exclude<AudioExtractReason, 'timed-out'> {
+export function classifyExtractFailure(
+  stderr: string,
+): Exclude<AudioExtractReason, 'timed-out' | 'scratch-io'> {
   if (/does not contain any stream|matches no streams|Output file is empty/i.test(stderr)) {
     return 'no-audio-stream';
   }

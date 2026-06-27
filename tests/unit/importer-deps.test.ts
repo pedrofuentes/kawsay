@@ -526,6 +526,21 @@ describe('assertLocalMediaPath (subprocess input must be a local file — AC-4, 
       expect(() => assertLocalMediaPath(p)).toThrow(/local file/i);
     }
   });
+
+  it('refuses Windows UNC and device/namespace paths (an SMB/CIFS share egresses)', () => {
+    // A UNC path (`\\host\share\…` or its forward-slash `//host/share/…` form) and
+    // a device/namespace path (`\\.\dev`, `\\?\C:\…`) all begin with two leading
+    // separators; ffmpeg/ffprobe would happily reach a remote SMB/CIFS share or a
+    // device through them, defeating the zero-egress guarantee. Refuse them.
+    for (const p of [
+      '\\\\evil-host\\share\\clip.mp4',
+      '//evil-host/share/clip.mp4',
+      '\\\\.\\PhysicalDrive0',
+      '\\\\?\\C:\\Windows\\System32\\clip.mp4',
+    ]) {
+      expect(() => assertLocalMediaPath(p)).toThrow(/local file/i);
+    }
+  });
 });
 
 describe('createImporterDeps (composition root for the sandboxed deps)', () => {

@@ -272,6 +272,45 @@ describe('ipcContract — catalog:getTranscript (#136: an item’s transcript by
       resOk(CATALOG_GET_TRANSCRIPT, { status: 'pending', language: null, text: null, segments: [], extra: 1 }),
     ).toBe(false);
   });
+
+  it('bounds the transcript text and segment count (defence-in-depth caps, #164)', () => {
+    // A legitimately long recording (~1 MB of words, 1k segments) still crosses.
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'a'.repeat(1_000_000),
+        segments: Array.from({ length: 1_000 }, () => ({ startMs: 0, endMs: 1, text: 'a' })),
+      }),
+    ).toBe(true);
+    // …but an adversarial multi-megabyte text is refused.
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'a'.repeat(8 * 1024 * 1024 + 1),
+        segments: [],
+      }),
+    ).toBe(false);
+    // …as is an absurdly long segment list,
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'hi',
+        segments: Array.from({ length: 200_001 }, () => ({ startMs: 0, endMs: 1, text: 'a' })),
+      }),
+    ).toBe(false);
+    // …and a single oversized segment text.
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'done',
+        language: 'es',
+        text: 'hi',
+        segments: [{ startMs: 0, endMs: 1, text: 'a'.repeat(8 * 1024 * 1024 + 1) }],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('ipcContract — import:start / import:cancel', () => {
@@ -502,6 +541,30 @@ describe('ipcContract — transcription:start / status / cancel (#157, gated run
       }),
     ).toBe(false);
     expect(resOk(TRANSCRIPTION_START, { outcome: 'started', reason: null })).toBe(false);
+  });
+
+  it('start ties reason to outcome (a discriminated union, not an independent field) (#160)', () => {
+    // A non-refused outcome must carry reason: null; only `refused` may name a
+    // refusal reason. The previous flat schema let any reason pair with any
+    // outcome, so {started, not-opted-in} wrongly validated.
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'started', reason: 'not-opted-in', counts })).toBe(
+      false,
+    );
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'idle', reason: 'model-not-ready', counts })).toBe(
+      false,
+    );
+    // And a refusal must actually carry a reason — null is not a valid refusal.
+    expect(resOk(TRANSCRIPTION_START, { outcome: 'refused', reason: null, counts })).toBe(false);
+  });
+
+  it('start rejects an inFlight above 1 — the worker runs items serially (#160)', () => {
+    expect(
+      resOk(TRANSCRIPTION_START, {
+        outcome: 'started',
+        reason: null,
+        counts: { total: 3, transcribed: 0, failed: 0, skipped: 0, inFlight: 2 },
+      }),
+    ).toBe(false);
   });
 
   it('status returns the run state and counts', () => {

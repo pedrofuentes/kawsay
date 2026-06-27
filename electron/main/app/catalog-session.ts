@@ -256,12 +256,33 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       if (status !== 'done') {
         return transcriptViewSchema.parse({ status, language: null, text: null, segments: [] });
       }
-      const record = transcripts.loadTranscript(input.id);
+      // A `done` item should have a readable transcript row. If the row is missing
+      // (a torn write) or its stored segments JSON is corrupt (loadTranscript
+      // throws), don't crash the read or surface a raw error to the calm item view:
+      // log a main-process diagnostic and fall back to a non-done view so the UI
+      // shows its gentle "not transcribed yet" state instead (#164).
+      let record: ReturnType<typeof transcripts.loadTranscript>;
+      try {
+        record = transcripts.loadTranscript(input.id);
+      } catch (error) {
+        console.warn(
+          '[kawsay] item is marked done but its transcript could not be read; showing a non-done view. item:',
+          input.id,
+          error,
+        );
+        return transcriptViewSchema.parse({ status: 'pending', language: null, text: null, segments: [] });
+      }
+      if (record === null) {
+        console.warn(
+          `[kawsay] item ${input.id} is marked done but has no transcript row; showing a non-done view`,
+        );
+        return transcriptViewSchema.parse({ status: 'pending', language: null, text: null, segments: [] });
+      }
       return transcriptViewSchema.parse({
         status,
-        language: record?.language ?? null,
-        text: record?.text ?? null,
-        segments: record?.segments ?? [],
+        language: record.language ?? null,
+        text: record.text ?? null,
+        segments: record.segments ?? [],
       });
     },
     beginImport(input) {

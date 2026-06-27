@@ -164,31 +164,43 @@ export function createTranscriptionOrchestrator(
   function settleItem(outcome: TranscriptionItemOutcome): void {
     if (library === null) return;
     const action = classify(outcome.status);
+
+    // The terminal, COUNTABLE status this item settles as — or null for an action
+    // that records nothing: 'ignored' (cancelled / skipped-existing), or a
+    // 'transcribed' action with no transcript payload to persist.
+    let settled: TranscriptionItemStatusDTO | null = null;
+    if (action === 'transcribed' && outcome.transcript !== null) settled = 'transcribed';
+    else if (action === 'failed') settled = 'failed';
+    else if (action === 'skipped') settled = 'skipped';
+    if (settled === null) return;
+
     try {
-      if (action === 'transcribed' && outcome.transcript !== null) {
+      if (settled === 'transcribed' && outcome.transcript !== null) {
         library.saveTranscript({
           itemId: outcome.id,
           text: outcome.transcript.text,
           language: outcome.transcript.language,
           segments: outcome.transcript.segments,
         });
-        counts = { ...counts, transcribed: counts.transcribed + 1 };
-        lastItem = { id: outcome.id, status: 'transcribed' };
-      } else if (action === 'failed') {
+      } else if (settled === 'failed') {
         library.recordStatus(outcome.id, 'failed');
-        counts = { ...counts, failed: counts.failed + 1 };
-        lastItem = { id: outcome.id, status: 'failed' };
-      } else if (action === 'skipped') {
+      } else {
         library.recordStatus(outcome.id, 'skipped');
-        counts = { ...counts, skipped: counts.skipped + 1 };
-        lastItem = { id: outcome.id, status: 'skipped' };
       }
-      // 'ignored' (cancelled / skipped-existing) ⇒ no persist, no count change.
     } catch {
       // AC-20 resilience: a persistence failure on ONE item must never abort the
-      // run. The status stays whatever it was (re-tried on the next run); the
-      // batch carries on to the next item.
+      // run. The on-disk status is left unchanged (retried, idempotently, on the
+      // next run). We still COUNT it as settled below so the terminal snapshot
+      // reaches 'complete' rather than stalling one short at 'idle' (#160).
     }
+
+    // Tally + lastItem update happen whether or not the persist threw: for
+    // run-progress an item is settled once its outcome is known, even if its DB
+    // write failed.
+    if (settled === 'transcribed') counts = { ...counts, transcribed: counts.transcribed + 1 };
+    else if (settled === 'failed') counts = { ...counts, failed: counts.failed + 1 };
+    else counts = { ...counts, skipped: counts.skipped + 1 };
+    lastItem = { id: outcome.id, status: settled };
   }
 
   function toJobItems(items: TranscriptionLibraryItem[]): TranscriptionJobSpec['items'] {
