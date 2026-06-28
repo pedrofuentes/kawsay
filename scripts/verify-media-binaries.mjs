@@ -8,7 +8,8 @@
 // Self-contained plain ESM (no transpile): it carries its own copy of the Mach-O
 // /PE arch reader from tests/helpers/binary-arch.ts — keep the two in lock-step.
 
-import { closeSync, openSync, readSync, statSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -93,6 +94,34 @@ function detectBinaryArch(file) {
 
 // --- Guard ----------------------------------------------------------------------
 
+function defaultFfmpegLicenseText(path) {
+  try {
+    return execFileSync(path, ['-L'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    });
+  } catch {
+    return readFileSync(path, 'latin1');
+  }
+}
+
+export function ffmpegLicenseFailures(label, path, readLicenseText = defaultFfmpegLicenseText) {
+  const text = String(readLicenseText(path));
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes('--enable-nonfree') ||
+    normalized.includes('has nonfree parts') ||
+    normalized.includes('not legally redistributable')
+  ) {
+    return [
+      `NONFREE ${label}: ffmpeg -L/build configuration contains nonfree/not legally redistributable (${path})`,
+    ];
+  }
+  return [];
+}
+
 export function verifyMediaBinaries({
   projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
   targets = hostMediaTargets(),
@@ -120,6 +149,9 @@ export function verifyMediaBinaries({
       if (arch !== expectedArch) {
         failures.push(`WRONG-ARCH ${label}: expected ${expectedArch}, got ${arch} (${path})`);
         continue;
+      }
+      if (tool === 'ffmpeg') {
+        failures.push(...ffmpegLicenseFailures(label, path));
       }
       log(`ok: ${label} — ${arch}, ${size} bytes`);
     }
