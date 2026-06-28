@@ -26,23 +26,24 @@ files:
   - out/**
   - package.json
 
-# A compiled `.node` can't be dlopen'd, and the ffmpeg/ffprobe binaries can't be
-# spawned, from inside the asar — the native catalog engine (better-sqlite3, card
-# F3) and the bundled media binaries are unpacked to app.asar.unpacked so they load
-# and exec at runtime in the packaged app (ADR-0007, ARCHITECTURE §8).
+# A compiled `.node` can't be dlopen'd from inside the asar, so the native catalog
+# engine (better-sqlite3, card F3) is unpacked to app.asar.unpacked to load at
+# runtime in the packaged app (ADR-0007, ARCHITECTURE §8). The ffmpeg/ffprobe
+# binaries are NOT in node_modules — they ship as extraResources under
+# Resources/media/<os>-<arch>/ (see below, #175), the same out-of-asar pattern as
+# whisper-cli, so each installer carries ONLY its own-arch binary.
 asar: true
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
-  - '**/node_modules/ffmpeg-static/**'
-  - '**/node_modules/ffprobe-static/**'
 
 # The whisper.cpp `whisper-cli` engine (MIT) for on-device transcription (card
 # #129, ADR-0027). It is built FROM SOURCE per-arch in CI (scripts/build-whisper-
 # cli.sh) into resources/whisper/<os>-<arch>/, then bundled here as an
 # extraResource so the packaged app spawns it from `process.resourcesPath` — the
-# same out-of-asar pattern as the ffmpeg/ffprobe/better-sqlite3 binaries above
-# (it is a native executable, not a `.node`, so it lives in Resources, not the
-# asar; resolved by electron/main/transcription/whisper-cli.ts). electron-builder
+# same out-of-asar pattern as the better-sqlite3 engine above and the ffmpeg /
+# ffprobe media binaries below (it is a native executable, not a `.node`, so it
+# lives in Resources, not the asar; resolved by
+# electron/main/transcription/whisper-cli.ts). electron-builder
 # expands ${os}-${arch} per build leg (mac-arm64, mac-x64, win-x64), so each
 # installer carries ONLY its own-arch binary. NO model ships here — the `small`
 # ggml model is a separate opt-in, checksum-verified download (ADR-0027 Decision
@@ -52,6 +53,19 @@ asarUnpack:
 extraResources:
   - from: 'resources/whisper/${os}-${arch}/'
     to: 'whisper/${os}-${arch}/'
+    filter:
+      - '**/*'
+  # ffmpeg + ffprobe for audio extraction (transcription) and video posters /
+  # media probing (ingestion) — #175. Staged per-arch from the
+  # @ffmpeg-installer / @ffprobe-installer packages by
+  # scripts/stage-media-binaries.mjs into resources/media/<os>-<arch>/ (run via
+  # `pnpm stage:media` in predist / CI before packaging), then bundled here so
+  # each installer carries ONLY its own-arch binary, resolved at runtime by
+  # electron/main/importers/deps/media-binaries.ts. v0.2.0 shipped NO ffmpeg and a
+  # wrong-arch ffprobe; the CI build guard (scripts/verify-media-binaries.mjs)
+  # now fails the build if a staged binary is missing or the wrong arch.
+  - from: 'resources/media/${os}-${arch}/'
+    to: 'media/${os}-${arch}/'
     filter:
       - '**/*'
 

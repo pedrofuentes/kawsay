@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import ffmpegStatic from 'ffmpeg-static';
 import type { GeneratedAsset, ThumbnailGenerator, ThumbnailRequest } from '../ingest';
 import { assertLocalMediaPath } from './media-path';
 
@@ -74,7 +73,7 @@ const defaultRun: RunFfmpeg = (command, args) =>
   });
 
 export interface ThumbnailGeneratorOptions {
-  /** Absolute path of the ffmpeg binary (e.g. ffmpeg-static). */
+  /** Absolute path of the bundled, per-arch ffmpeg binary. */
   ffmpegPath: string;
   /** Subprocess runner; defaults to spawning ffmpeg with an array argv. */
   run?: RunFfmpeg;
@@ -99,13 +98,21 @@ export function createThumbnailGenerator(options: ThumbnailGeneratorOptions): Th
   };
 }
 
-/** The production generator wired to the bundled ffmpeg binary (ffmpeg-static). */
-export function createFfmpegThumbnailGenerator(): ThumbnailGenerator {
-  const ffmpegPath: string | null = ffmpegStatic;
-  if (ffmpegPath === null) {
-    throw new Error('ffmpeg-static did not resolve a binary for this platform');
-  }
-  return createThumbnailGenerator({ ffmpegPath });
+/** Options for the production ffmpeg-backed thumbnail factories. */
+export interface FfmpegThumbnailerOptions {
+  /** Absolute path to the bundled, per-arch ffmpeg (resolved by the main process). */
+  ffmpegPath: string;
+}
+
+/**
+ * The production generator wired to the bundled, per-arch ffmpeg binary. The
+ * path is resolved by the main process (importers/deps/media-binaries.ts) and
+ * threaded in, so this factory never touches the filesystem to find a binary.
+ */
+export function createFfmpegThumbnailGenerator(
+  options: FfmpegThumbnailerOptions,
+): ThumbnailGenerator {
+  return createThumbnailGenerator({ ffmpegPath: options.ffmpegPath });
 }
 
 // ── On-demand video-frame thumbnailer (catalog:thumbnail by id — U4) ─────────
@@ -184,7 +191,7 @@ const defaultRunCapture: RunFfmpegCapture = (command, args) =>
   });
 
 export interface VideoFrameThumbnailerOptions {
-  /** Absolute path of the ffmpeg binary (e.g. ffmpeg-static). */
+  /** Absolute path of the bundled, per-arch ffmpeg binary. */
   ffmpegPath: string;
   /** Subprocess runner; defaults to spawning ffmpeg and capturing stdout. */
   run?: RunFfmpegCapture;
@@ -213,14 +220,9 @@ export function createVideoFrameThumbnailer(
   };
 }
 
-/** The production video-frame thumbnailer wired to the bundled ffmpeg binary. */
-export function createFfmpegVideoFrameThumbnailer(): (
-  absPath: string,
-  maxEdge: number,
-) => Promise<VideoFrameThumbnail | null> {
-  const ffmpegPath: string | null = ffmpegStatic;
-  if (ffmpegPath === null) {
-    throw new Error('ffmpeg-static did not resolve a binary for this platform');
-  }
-  return createVideoFrameThumbnailer({ ffmpegPath });
+/** The production video-frame thumbnailer wired to the bundled, per-arch ffmpeg. */
+export function createFfmpegVideoFrameThumbnailer(
+  options: FfmpegThumbnailerOptions,
+): (absPath: string, maxEdge: number) => Promise<VideoFrameThumbnail | null> {
+  return createVideoFrameThumbnailer({ ffmpegPath: options.ffmpegPath });
 }

@@ -2,15 +2,15 @@ import type { ImporterDeps, SafeExtractFn } from '../types';
 import { hashFile } from './hash';
 import { nodeFs } from './node-fs';
 import { readExif } from './exif';
-import { probeMedia } from './ffprobe';
+import { createFfprobeRunner, createMediaProber } from './ffprobe';
 
 export { hashFile } from './hash';
 export { nodeFs } from './node-fs';
 export { readExif, normalizeExif, asUtcInstant } from './exif';
 export {
-  probeMedia,
   parseFfprobe,
   createMediaProber,
+  createFfprobeRunner,
   type ProbeDataLike,
   type ProbeStreamLike,
   type FfprobeRunner,
@@ -22,6 +22,7 @@ export {
   buildFrameArgs,
   type RunFfmpeg,
   type ThumbnailGeneratorOptions,
+  type FfmpegThumbnailerOptions,
 } from './thumbnail';
 
 export interface ImporterDepsOptions {
@@ -30,19 +31,26 @@ export interface ImporterDepsOptions {
    * (electron/main/.../safe-extract). REQUIRED; this card never implements it.
    */
   extractArchive: SafeExtractFn;
+  /**
+   * Absolute path to the bundled, per-arch ffprobe — resolved by the main
+   * process (importers/deps/media-binaries.ts) and threaded in (#175), so the
+   * deps never resolve a binary themselves. The {@link MediaProber} is built
+   * over this path's hardened spawn runner.
+   */
+  ffprobePath: string;
 }
 
 /**
  * Compose the concrete, sandboxed {@link ImporterDeps} from the real wrappers,
- * threading in the C2-provided archive extractor (the only piece this card does
- * not own). Folder imports never call extractArchive.
+ * threading in the C2-provided archive extractor and the per-arch ffprobe path
+ * (the pieces this card does not own). Folder imports never call extractArchive.
  */
 export function createImporterDeps(options: ImporterDepsOptions): ImporterDeps {
   return {
     fs: nodeFs,
     extractArchive: options.extractArchive,
     readExif,
-    probeMedia,
+    probeMedia: createMediaProber(createFfprobeRunner(options.ffprobePath)),
     hashFile,
   };
 }

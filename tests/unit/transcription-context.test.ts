@@ -8,6 +8,7 @@ function spec(overrides: Partial<TranscriptionJobSpec> = {}): TranscriptionJobSp
     items: [{ id: 'a', sourcePath: '/src/a.opus' }],
     modelPath: '/models/ggml-small.bin',
     whisperCliPath: '/bin/whisper-cli',
+    ffmpegPath: '/bin/ffmpeg',
     scratchDir: '/scratch',
     ...overrides,
   };

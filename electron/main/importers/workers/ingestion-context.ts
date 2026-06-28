@@ -27,8 +27,11 @@ export function openIngestionContext(job: IngestionJobSpec): IngestionContext {
     importer,
     db,
     repo: createCatalogRepo(db),
-    deps: createImporterDeps({ extractArchive: unavailableExtractArchive }),
-    generateThumbnail: createFfmpegThumbnailGenerator(),
+    deps: createImporterDeps({
+      extractArchive: unavailableExtractArchive,
+      ffprobePath: job.ffprobePath,
+    }),
+    generateThumbnail: createFfmpegThumbnailGenerator({ ffmpegPath: job.ffmpegPath }),
     close: () => db.close(),
   };
 }

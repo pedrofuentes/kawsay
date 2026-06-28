@@ -29,6 +29,10 @@ export interface IngestionJobSpec {
   sourceId: string;
   /** Per-import scratch dir forwarded to the importer. */
   workDir: string;
+  /** Absolute LOCAL path of the resolved per-arch `ffmpeg` binary (video posters). */
+  ffmpegPath: string;
+  /** Absolute LOCAL path of the resolved per-arch `ffprobe` binary (media probe). */
+  ffprobePath: string;
 }
 
 /** Host → worker commands. */

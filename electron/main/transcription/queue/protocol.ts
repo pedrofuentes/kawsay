@@ -37,6 +37,8 @@ export interface TranscriptionJobSpec {
   modelPath: string;
   /** Absolute LOCAL path of the resolved per-arch `whisper-cli` binary. */
   whisperCliPath: string;
+  /** Absolute LOCAL path of the resolved per-arch `ffmpeg` binary (audio extraction). */
+  ffmpegPath: string;
   /** Confined scratch root; extracted WAVs live under `<scratchDir>/transcode/`. */
   scratchDir: string;
   /** Optional batch-wide language hint applied when an item has none. */

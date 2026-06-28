@@ -20,6 +20,8 @@ function job(overrides: Partial<IngestionJobSpec> = {}): IngestionJobSpec {
     catalogPath: '/lib/catalog.sqlite3',
     sourceId: 'src-1',
     workDir: '/lib/extract/src-1',
+    ffmpegPath: '/bin/ffmpeg',
+    ffprobePath: '/bin/ffprobe',
     ...overrides,
   };
 }

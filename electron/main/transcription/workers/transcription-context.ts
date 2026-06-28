@@ -18,7 +18,10 @@ import type { TranscriptionContext } from './transcription-job';
  * no db handle to release, so `close` is a no-op (kept for symmetry with the harness).
  */
 export function openTranscriptionContext(job: TranscriptionJobSpec): TranscriptionContext {
-  const extractAudio = createFfmpegAudioExtractor({ scratchDir: job.scratchDir });
+  const extractAudio = createFfmpegAudioExtractor({
+    scratchDir: job.scratchDir,
+    ffmpegPath: job.ffmpegPath,
+  });
   const transcribe = createTranscriber({
     modelPath: job.modelPath,
     whisperCliPath: job.whisperCliPath,

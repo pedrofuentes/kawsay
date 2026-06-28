@@ -156,7 +156,10 @@ describe('folder walker ignores directory symlinks (defense-in-depth — issue #
     // would never terminate.
     symlinkSync(root, join(root, 'loop'), 'dir');
 
-    const deps = createImporterDeps({ extractArchive: unavailableExtractArchive });
+    const deps = createImporterDeps({
+      extractArchive: unavailableExtractArchive,
+      ffprobePath: '/bin/ffprobe',
+    });
     const ctx: ImportContext = {
       sourceId: 'src',
       workDir: join(root, '.work'),
@@ -545,7 +548,10 @@ describe('assertLocalMediaPath (subprocess input must be a local file — AC-4, 
 
 describe('createImporterDeps (composition root for the sandboxed deps)', () => {
   it('assembles the real wrappers and threads the injected archive extractor', () => {
-    const deps = createImporterDeps({ extractArchive: unavailableExtractArchive });
+    const deps = createImporterDeps({
+      extractArchive: unavailableExtractArchive,
+      ffprobePath: '/bin/ffprobe',
+    });
     expect(typeof deps.hashFile).toBe('function');
     expect(typeof deps.readExif).toBe('function');
     expect(typeof deps.probeMedia).toBe('function');

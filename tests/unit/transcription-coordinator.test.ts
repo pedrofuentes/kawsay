@@ -22,6 +22,7 @@ function job(overrides: Partial<TranscriptionJobSpec> = {}): TranscriptionJobSpe
     ],
     modelPath: '/models/ggml-small.bin',
     whisperCliPath: '/bin/whisper-cli',
+    ffmpegPath: '/bin/ffmpeg',
     scratchDir: '/scratch',
     ...overrides,
   };

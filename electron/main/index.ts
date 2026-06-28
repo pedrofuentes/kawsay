@@ -39,6 +39,7 @@ import { createCatalogSession } from './app/catalog-session';
 import { createIngestionCoordinator } from './importers/ingestion/coordinator';
 import { createWorkerThreadsSpawner } from './importers/ingestion/worker-threads-transport';
 import { createFfmpegVideoFrameThumbnailer } from './importers/deps/thumbnail';
+import { resolveFfmpegPath, resolveFfprobePath } from './importers/deps/media-binaries';
 import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-service';
 import { createModelDownloader } from './transcription/model-download';
 import { createElectronModelFetcher } from './transcription/electron-net-fetcher';
@@ -155,11 +156,38 @@ const imageThumbnailer: ImageThumbnailer = async (absPath, maxDimension) => {
   return { data: bounded.toJPEG(80), mimeType: 'image/jpeg' };
 };
 
-// ffmpeg-static may not resolve a binary on every platform; if it can't, videos
-// simply fall back to their type icon rather than crashing the boot path.
+// The per-arch ffmpeg + ffprobe paths are resolved on the HOST (they need
+// app/electron globals) and threaded into the off-thread workers as strings —
+// exactly like the model + whisper-cli paths (#175). Resolution is LAZY: called
+// when a video poster is built or an import/transcription starts, never at boot,
+// so a dev/CI checkout without staged binaries only fails when the feature is
+// actually used (packaged builds ship them under resourcesPath).
+function resolveFfmpegBinaryPath(): string {
+  return resolveFfmpegPath({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    projectRoot: app.getAppPath(),
+  });
+}
+
+function resolveMediaBinaries(): { ffmpegPath: string; ffprobePath: string } {
+  const base = {
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    projectRoot: app.getAppPath(),
+  };
+  return {
+    ffmpegPath: resolveFfmpegPath(base),
+    ffprobePath: resolveFfprobePath(base),
+  };
+}
+
+// The bundled ffmpeg may be absent in a dev/CI checkout (no staged binary); if
+// it can't be resolved, videos simply fall back to their type icon rather than
+// crashing the boot path. Resolved lazily here inside the guard.
 function buildVideoThumbnailer(): VideoThumbnailer {
   try {
-    const frame = createFfmpegVideoFrameThumbnailer();
+    const frame = createFfmpegVideoFrameThumbnailer({ ffmpegPath: resolveFfmpegBinaryPath() });
     return (absPath, maxDimension) => frame(absPath, maxDimension);
   } catch {
     return async () => null;
@@ -169,6 +197,7 @@ function buildVideoThumbnailer(): VideoThumbnailer {
 const catalogSession = createCatalogSession({
   coordinator: ingestionCoordinator,
   thumbnailers: { image: imageThumbnailer, video: buildVideoThumbnailer() },
+  resolveMediaBinaries,
 });
 
 // The native open-dialog capability (W2): always parented to the focused window
@@ -289,6 +318,9 @@ async function bootstrap(): Promise<void> {
         resourcesPath: process.resourcesPath,
         projectRoot: app.getAppPath(),
       }),
+      // The per-arch ffmpeg for audio extraction, resolved per-run like the
+      // whisper-cli binary above (#175).
+      ffmpegPath: resolveFfmpegBinaryPath(),
       // App-local, confined scratch for extracted WAVs — the user's originals are
       // never written to (AC-14); the worker confines extraction under here.
       scratchDir: join(app.getPath('userData'), 'transcription-scratch'),
