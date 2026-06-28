@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   MEDIA_RESOURCE_SUBDIR,
   MediaBinaryNotFoundError,
@@ -22,6 +22,15 @@ import {
 } from '../../scripts/stage-media-binaries.mjs';
 import { detectBinaryArch } from '../helpers/binary-arch';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
+
+function writeFakeMachO64(path: string, arch: 'arm64' | 'x64'): void {
+  const header = Buffer.alloc(64);
+  header.writeUInt32LE(0xfeedfacf, 0);
+  header.writeUInt32LE(arch === 'arm64' ? 0x0100000c : 0x01000007, 4);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, header);
+  chmodSync(path, 0o755);
+}
 
 // #175 — the packaged v0.2.0 app shipped NO ffmpeg binary at all (pnpm blocked
 // ffmpeg-static's download postinstall) and a WRONG-ARCH ffprobe (ffprobe-static
@@ -143,6 +152,16 @@ describe('the app resolver returns an on-disk, host-arch binary in dev (#175)', 
 
   beforeAll(() => {
     projectRoot = makeTmpDir('media-resolve-');
+    if (process.platform === 'darwin') {
+      for (const [target, arch] of [
+        ['mac-arm64', 'arm64'],
+        ['mac-x64', 'x64'],
+      ] as const) {
+        for (const tool of ['ffmpeg', 'ffprobe'] as const) {
+          writeFakeMachO64(join(projectRoot, 'resources', 'media', target, tool), arch);
+        }
+      }
+    }
     stageMediaBinaries({ targets: hostMediaTargets(), projectRoot });
   });
 
