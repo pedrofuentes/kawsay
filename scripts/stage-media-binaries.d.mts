@@ -14,7 +14,8 @@ export const SUPPORTED_MEDIA_TARGETS: readonly MediaTarget[];
 export function targetArch(target: MediaTarget): MediaArch;
 export function targetPlatform(target: MediaTarget): NodeJS.Platform;
 export function mediaBinaryName(tool: MediaTool, target: MediaTarget): string;
-export function sourceBinaryPath(tool: MediaTool, target: MediaTarget): string;
+export function mediaBinarySourceKind(tool: MediaTool, target: MediaTarget): 'from-source' | 'installer';
+export function sourceBinaryPath(tool: MediaTool, target: MediaTarget, projectRoot?: string): string;
 export function stagedBinaryPath(tool: MediaTool, target: MediaTarget, projectRoot: string): string;
 export function hostMediaTargets(platform?: NodeJS.Platform): MediaTarget[];
 export function stageMediaBinaries(options?: {
