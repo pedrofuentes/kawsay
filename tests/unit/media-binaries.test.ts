@@ -18,7 +18,6 @@ import {
   mediaBinarySourceKind,
   sourceBinaryPath,
   stageMediaBinaries,
-  targetArch,
 } from '../../scripts/stage-media-binaries.mjs';
 import { detectBinaryArch } from '../helpers/binary-arch';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
