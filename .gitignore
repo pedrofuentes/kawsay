@@ -16,6 +16,7 @@ out/
 # @ffmpeg-installer / @ffprobe-installer packages by scripts/stage-media-binaries.mjs
 # at build time, never committed; resources/media/README.md is kept, the binaries
 # are not.
+/.ffmpeg-build/
 /resources/media/*/
 
 # AC-4 OS-deny whisper harness (ADR-0027 / #138): the real-binary run output is
