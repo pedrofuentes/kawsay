@@ -61,6 +61,9 @@ jobs:
       WHISPER_CPP_REPO: ggml-org/whisper.cpp
       WHISPER_CPP_REF: v1.9.1
       WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
+      FFMPEG_REPO: FFmpeg/FFmpeg
+      FFMPEG_REF: n7.1
+      FFMPEG_COMMIT: b08d7969c550a804a59511c7b83f2dd8cc0499b8
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -88,13 +91,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build macOS ffmpeg + ffprobe from source
+        # Legal guard (#181): macOS ffmpeg prebuilts are nonfree, so build LGPL-only
+        # ffmpeg + ffprobe from pinned source into resources/media/<os>-<arch>/ before
+        # staging/packaging. Windows keeps the clean installer prebuilts.
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./scripts/build-ffmpeg.sh
+
       - name: Stage media binaries
-        # Copy the correct-arch ffmpeg + ffprobe for THIS runner's build leg(s) out
-        # of the @ffmpeg-installer / @ffprobe-installer packages into
-        # resources/media/<os>-<arch>/ BEFORE packaging, so electron-builder's
-        # extraResources bundles them (#175). pnpm `supportedArchitectures` installs
-        # all target arches, so the arm64 macOS runner stages the x64 dmg's binaries
-        # too — closing the cross-arch gap.
+        # macOS verifies the freshly built source binaries already in resources/media;
+        # Windows copies the clean @ffmpeg-installer / @ffprobe-installer prebuilts
+        # into resources/media/<os>-<arch>/ BEFORE packaging.
         run: pnpm stage:media
 
       - name: Verify media binaries
