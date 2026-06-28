@@ -152,6 +152,8 @@ describe('startIngestionJob (AC-9 worker-side engine drive)', () => {
       catalogPath: join(libraryRoot, 'catalog.sqlite3'),
       sourceId: 'src-1',
       workDir: join(libraryRoot, 'extract', 'src-1'),
+      ffmpegPath: '/bin/ffmpeg',
+      ffprobePath: '/bin/ffprobe',
     };
   }
 

@@ -12,6 +12,7 @@ import {
 } from '../../electron/main/transcription/audio-extract';
 import { verifyModelOnDisk } from '../../electron/main/transcription/model-integrity';
 import type { ModelVerification } from '../../electron/main/transcription/model-integrity';
+import { resolveFfmpegPath } from '../../electron/main/importers/deps/media-binaries';
 import {
   createTranscriber,
   defaultRunWhisper,
@@ -43,8 +44,9 @@ import { PERF_THRESHOLDS } from './thresholds';
 //   • WHISPER_CLI_PATH   → a real whisper.cpp `whisper-cli` (v1.9.1) on disk;
 //   • WHISPER_MODEL_PATH → a real `ggml-small.bin` on disk;
 //   • the labeled clips fetched via scripts/fetch-perf-fixtures.sh.
-// Optional: KAWSAY_FFMPEG_PATH overrides the ffmpeg binary (else ffmpeg-static);
-// KAWSAY_PERF_RESULTS_OUT writes the markdown results table to that path.
+// Optional: KAWSAY_FFMPEG_PATH overrides the ffmpeg binary (else the staged
+// per-arch ffmpeg under resources/media/); KAWSAY_PERF_RESULTS_OUT writes the
+// markdown results table to that path.
 //
 // Run it locally with scripts/run-wer-harness.sh.
 
@@ -82,7 +84,14 @@ describe.skipIf(whisperCli === null || model === null || !fixturesPresent)(
         const extractAudio: AudioExtractor =
           ffmpegOverride !== undefined && ffmpegOverride.length > 0
             ? createAudioExtractor({ ffmpegPath: ffmpegOverride, scratchDir })
-            : createFfmpegAudioExtractor({ scratchDir });
+            : createFfmpegAudioExtractor({
+                scratchDir,
+                ffmpegPath: resolveFfmpegPath({
+                  isPackaged: false,
+                  resourcesPath: '',
+                  projectRoot: process.cwd(),
+                }),
+              });
 
         // Wrap the production runner to capture inference wall-time AND the decoded
         // audio duration (read off the 16 kHz mono WAV the extractor wrote, BEFORE

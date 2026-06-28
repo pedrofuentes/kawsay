@@ -78,6 +78,15 @@ export interface CatalogSessionOptions {
   newId?: () => string;
   /** Photo/video decoders for the thumbnail service (default: no-op). */
   thumbnailers?: CatalogThumbnailers;
+  /**
+   * Resolve the per-arch ffmpeg + ffprobe paths for an import job (#175). A lazy
+   * thunk (mirrors the transcription orchestrator's resolveJobConfig): it is
+   * called when an import STARTS — not at session construction — so a dev/CI
+   * checkout without staged binaries only throws if an import is actually run,
+   * never at boot. The worker has no `app`, so the host resolves and threads the
+   * strings into the job spec.
+   */
+  resolveMediaBinaries: () => { ffmpegPath: string; ffprobePath: string };
 }
 
 export interface CatalogSession {
@@ -173,6 +182,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
   const { coordinator } = options;
   const newId = options.newId ?? (() => randomUUID());
   const thumbnailers = options.thumbnailers ?? NOOP_THUMBNAILERS;
+  const resolveMediaBinaries = options.resolveMediaBinaries;
   let current: OpenLibrary | undefined;
 
   function closeCurrent(): void {
@@ -299,6 +309,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         rootPath: input.inputPath,
       });
       const jobId = newId();
+      const { ffmpegPath, ffprobePath } = resolveMediaBinaries();
       const job: IngestionJobSpec = {
         jobId,
         sourceType: input.sourceType,
@@ -307,6 +318,8 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         catalogPath: library.summary.catalogPath,
         sourceId,
         workDir: join(library.summary.root, 'extract', sourceId),
+        ffmpegPath,
+        ffprobePath,
       };
       coordinator.start(job);
       return { jobId };

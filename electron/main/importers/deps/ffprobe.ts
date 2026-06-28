@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { path as ffprobeStaticPath } from 'ffprobe-static';
 import type { MediaInfo, MediaProber } from '../types';
 import { assertLocalMediaPath } from './media-path';
 
@@ -125,41 +124,42 @@ export function buildFfprobeArgs(path: string): string[] {
 }
 
 /**
- * Spawn the bundled ffprobe (subprocess) for a single LOCAL path — never a URL,
- * so ffprobe cannot be coerced into network I/O (§6.1/§7.2, AC-4). Mirrors
+ * Build the production {@link FfprobeRunner}: spawn the bundled ffprobe at
+ * `ffprobePath` (resolved per-arch by the main process via
+ * importers/deps/media-binaries.ts) for a single LOCAL path — never a URL, so
+ * ffprobe cannot be coerced into network I/O (§6.1/§7.2, AC-4). Mirrors
  * thumbnail.ts's bounded approach: a discrete array argv (the path is never
  * interpolated into a shell string), `-protocol_whitelist file` to block
  * embedded remote references, and a hard `{ timeout }` that kills a ffprobe
  * stuck on a crafted/truncated file, so the promise rejects (and the prober
  * degrades to all-null) instead of hanging forever.
  */
-const ffprobeStaticRunner: FfprobeRunner = (path) =>
-  new Promise<ProbeDataLike>((resolve, reject) => {
-    const child = spawn(ffprobeStaticPath, buildFfprobeArgs(path), {
-      timeout: FFPROBE_TIMEOUT_MS,
-      windowsHide: true,
+export function createFfprobeRunner(ffprobePath: string): FfprobeRunner {
+  return (path) =>
+    new Promise<ProbeDataLike>((resolve, reject) => {
+      const child = spawn(ffprobePath, buildFfprobeArgs(path), {
+        timeout: FFPROBE_TIMEOUT_MS,
+        windowsHide: true,
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        if (stderr.length < STDERR_CAP) stderr += chunk.toString('utf8');
+      });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`ffprobe exited with ${String(code)}: ${stderr.slice(0, 500)}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout) as ProbeDataLike);
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
     });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (stderr.length < STDERR_CAP) stderr += chunk.toString('utf8');
-    });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`ffprobe exited with ${String(code)}: ${stderr.slice(0, 500)}`));
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout) as ProbeDataLike);
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
-
-/** The production {@link MediaProber} (bundled ffprobe via ffprobe-static). */
-export const probeMedia: MediaProber = createMediaProber(ffprobeStaticRunner);
+}

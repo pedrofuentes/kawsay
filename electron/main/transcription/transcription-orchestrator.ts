@@ -77,10 +77,12 @@ export interface TranscriptionWorkerPort {
   cancel(jobId: string): boolean;
 }
 
-/** The host-resolved, run-invariant job parameters (model + binary + scratch). */
+/** The host-resolved, run-invariant job parameters (model + binaries + scratch). */
 export interface TranscriptionJobConfig {
   modelPath: string;
   whisperCliPath: string;
+  /** Absolute path of the resolved per-arch `ffmpeg` binary (audio extraction). */
+  ffmpegPath: string;
   scratchDir: string;
   language?: string;
 }
@@ -260,6 +262,7 @@ export function createTranscriptionOrchestrator(
         items: toJobItems(pending),
         modelPath: config.modelPath,
         whisperCliPath: config.whisperCliPath,
+        ffmpegPath: config.ffmpegPath,
         scratchDir: config.scratchDir,
         ...(config.language !== undefined ? { language: config.language } : {}),
       };

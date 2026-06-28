@@ -88,6 +88,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Stage media binaries
+        # Copy the correct-arch ffmpeg + ffprobe for THIS runner's build leg(s) out
+        # of the @ffmpeg-installer / @ffprobe-installer packages into
+        # resources/media/<os>-<arch>/ BEFORE packaging, so electron-builder's
+        # extraResources bundles them (#175). pnpm `supportedArchitectures` installs
+        # all target arches, so the arm64 macOS runner stages the x64 dmg's binaries
+        # too — closing the cross-arch gap.
+        run: pnpm stage:media
+
+      - name: Verify media binaries
+        # Build guard (#175): fail the build if any staged ffmpeg/ffprobe is missing
+        # or the wrong arch, so the bug that shipped v0.2.0 (no ffmpeg; a Mach-O
+        # x86_64 ffprobe mislabelled as arm64) can never silently ship again. Mirrors
+        # the whisper-cli "Verify staged binaries" guard below.
+        run: node scripts/verify-media-binaries.mjs
+
       - name: Build app bundles
         # electron-vite build → out/** (main + preload + renderer) for packaging.
         run: pnpm build

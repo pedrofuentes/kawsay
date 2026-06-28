@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
-import ffmpegStatic from 'ffmpeg-static';
 import { assertLocalMediaPath } from '../importers/deps/media-path';
 
 // Audio extraction for M2 on-device transcription (ADR-0027 §3, extends ADR-0012).
@@ -285,7 +284,7 @@ async function safeRemove(
 }
 
 export interface AudioExtractorOptions {
-  /** Absolute path of the ffmpeg binary (e.g. ffmpeg-static). */
+  /** Absolute path of the bundled, per-arch ffmpeg binary. */
   ffmpegPath: string;
   /** Confined scratch root; extracted WAVs live under `<scratchDir>/transcode/`. */
   scratchDir: string;
@@ -364,16 +363,16 @@ export async function removeExtractedWav(wavPath: string): Promise<void> {
 export interface FfmpegAudioExtractorOptions {
   /** Confined scratch root; extracted WAVs live under `<scratchDir>/transcode/`. */
   scratchDir: string;
+  /** Absolute path to the bundled, per-arch ffmpeg (resolved by the main process). */
+  ffmpegPath: string;
 }
 
 /**
- * The production {@link AudioExtractor} wired to the bundled ffmpeg (ffmpeg-static),
- * with the real spawn runner and the duration-scaled timeout.
+ * The production {@link AudioExtractor} wired to the bundled, per-arch ffmpeg,
+ * with the real spawn runner and the duration-scaled timeout. The path is
+ * resolved by the main process (importers/deps/media-binaries.ts) and threaded
+ * in (workers have no `app`), so this factory never resolves a binary itself.
  */
 export function createFfmpegAudioExtractor(options: FfmpegAudioExtractorOptions): AudioExtractor {
-  const ffmpegPath: string | null = ffmpegStatic;
-  if (ffmpegPath === null) {
-    throw new Error('ffmpeg-static did not resolve a binary for this platform');
-  }
-  return createAudioExtractor({ ffmpegPath, scratchDir: options.scratchDir });
+  return createAudioExtractor({ ffmpegPath: options.ffmpegPath, scratchDir: options.scratchDir });
 }

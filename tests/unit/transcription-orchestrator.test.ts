@@ -72,6 +72,7 @@ function fakeWorker() {
 const JOB_CONFIG: TranscriptionJobConfig = {
   modelPath: '/models/ggml-small.bin',
   whisperCliPath: '/res/whisper-cli',
+  ffmpegPath: '/res/ffmpeg',
   scratchDir: '/lib/extract/transcription',
 };
 

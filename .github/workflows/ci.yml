@@ -40,6 +40,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Stage media binaries
+        # Copy the correct-arch ffmpeg + ffprobe for this runner's build leg out of
+        # the @ffmpeg-installer / @ffprobe-installer packages into resources/media/
+        # (#175). Cheap file copies — no download, no compile.
+        run: pnpm stage:media
+
+      - name: Verify media binaries
+        # Build guard (#175): fail the run if any staged ffmpeg/ffprobe is missing or
+        # the wrong arch, so the bug that shipped v0.2.0 (no ffmpeg; a wrong-arch
+        # ffprobe) can never silently ship again. Mirrors the whisper-cli check.
+        run: node scripts/verify-media-binaries.mjs
+
       - name: Lint
         run: pnpm lint
 

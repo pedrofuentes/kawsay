@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
-import ffmpegStatic from 'ffmpeg-static';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 import { installEgressSpies } from '../ac4/egress-spies';
+import { resolveFfmpegPath } from '../../electron/main/importers/deps/media-binaries';
 import {
   AUDIO_EXTRACT_FALLBACK_TIMEOUT_MS,
   AUDIO_EXTRACT_MAX_TIMEOUT_MS,
@@ -461,24 +461,24 @@ describe('defaultRunFfmpegToFile (the real bounded spawn seam, via a node stub)'
 describe('createFfmpegAudioExtractor (production wiring to the bundled ffmpeg)', () => {
   it('builds an extractor bound to a scratch dir', () => {
     const scratch = tmp('extract');
-    const extract = createFfmpegAudioExtractor({ scratchDir: scratch });
+    const extract = createFfmpegAudioExtractor({ scratchDir: scratch, ffmpegPath: '/bin/ffmpeg' });
     expect(typeof extract).toBe('function');
   });
 });
 
-// An OPTIONAL real-binary integration test. ffmpeg-static's binary is NOT
-// downloaded in dev/CI (pnpm `onlyBuiltDependencies` builds only better-sqlite3),
-// so this self-skips unless a real ffmpeg is resolvable — an explicit
-// `FFMPEG_PATH`, or a present ffmpeg-static binary on disk. Where it runs, it
-// proves true format correctness end-to-end: a real decode produces a 16 kHz /
-// mono / s16le WAV.
+// An OPTIONAL real-binary integration test. The bundled ffmpeg is staged into
+// resources/media/<os>-<arch>/ by `pnpm stage:media` (run in CI before tests);
+// this self-skips unless a real ffmpeg is resolvable — an explicit `FFMPEG_PATH`,
+// or the staged binary for this host arch. Where it runs, it proves true format
+// correctness end-to-end: a real decode produces a 16 kHz / mono / s16le WAV.
 function resolveRealFfmpeg(): string | null {
   const fromEnv = process.env.FFMPEG_PATH;
   if (fromEnv !== undefined && fromEnv.length > 0 && existsSync(fromEnv)) return fromEnv;
-  if (typeof ffmpegStatic === 'string' && ffmpegStatic.length > 0 && existsSync(ffmpegStatic)) {
-    return ffmpegStatic;
+  try {
+    return resolveFfmpegPath({ isPackaged: false, resourcesPath: '', projectRoot: process.cwd() });
+  } catch {
+    return null;
   }
-  return null;
 }
 
 const realFfmpeg = resolveRealFfmpeg();
@@ -490,7 +490,7 @@ describe.skipIf(realFfmpeg === null)('audio extraction format correctness (real 
     const inPath = join(scratch, 'in.wav');
     writeFileSync(inPath, makeStereoWav(44100, 0.25));
 
-    const extract = createFfmpegAudioExtractor({ scratchDir: scratch });
+    const extract = createFfmpegAudioExtractor({ scratchDir: scratch, ffmpegPath: realFfmpeg as string });
     const result = await extract({ sourcePath: inPath, key: 'real' });
 
     expect(result.ok).toBe(true);

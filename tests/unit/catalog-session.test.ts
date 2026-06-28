@@ -13,6 +13,11 @@ import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
 const JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
+// The catalog session resolves the per-arch ffmpeg + ffprobe paths for an import
+// job lazily (#175); the worker spawn is faked in these tests, so placeholder
+// paths suffice — they only need to flow through into the IngestionJobSpec.
+const resolveMediaBinaries = () => ({ ffmpegPath: '/bin/ffmpeg', ffprobePath: '/bin/ffprobe' });
+
 /** A coordinator double that records the jobs it is asked to start / cancel. */
 function fakeCoordinator() {
   const started: IngestionJobSpec[] = [];
@@ -201,7 +206,11 @@ describe('createCatalogSession (the IPC application service)', () => {
     parent = makeTmpDir('session');
     root = join(parent, 'Mum');
     coordinator = fakeCoordinator();
-    session = createCatalogSession({ coordinator: coordinator.coordinator, newId: () => JOB_ID });
+    session = createCatalogSession({
+      coordinator: coordinator.coordinator,
+      newId: () => JOB_ID,
+      resolveMediaBinaries,
+    });
   });
   afterEach(() => {
     session.dispose();
@@ -351,6 +360,7 @@ describe('createCatalogSession (the IPC application service)', () => {
     const s = createCatalogSession({
       coordinator: coordinator.coordinator,
       thumbnailers: { image, video: vi.fn(async () => null) },
+      resolveMediaBinaries,
     });
     try {
       s.createLibrary({ path: root });
@@ -370,7 +380,7 @@ describe('createCatalogSession (the IPC application service)', () => {
   });
 
   it('getThumbnail refuses when no library is open', async () => {
-    const s = createCatalogSession({ coordinator: coordinator.coordinator });
+    const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
     await expect(s.getThumbnail({ id: JOB_ID })).rejects.toThrow();
   });
 
@@ -387,7 +397,7 @@ describe('createCatalogSession (the IPC application service)', () => {
   });
 
   it('refuses to hand out a transcription port when no library is open (#157)', () => {
-    const s = createCatalogSession({ coordinator: coordinator.coordinator });
+    const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
     expect(() => s.transcription()).toThrow();
   });
 
@@ -468,7 +478,7 @@ describe('createCatalogSession (the IPC application service)', () => {
   });
 
   it('getTranscript refuses when no library is open (#136)', async () => {
-    const s = createCatalogSession({ coordinator: coordinator.coordinator });
+    const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
     await expect(s.getTranscript({ id: JOB_ID })).rejects.toThrow();
   });
 });

@@ -6,6 +6,10 @@ import {
   SUPPORTED_WHISPER_TARGETS,
   WHISPER_CLI_RESOURCE_SUBDIR,
 } from '../../electron/main/transcription/whisper-cli';
+import {
+  MEDIA_RESOURCE_SUBDIR,
+  SUPPORTED_MEDIA_TARGETS,
+} from '../../electron/main/importers/deps/media-binaries';
 
 // The electron-builder packaging contract for AC-5 (ADR-0007, ARCHITECTURE §8).
 // These assertions pin the load-bearing packaging invariants — the native-module
@@ -104,13 +108,15 @@ describe('electron-builder packaging contract (AC-5, ADR-0007)', () => {
     expect(builderYml).toMatch(/^copyright:/m);
   });
 
-  it('unpacks the native catalog engine and media binaries from the asar', () => {
-    // A compiled `.node` cannot be dlopen'd, and ffmpeg/ffprobe cannot be spawned,
-    // from inside an asar — they must live in app.asar.unpacked (ADR-0007).
+  it('unpacks the native catalog engine from the asar (media binaries ship as extraResources)', () => {
+    // A compiled `.node` cannot be dlopen'd from inside an asar, so better-sqlite3
+    // lives in app.asar.unpacked (ADR-0007). The ffmpeg/ffprobe binaries are NOT in
+    // node_modules — they ship as out-of-asar extraResources (#175), so the broken
+    // ffmpeg-static / ffprobe-static packages must not be referenced anywhere here.
     const unpack = topLevelBlock('asarUnpack');
     expect(unpack).toMatch(/node_modules\/better-sqlite3\//);
-    expect(unpack).toMatch(/node_modules\/ffmpeg-static\//);
-    expect(unpack).toMatch(/node_modules\/ffprobe-static\//);
+    expect(builderYml).not.toMatch(/ffmpeg-static/);
+    expect(builderYml).not.toMatch(/ffprobe-static/);
   });
 
   it('rebuilds native modules against the Electron ABI from source', () => {
@@ -207,6 +213,42 @@ describe('whisper-cli engine bundling contract (#129, ADR-0027)', () => {
     // ADR-0027 Decision 6: only the BINARY is bundled here; the ~466 MiB `small`
     // ggml model is fetched on opt-in (cards #130/#131), never in the installer.
     expect(extra).not.toMatch(/ggml|\.bin\b|model/i);
+  });
+});
+
+describe('ffmpeg + ffprobe media-binary bundling contract (#175)', () => {
+  // v0.2.0 shipped NO ffmpeg (pnpm blocked ffmpeg-static's download postinstall)
+  // and a wrong-arch ffprobe (ffprobe-static@3.1.0 mislabeled its darwin/arm64
+  // binary as x86_64), breaking all audio extraction + thumbnails. The binaries
+  // now ship per-arch as out-of-asar extraResources, staged from the
+  // @ffmpeg-installer / @ffprobe-installer packages by stage-media-binaries.mjs
+  // and resolved at runtime by electron/main/importers/deps/media-binaries.ts.
+  // These assertions pin that packaging contract so it cannot silently drift.
+  const extra = topLevelBlock('extraResources');
+
+  it('bundles per-arch ffmpeg + ffprobe as out-of-asar extraResources', () => {
+    // A native executable cannot be spawned from inside an asar (same constraint as
+    // whisper-cli), so the binaries travel in Resources, copied per-arch into
+    // <resources>/media/<os>-<arch>/.
+    expect(extra).toMatch(/from:\s*'?resources\/media\/\$\{os\}-\$\{arch\}/);
+    expect(extra).toMatch(/to:\s*'?media\/\$\{os\}-\$\{arch\}/);
+  });
+
+  it('parameterizes the bundle per build leg via the ${os}-${arch} macros (each shipped arch)', () => {
+    // One macro'd entry that electron-builder expands per build leg — macOS arm64 +
+    // x64, Windows x64 — so each installer carries exactly its own-arch ffmpeg +
+    // ffprobe and no other, the same cross-arch-safe pattern as whisper-cli.
+    expect(extra).toContain('${os}');
+    expect(extra).toContain('${arch}');
+    expect([...SUPPORTED_MEDIA_TARGETS].sort()).toEqual(['mac-arm64', 'mac-x64', 'win-x64']);
+  });
+
+  it('keeps the resolver bundle sub-directory in lock-step with the extraResource `to:`', () => {
+    // electron/main/importers/deps/media-binaries.ts resolves
+    // <resourcesPath>/<subdir>/<os>-<arch>/<ffmpeg|ffprobe>[.exe]; the `to:` sub-dir
+    // here MUST equal that constant or the packaged app can't find the binaries.
+    expect(MEDIA_RESOURCE_SUBDIR).toBe('media');
+    expect(extra).toMatch(new RegExp(`to:\\s*'?${MEDIA_RESOURCE_SUBDIR}/`));
   });
 });
 
@@ -321,6 +363,14 @@ describe('release workflow preserves the M1 hardening + whisper-cli build (#129,
     expect(build).toMatch(/Verify staged binaries/);
     expect(build).toMatch(/resources\/whisper\/mac-arm64\/whisper-cli/);
     expect(build).toMatch(/resources\/whisper\/win-x64\/whisper-cli\.exe/);
+  });
+
+  it('stages + verifies the per-arch ffmpeg/ffprobe before packaging (#175)', () => {
+    // The build guard that stops the v0.2.0 packaging bug (no ffmpeg; wrong-arch
+    // ffprobe) from recurring: stage the correct-arch binaries, then fail the build
+    // if any is missing or the wrong arch — BEFORE electron-builder packages them.
+    expect(build).toMatch(/pnpm stage:media/);
+    expect(build).toMatch(/scripts\/verify-media-binaries\.mjs/);
   });
 
   it('keeps the unsigned-v1 posture, Node 22, and non-persisted credentials', () => {
