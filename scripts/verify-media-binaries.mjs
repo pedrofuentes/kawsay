@@ -10,7 +10,7 @@
 
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   MEDIA_TOOLS,
   hostMediaTargets,
@@ -93,39 +93,50 @@ function detectBinaryArch(file) {
 
 // --- Guard ----------------------------------------------------------------------
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const targets = hostMediaTargets();
-const failures = [];
+export function verifyMediaBinaries({
+  projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
+  targets = hostMediaTargets(),
+  log = console.log,
+} = {}) {
+  const failures = [];
 
-for (const target of targets) {
-  const expectedArch = targetArch(target);
-  for (const tool of MEDIA_TOOLS) {
-    const path = stagedBinaryPath(tool, target, projectRoot);
-    const label = `${target}/${mediaBinaryName(tool, target)}`;
-    let size = 0;
-    try {
-      size = statSync(path).size;
-    } catch {
-      failures.push(`MISSING ${label} (${path}) — run \`pnpm stage:media\``);
-      continue;
+  for (const target of targets) {
+    const expectedArch = targetArch(target);
+    for (const tool of MEDIA_TOOLS) {
+      const path = stagedBinaryPath(tool, target, projectRoot);
+      const label = `${target}/${mediaBinaryName(tool, target)}`;
+      let size = 0;
+      try {
+        size = statSync(path).size;
+      } catch {
+        failures.push(`MISSING ${label} (${path}) — run \`pnpm stage:media\``);
+        continue;
+      }
+      if (size === 0) {
+        failures.push(`EMPTY ${label} (${path})`);
+        continue;
+      }
+      const arch = detectBinaryArch(path);
+      if (arch !== expectedArch) {
+        failures.push(`WRONG-ARCH ${label}: expected ${expectedArch}, got ${arch} (${path})`);
+        continue;
+      }
+      log(`ok: ${label} — ${arch}, ${size} bytes`);
     }
-    if (size === 0) {
-      failures.push(`EMPTY ${label} (${path})`);
-      continue;
-    }
-    const arch = detectBinaryArch(path);
-    if (arch !== expectedArch) {
-      failures.push(`WRONG-ARCH ${label}: expected ${expectedArch}, got ${arch} (${path})`);
-      continue;
-    }
-    console.log(`ok: ${label} — ${arch}, ${size} bytes`);
   }
+
+  return failures;
 }
 
-if (failures.length > 0) {
-  console.error(`\nmedia-binary guard FAILED for ${process.platform} (${targets.join(', ')}):`);
-  for (const f of failures) console.error(`  ✗ ${f}`);
-  process.exit(1);
-}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const targets = hostMediaTargets();
+  const failures = verifyMediaBinaries({ targets });
 
-console.log(`\nmedia-binary guard PASSED: ${targets.length * MEDIA_TOOLS.length} binaries verified for ${targets.join(', ')}`);
+  if (failures.length > 0) {
+    console.error(`\nmedia-binary guard FAILED for ${process.platform} (${targets.join(', ')}):`);
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    process.exit(1);
+  }
+
+  console.log(`\nmedia-binary guard PASSED: ${targets.length * MEDIA_TOOLS.length} binaries verified for ${targets.join(', ')}`);
+}
