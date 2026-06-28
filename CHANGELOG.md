@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+### Security
+
+### Removed
+
+## [0.2.1] - 2026-06-28
+
+### Changed
+
+- Documented the bundled `ffmpeg`/`ffprobe` binaries and their licenses in `NOTICES.md`
+  (third-party redistribution attribution, AC-23).
+
+### Fixed
+
 - **Audio transcription and video thumbnails work in the shipped app again** (#175): v0.2.0 packaged
   with **no `ffmpeg` binary at all** (pnpm blocks `ffmpeg-static`'s download-on-install postinstall, so
   it was never fetched) and a **wrong-architecture `ffprobe`** (`ffprobe-static@3.1.0` ships a Mach-O
@@ -23,8 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   resources (the same pattern as `whisper-cli`), resolved at runtime by `media-binaries.ts`. A CI **build
   guard** (`scripts/verify-media-binaries.mjs`, in `ci.yml` + `release.yml`) now **fails the build** if
   any staged binary is missing or the wrong arch, so this can never silently ship again.
-
-### Security
 
 ### Removed
 
