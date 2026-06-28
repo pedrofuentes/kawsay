@@ -14,43 +14,43 @@ package metadata and `pnpm licenses`, not repeated here.
 
 ## ffmpeg — `ffmpeg`
 
-- **Project:** FFmpeg (<https://ffmpeg.org/>); installer wrapper:
-  `@ffmpeg-installer/ffmpeg`
-  (<https://github.com/kribblo/node-ffmpeg-installer>).
+- **Project:** FFmpeg (<https://ffmpeg.org/>).
 - **Component bundled:** the `ffmpeg` command-line executable. Kawsay ships only
-  the installer targets currently produced by `electron-builder.yml`: macOS
-  `.dmg`/`.zip` for arm64 and x64, and Windows NSIS `.exe` for x64. Linux
-  packages are installed only for CI egress tests and are **not** redistributed
-  in Kawsay installers.
-- **Per-target package versions and declared licenses:**
-  - macOS arm64: `@ffmpeg-installer/darwin-arm64@4.1.5`, binary reports
-    `ffmpeg version 4.4`; `package.json` declares
-    `https://git.ffmpeg.org/gitweb/ffmpeg.git/blob_plain/HEAD:/LICENSE.md`
-    instead of an SPDX id. Additional verification with `ffmpeg -L` reports:
-    `This version of ffmpeg has nonfree parts compiled in. Therefore it is not
-    legally redistributable.` This target therefore needs legal review before
-    redistribution; no GPL/LGPL SPDX id is asserted here for that binary.
-  - macOS x64: `@ffmpeg-installer/darwin-x64@4.1.0`, FFmpeg build
-    `92718-g092cb17983`; `package.json` declares `LGPL-2.1`.
-  - Windows x64: `@ffmpeg-installer/win32-x64@4.1.0`, FFmpeg build
-    `20181217-f22fcd4`; `package.json` declares `GPLv3`.
-- **How it is obtained:** Kawsay does not build this executable from source. It
-  copies prebuilt binaries from the per-platform `@ffmpeg-installer/*` npm
-  packages and stages them under `resources/media/<os>-<arch>/` with
-  `scripts/stage-media-binaries.mjs`; electron-builder then copies them
-  out-of-asar to `Resources/media/<os>-<arch>/`. Runtime resolution is in
+  the targets currently produced by `electron-builder.yml`: macOS `.dmg`/`.zip`
+  for arm64 and x64, and Windows NSIS `.exe` for x64. Linux packages are
+  installed only for CI egress tests and are **not** redistributed in Kawsay
+  installers.
+- **macOS license/provenance:** built by Kawsay from FFmpeg source, not from a
+  prebuilt package, for both macOS arm64 and macOS x64.
+  - Pinned tag: `n7.1`
+  - Pinned commit: `b08d7969c550a804a59511c7b83f2dd8cc0499b8`
+  - Build script: `scripts/build-ffmpeg.sh`
+  - Configure policy: LGPL-only (`--disable-gpl`, `--disable-nonfree`; no
+    external GPL/nonfree codec libraries such as x264/x265/fdk-aac).
+  - Verification: `ffmpeg -L` reports that ffmpeg is free software under the GNU
+    Lesser General Public License; the build guard rejects `--enable-nonfree`,
+    "has nonfree parts", and "not legally redistributable".
+- **Windows license/provenance:** copied from `@ffmpeg-installer/win32-x64@4.1.0`
+  (FFmpeg build `20181217-f22fcd4`; package declares `GPLv3`) because that
+  Windows prebuilt does **not** report nonfree / not legally redistributable.
+- **How it is obtained:** macOS binaries are compiled from the pinned FFmpeg
+  source in CI/release and staged under `resources/media/mac-<arch>/`; Windows
+  is copied from the installer package by `scripts/stage-media-binaries.mjs`.
+  electron-builder then copies the per-arch directory out-of-asar to
+  `Resources/media/<os>-<arch>/`. Runtime resolution is in
   `electron/main/importers/deps/media-binaries.ts`.
 - **Relationship / aggregation:** Kawsay invokes `ffmpeg` only as a separate
   subprocess and does not link against FFmpeg libraries. Kawsay's own source
-  remains MIT-licensed while the bundled executable retains its own GPL/LGPL or
-  other upstream terms.
-- **Corresponding source offer:** For the GPL/LGPL-covered `ffmpeg` builds, the
-  complete corresponding source is available from FFmpeg at
-  <https://ffmpeg.org/download.html> and <https://git.ffmpeg.org/ffmpeg.git>,
-  plus the installer wrapper source at
+  remains MIT-licensed while the bundled executable retains its own GPL/LGPL
+  terms.
+- **Corresponding source offer:** For macOS, Kawsay's exact source is FFmpeg tag
+  `n7.1` at commit `b08d7969c550a804a59511c7b83f2dd8cc0499b8` plus the build
+  instructions in `scripts/build-ffmpeg.sh`. For Windows, the complete
+  corresponding FFmpeg source is available from <https://ffmpeg.org/download.html>
+  and <https://git.ffmpeg.org/ffmpeg.git>, plus installer wrapper source at
   <https://github.com/kribblo/node-ffmpeg-installer>. Kawsay will provide the
-  complete corresponding source for the redistributed GPL/LGPL `ffmpeg` binaries
-  on request for the period required by GPL/LGPL.
+  complete corresponding source for redistributed GPL/LGPL `ffmpeg` binaries on
+  request for the period required by GPL/LGPL.
 
 The full GPL-3.0 and LGPL-2.1 license texts are included in the appendices below.
 
@@ -58,38 +58,39 @@ The full GPL-3.0 and LGPL-2.1 license texts are included in the appendices below
 
 ## ffprobe — `ffprobe`
 
-- **Project:** FFmpeg / ffprobe (<https://ffmpeg.org/>); installer wrapper:
-  `@ffprobe-installer/ffprobe`
-  (<https://github.com/SavageCore/node-ffprobe-installer>).
+- **Project:** FFmpeg / ffprobe (<https://ffmpeg.org/>).
 - **Component bundled:** the `ffprobe` command-line executable. Kawsay ships only
-  the installer targets currently produced by `electron-builder.yml`: macOS
-  `.dmg`/`.zip` for arm64 and x64, and Windows NSIS `.exe` for x64. Linux
-  packages are installed only for CI egress tests and are **not** redistributed
-  in Kawsay installers.
-- **Per-target package versions and declared licenses:**
-  - macOS arm64: `@ffprobe-installer/darwin-arm64@5.0.1`, FFprobe build
-    `4.4.1`; `package.json` declares `LGPL-2.1`.
-  - macOS x64: `@ffprobe-installer/darwin-x64@5.1.0`, FFprobe build
-    `20230213-f8d6d0f`; `package.json` declares `GPL-3.0`.
-  - Windows x64: `@ffprobe-installer/win32-x64@5.1.0`, FFprobe build
-    `20230213-2296078`; `package.json` declares `GPL-3.0`.
-- **How it is obtained:** Kawsay does not build this executable from source. It
-  copies prebuilt binaries from the per-platform `@ffprobe-installer/*` npm
-  packages and stages them under `resources/media/<os>-<arch>/` with
-  `scripts/stage-media-binaries.mjs`; electron-builder then copies them
-  out-of-asar to `Resources/media/<os>-<arch>/`. Runtime resolution is in
+  the targets currently produced by `electron-builder.yml`: macOS `.dmg`/`.zip`
+  for arm64 and x64, and Windows NSIS `.exe` for x64. Linux packages are
+  installed only for CI egress tests and are **not** redistributed in Kawsay
+  installers.
+- **macOS license/provenance:** built by Kawsay from the same pinned FFmpeg source
+  as `ffmpeg` for both macOS arm64 and macOS x64.
+  - Pinned tag: `n7.1`
+  - Pinned commit: `b08d7969c550a804a59511c7b83f2dd8cc0499b8`
+  - Build script: `scripts/build-ffmpeg.sh`
+  - Configure policy: LGPL-only (`--disable-gpl`, `--disable-nonfree`; no
+    external GPL/nonfree codec libraries).
+- **Windows license/provenance:** copied from `@ffprobe-installer/win32-x64@5.1.0`
+  (FFprobe build `20230213-2296078`; package declares `GPL-3.0`).
+- **How it is obtained:** macOS binaries are compiled from the pinned FFmpeg
+  source in CI/release and staged under `resources/media/mac-<arch>/`; Windows
+  is copied from the installer package by `scripts/stage-media-binaries.mjs`.
+  electron-builder then copies the per-arch directory out-of-asar to
+  `Resources/media/<os>-<arch>/`. Runtime resolution is in
   `electron/main/importers/deps/media-binaries.ts`.
 - **Relationship / aggregation:** Kawsay invokes `ffprobe` only as a separate
   subprocess and does not link against FFmpeg libraries. Kawsay's own source
   remains MIT-licensed while the bundled executable retains its own GPL/LGPL
   terms.
-- **Corresponding source offer:** For the GPL/LGPL-covered `ffprobe` builds, the
-  complete corresponding source is available from FFmpeg at
-  <https://ffmpeg.org/download.html> and <https://git.ffmpeg.org/ffmpeg.git>,
-  plus the installer wrapper source at
-  <https://github.com/SavageCore/node-ffprobe-installer>. Kawsay will provide
-  the complete corresponding source for the redistributed GPL/LGPL `ffprobe`
-  binaries on request for the period required by GPL/LGPL.
+- **Corresponding source offer:** For macOS, Kawsay's exact source is FFmpeg tag
+  `n7.1` at commit `b08d7969c550a804a59511c7b83f2dd8cc0499b8` plus the build
+  instructions in `scripts/build-ffmpeg.sh`. For Windows, the complete
+  corresponding FFmpeg source is available from <https://ffmpeg.org/download.html>
+  and <https://git.ffmpeg.org/ffmpeg.git>, plus installer wrapper source at
+  <https://github.com/SavageCore/node-ffprobe-installer>. Kawsay will provide the
+  complete corresponding source for redistributed GPL/LGPL `ffprobe` binaries on
+  request for the period required by GPL/LGPL.
 
 The full GPL-3.0 and LGPL-2.1 license texts are included in the appendices below.
 

@@ -107,7 +107,7 @@ pnpm build
 | Local catalog | [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) (SQLite with FTS5) |
 | Photo metadata | [exifr](https://github.com/MikeKovarik/exifr) |
 | Email parsing | [mailparser](https://nodemailer.com/extras/mailparser/) |
-| Media metadata | ffmpeg / ffprobe (bundled prebuilt binaries) |
+| Media metadata | ffmpeg / ffprobe (macOS built from pinned LGPL source; Windows bundled prebuilts) |
 | Archive extraction | [yauzl](https://github.com/thejoshwolfe/yauzl) (zip-slip guarded) |
 | Validation | [Zod](https://zod.dev/) |
 | Tests | [Vitest](https://vitest.dev/) + [Playwright](https://playwright.dev/) |
