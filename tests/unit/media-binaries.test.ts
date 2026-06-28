@@ -15,6 +15,7 @@ import {
 import {
   SUPPORTED_MEDIA_TARGETS,
   hostMediaTargets,
+  mediaBinarySourceKind,
   sourceBinaryPath,
   stageMediaBinaries,
   targetArch,
@@ -99,7 +100,7 @@ describe('media binary resolver — pure platform/arch mapping (#175)', () => {
   });
 });
 
-describe('installed source binaries are correct-arch for ALL shipped targets (#175)', () => {
+describe('media binary staging sources are correct for shipped targets (#175/#181)', () => {
   // The cross-arch guard: pnpm `supportedArchitectures` installs the
   // @ffmpeg-installer / @ffprobe-installer per-platform packages for every
   // target, so a single arm64 macOS runner can stage the x64 dmg's binaries
@@ -109,18 +110,28 @@ describe('installed source binaries are correct-arch for ALL shipped targets (#1
     expect([...SUPPORTED_MEDIA_TARGETS].sort()).toEqual(['mac-arm64', 'mac-x64', 'win-x64']);
   });
 
-  for (const target of SUPPORTED_MEDIA_TARGETS) {
-    for (const tool of ['ffmpeg', 'ffprobe'] as const) {
-      it(`provides a ${targetArch(target)} ${tool} for ${target}`, () => {
-        const src = sourceBinaryPath(tool, target);
-        expect(existsSync(src), `${tool} source binary missing for ${target} at ${src}`).toBe(true);
-        expect(statSync(src).size).toBeGreaterThan(0);
-        expect(detectBinaryArch(src), `${tool} for ${target} is the wrong arch`).toBe(
-          targetArch(target),
+  it('uses from-source binaries already staged under resources/media for macOS', () => {
+    for (const target of ['mac-arm64', 'mac-x64'] as const) {
+      for (const tool of ['ffmpeg', 'ffprobe'] as const) {
+        expect(mediaBinarySourceKind(tool, target)).toBe('from-source');
+        expect(sourceBinaryPath(tool, target, '/repo')).toBe(
+          join('/repo', 'resources', 'media', target, tool),
         );
-      });
+      }
     }
-  }
+  });
+
+  it('keeps Windows on installer-provided prebuilt binaries', () => {
+    for (const tool of ['ffmpeg', 'ffprobe'] as const) {
+      expect(mediaBinarySourceKind(tool, 'win-x64')).toBe('installer');
+      const src = sourceBinaryPath(tool, 'win-x64');
+      expect(src).toContain(`@${tool}-installer`);
+      expect(src.endsWith(`${tool}.exe`)).toBe(true);
+      expect(existsSync(src), `${tool} source binary missing for win-x64 at ${src}`).toBe(true);
+      expect(statSync(src).size).toBeGreaterThan(0);
+      expect(detectBinaryArch(src), `${tool} for win-x64 is the wrong arch`).toBe('x64');
+    }
+  });
 });
 
 describe('the app resolver returns an on-disk, host-arch binary in dev (#175)', () => {
