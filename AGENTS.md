@@ -16,7 +16,7 @@
 
 **Kawsay** — A private, fully-local desktop app that helps non-technical people gather, organize, and preserve a loved one's digital memories — messages, photos, videos, voice notes, and documents scattered across messaging, email, social, and cloud accounts — into one lovingly catalogued archive to honor and remember them.
 
-- **Tech stack**: TypeScript (strict), Electron + React + Vite, Tailwind CSS, better-sqlite3, exifr, mailparser, fluent-ffmpeg/ffprobe, yauzl, zod — versions: TypeScript 5.x, React 18, Electron (current stable), Vite 5, Node 20+
+- **Tech stack**: TypeScript (strict), Electron + React + Vite, Tailwind CSS, better-sqlite3, exifr, mailparser, ffmpeg/ffprobe (via @ffmpeg-installer/@ffprobe-installer), yauzl, zod — versions: TypeScript 5.x, React 18, Electron (current stable), Vite 5, Node 20+
 - **Package manager**: pnpm | **Module system**: ES modules (ESM)
 
 ## Commands

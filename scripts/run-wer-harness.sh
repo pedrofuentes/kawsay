@@ -10,7 +10,9 @@
 #   WHISPER_CLI_PATH    absolute path to a whisper.cpp `whisper-cli` (v1.9.1)
 #   WHISPER_MODEL_PATH  absolute path to a verified `ggml-small.bin`
 # Optional env:
-#   KAWSAY_FFMPEG_PATH       ffmpeg binary to decode the clips (else ffmpeg-static)
+#   KAWSAY_FFMPEG_PATH       ffmpeg binary to decode the clips (else the staged
+#                            per-arch ffmpeg under resources/media/ — run
+#                            `pnpm stage:media` first)
 #   KAWSAY_PERF_FIXTURE_DIR  where the clips live (default: .perf-fixtures)
 #   KAWSAY_PERF_RESULTS_OUT  write the markdown results table here
 set -euo pipefail

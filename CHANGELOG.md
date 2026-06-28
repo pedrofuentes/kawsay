@@ -13,9 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Audio transcription and video thumbnails work in the shipped app again** (#175): v0.2.0 packaged
+  with **no `ffmpeg` binary at all** (pnpm blocks `ffmpeg-static`'s download-on-install postinstall, so
+  it was never fetched) and a **wrong-architecture `ffprobe`** (`ffprobe-static@3.1.0` ships a Mach-O
+  **x86_64** binary mislabelled as `darwin/arm64`), so every transcription job (audio extraction) and
+  every video poster frame failed on the installed app. Kawsay now bundles **correct-arch `ffmpeg` +
+  `ffprobe` for all three targets** (macOS arm64, macOS x64, Windows x64), staged from the prebuilt
+  `@ffmpeg-installer`/`@ffprobe-installer` packages into `Resources/media/<os>-<arch>/` as out-of-asar
+  resources (the same pattern as `whisper-cli`), resolved at runtime by `media-binaries.ts`. A CI **build
+  guard** (`scripts/verify-media-binaries.mjs`, in `ci.yml` + `release.yml`) now **fails the build** if
+  any staged binary is missing or the wrong arch, so this can never silently ship again.
+
 ### Security
 
 ### Removed
+
+- **`ffmpeg-static`, `ffprobe-static`, `fluent-ffmpeg`, `@types/fluent-ffmpeg`** (#175): replaced by the
+  per-platform `@ffmpeg-installer`/`@ffprobe-installer` packages, which ship genuinely correct-arch
+  prebuilt binaries as plain files (no download-on-install).
 
 ## [0.2.0] - 2026-06-27
 

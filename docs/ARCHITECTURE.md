@@ -96,7 +96,7 @@ kawsay/
 │   │   │   ├── errors.ts            # ERR_ARCHIVE_* error codes + user message keys
 │   │   │   ├── metadata.ts          # exifr capture-date + EXIF/GPS
 │   │   │   ├── thumbnail.ts         # rendition generation (sharp images / ffmpeg video)
-│   │   │   ├── ffmpeg.ts            # bundled binary path resolution + spawn (no shell)
+│   │   │   ├── media-binaries.ts     # resolve staged per-arch ffmpeg/ffprobe path (#175)
 │   │   │   └── hash.ts              # streaming SHA-256
 │   │   ├── importers/
 │   │   │   ├── types.ts             # Importer · CatalogRecord · ImporterDeps  ← THE boundary (§3)
@@ -833,8 +833,11 @@ Renderer  ──IPC import:start──▶  Main: IngestionCoordinator
   the IPC loop or the UI (AC-9: no main-thread task > 50 ms during import).
 - **`ffprobe`/`ffmpeg` run as a subprocess** — ideally an Electron **`utilityProcess`** (Chromium-
   sandboxed), `spawn` with an **array argv (never a shell string)**, `timeout` + output caps. This
-  isolates the highest-risk parser surface (research `security.md` Topic 2). Binaries are bundled via
-  `ffmpeg-static`/`ffprobe-static` (`fluent-ffmpeg` is deprecated — we call the binaries directly).
+  isolates the highest-risk parser surface (research `security.md` Topic 2). Binaries are bundled
+  per-arch via `@ffmpeg-installer/ffmpeg`/`@ffprobe-installer/ffprobe` (prebuilt files, no
+  download-on-install), staged into `resources/media/<os>-<arch>/` and resolved at runtime by
+  `media-binaries.ts` — we call the binaries directly (#175; superseded the broken
+  `ffmpeg-static`/`ffprobe-static`, which shipped no ffmpeg + a wrong-arch ffprobe in v0.2.0).
 - **Streaming parses** for large exports — the Gmail `.mbox` is **split by a streaming `mbox-parser`
   (async pagination)** that reads message-by-message and hands each RFC-822 message to `postal-mime`;
   the chat log is read line-wise; Facebook JSON is traversed without buffering the whole file (research
@@ -1016,7 +1019,10 @@ export class ArchiveError extends Error {
   `--publish always`, `GH_TOKEN: secrets.GITHUB_TOKEN`).
 - **Native module (`better-sqlite3`)** is rebuilt for Electron's ABI (`npmRebuild: true`,
   `buildDependenciesFromSource: true`) and **`asarUnpack`**'d (a `.node` can't be `dlopen`'d from inside
-  asar). Same `asarUnpack` for `ffmpeg-static`/`ffprobe-static` so the binaries are `spawn`-able.
+  asar). The `ffmpeg`/`ffprobe` binaries ship per-arch as out-of-asar **`extraResources`** under
+  `Resources/media/<os>-<arch>/` (staged from `@ffmpeg-installer`/`@ffprobe-installer` by
+  `scripts/stage-media-binaries.mjs`; same pattern as `whisper-cli`), so each installer carries only its
+  own-arch binary and they remain `spawn`-able (#175).
 - **CI matrix — per-arch native runners** (native modules can't be cross-compiled): `macos-14`
   (arm64), `macos-13` (x64), `windows-latest` (x64). Pin **Node 22** + **Python 3.11** (node-gyp needs
   `distutils`, removed in 3.12). `electron-rebuild` runs **after** `pnpm install`.
@@ -1035,8 +1041,9 @@ appId: es.pedrofuent.kawsay
 productName: Kawsay
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
-  - "**/node_modules/ffmpeg-static/**"
-  - "**/node_modules/ffprobe-static/**"
+extraResources:                                    # per-arch, out-of-asar (#175 + #129)
+  - { from: "resources/media/${os}-${arch}/",   to: "media/${os}-${arch}/" }
+  - { from: "resources/whisper/${os}-${arch}/", to: "whisper/${os}-${arch}/" }
 npmRebuild: true
 buildDependenciesFromSource: true
 mac: { target: [{target: dmg, arch: [arm64, x64]}, {target: zip, arch: [arm64, x64]}], identity: null }
