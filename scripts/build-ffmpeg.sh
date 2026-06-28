@@ -74,7 +74,7 @@ assert_lgpl_clean() {
     echo "$text" | grep -qi 'not legally redistributable' && die "$label is not legally redistributable"
     echo "$text" | grep -qi 'has nonfree parts' && die "$label reports nonfree parts"
     echo "$text" | grep -qi 'ffmpeg is free software' || die "$label -L did not report redistributable free software"
-    log "$label license verified: $(echo "$text" | grep -i 'This version of ffmpeg is free software' | head -1)"
+    log "$label license verified: $(echo "$text" | grep -i 'ffmpeg is free software' | head -1)"
   fi
 }
 

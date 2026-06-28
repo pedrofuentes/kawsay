@@ -24,6 +24,7 @@
     "format:check": "prettier --check .",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "stage:media": "node scripts/stage-media-binaries.mjs",
+    "verify": "node scripts/verify-media-binaries.mjs",
     "predev": "pnpm stage:media",
     "dist": "electron-vite build && electron-builder --publish never",
     "predist": "pnpm stage:media",
