@@ -300,7 +300,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
 
     expect(records).toHaveLength(1);
     expect(records[0]?.sourceRef).toBe('broken-exif.jpg');
-    expect(records[0]?.date.source).toBe('mtime');
+    expect(records[0]?.date?.source).toBe('mtime');
     expect(result.skipped).toContainEqual({
       ref: 'broken-exif.jpg',
       reason: 'partial metadata unavailable: exif fail /import-root/broken-exif.jpg',
