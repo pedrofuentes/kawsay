@@ -22,7 +22,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.renderer-test.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "stage:media": "node scripts/stage-media-binaries.mjs",
     "verify": "node scripts/verify-media-binaries.mjs",
     "predev": "pnpm stage:media",
@@ -43,7 +42,6 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@electron/rebuild": "3.7.2",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
     "@playwright/test": "^1.61.1",

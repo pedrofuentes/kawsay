@@ -1,4 +1,6 @@
-import { basename, extname } from 'node:path';
+import { basename, extname, join } from 'node:path';
+import { mkdirSync, rmSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import type { AssetKind, MediaType, OriginalKind } from '@shared/catalog';
 import type { CatalogDatabase } from '../db/connection';
 import { type CatalogRepo, toIsoUtc } from '../db/catalog-repo';
@@ -74,6 +76,47 @@ export interface IngestionSummary {
 
 /** Media kinds that get a generated still (photo → thumbnail, video → poster). */
 const RENDERED_MEDIA: ReadonlySet<MediaType> = new Set<MediaType>(['photo', 'video']);
+const ORIGINAL_LOCK_POLL_MS = 10;
+
+function hasContentAddressedReference(db: CatalogDatabase, hash: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS found
+       FROM item_occurrences o
+       JOIN items i ON i.id = o.item_id
+       WHERE i.content_hash = @hash AND o.original_kind = 'content_addressed'
+       LIMIT 1`,
+    )
+    .get<{ found: number }>({ hash });
+  return row !== undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+async function acquireOriginalLock(root: string, hash: string, signal: AbortSignal): Promise<() => void> {
+  const parent = join(root, 'originals', '.locks');
+  mkdirSync(parent, { recursive: true });
+  const lockPath = join(parent, `${hash}.lock`);
+  for (;;) {
+    if (signal.aborted) {
+      throw new Error('import cancelled while waiting for original lock');
+    }
+    try {
+      await mkdir(lockPath);
+      return () => rmSync(lockPath, { recursive: true, force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+      await sleep(ORIGINAL_LOCK_POLL_MS);
+    }
+  }
+}
 
 /**
  * The denormalized FTS feed for an item: the source filename plus the author.
@@ -161,6 +204,8 @@ export async function runIngestion(input: IngestionInput): Promise<IngestionSumm
     let originalExt: string | null = null;
     let fileSizeBytes: number | null = null;
     let renderSourcePath: string | null = null;
+    let copiedOriginalPath: string | null = null;
+    let releaseOriginalLock: (() => void) | null = null;
 
     // 1. Content addressing + original retention — async, OUTSIDE the txn.
     if (record.originalPath !== null) {
@@ -192,6 +237,7 @@ export async function runIngestion(input: IngestionInput): Promise<IngestionSumm
         // rejects, disk full) must skip just THIS record — never abort the run
         // (AC-15), mirroring the hashFile guard above.
         try {
+          releaseOriginalLock = await acquireOriginalLock(libraryRoot, contentHash, signal);
           const put = putOriginal({
             root: libraryRoot,
             hash: contentHash,
@@ -200,7 +246,10 @@ export async function runIngestion(input: IngestionInput): Promise<IngestionSumm
           });
           originalKind = 'content_addressed';
           renderSourcePath = put.absPath;
+          if (put.copied) copiedOriginalPath = put.absPath;
         } catch {
+          releaseOriginalLock?.();
+          releaseOriginalLock = null;
           skipped.push({
             ref: record.sourceRef,
             reason: 'could not store original',
@@ -241,7 +290,21 @@ export async function runIngestion(input: IngestionInput): Promise<IngestionSumm
       });
       return { itemId, occurrenceInserted: occurrence.inserted };
     });
-    const { itemId, occurrenceInserted } = persist();
+    let itemId: string;
+    let occurrenceInserted: boolean;
+    try {
+      ({ itemId, occurrenceInserted } = persist());
+    } catch (error) {
+      if (copiedOriginalPath !== null && contentHash !== null) {
+        await Promise.resolve();
+      }
+      if (copiedOriginalPath !== null && contentHash !== null && !hasContentAddressedReference(db, contentHash)) {
+        rmSync(copiedOriginalPath, { force: true });
+      }
+      releaseOriginalLock?.();
+      throw error;
+    }
+    releaseOriginalLock?.();
     itemIds.add(itemId);
     if (occurrenceInserted) occurrencesAdded += 1;
 
@@ -288,7 +351,12 @@ export async function runIngestion(input: IngestionInput): Promise<IngestionSumm
     }
     const next = await generator.next();
     if (next.done) break;
-    await persistRecord(next.value);
+    try {
+      await persistRecord(next.value);
+    } catch (error) {
+      await generator.return({ recordCount, skipped }).catch(() => undefined);
+      throw error;
+    }
     recordCount += 1;
     emitProgress({ phase: 'emit', processed: recordCount });
   }

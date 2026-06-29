@@ -13,7 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Hardened content-addressed originals against corrupted existing blobs, catalog-transaction orphan files,
+  orphan garbage collection, ffprobe local-path diagnostics, worker fault leaks, malformed progress-event
+  drops, and media-probe/EXIF edge cases (#44, #58, #78, #80, #81, #83, #84, #90).
+
 ### Security
+
+- Removed the standalone `@electron/rebuild` dev dependency and `rebuild:native` script; packaging relies on
+  electron-builder's app-scoped native rebuild path and keeps native install-script tracking pinned to
+  `better-sqlite3` only (#46).
 
 ### Removed
 

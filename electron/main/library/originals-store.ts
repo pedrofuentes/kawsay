@@ -1,5 +1,17 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
+import { dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { OriginalKind } from '@shared/catalog';
 import type { CatalogDatabase } from '../db/connection';
 
@@ -11,6 +23,7 @@ import type { CatalogDatabase } from '../db/connection';
  * the root before any filesystem mutation.
  */
 export const ERR_ORIGINAL_PATH_ESCAPE = 'ERR_ORIGINAL_PATH_ESCAPE';
+export const ERR_ORIGINAL_INTEGRITY = 'ERR_ORIGINAL_INTEGRITY';
 
 /** A content address is exactly 64 lowercase hex characters (SHA-256). */
 const HASH_RE = /^[0-9a-f]{64}$/;
@@ -21,6 +34,10 @@ const MAX_EXT_LEN = 16;
 
 function rejectPath(detail: string): never {
   throw new Error(`${ERR_ORIGINAL_PATH_ESCAPE}: ${detail}`);
+}
+
+function rejectIntegrity(detail: string): never {
+  throw new Error(`${ERR_ORIGINAL_INTEGRITY}: ${detail}`);
 }
 
 /** Reject a content hash that is not a canonical lowercase SHA-256 hex string. */
@@ -77,6 +94,53 @@ export function blobAbsPath(root: string, hash: string, ext?: string | null): st
   return join(root, blobRelPath(hash, ext));
 }
 
+export interface VerifyOriginalBlobInput {
+  root: string;
+  hash: string;
+  ext?: string | null;
+}
+
+export interface VerifyOriginalBlobResult {
+  ok: boolean;
+  absPath: string;
+}
+
+export async function hashOriginalFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await new Promise<void>((resolve, reject) => {
+    const stream = createReadStream(path);
+    stream.on('data', (chunk: string | Buffer) => {
+      hash.update(chunk);
+    });
+    stream.on('error', reject);
+    stream.on('end', resolve);
+  });
+  return hash.digest('hex');
+}
+
+function sha256File(path: string): string {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = openSync(path, 'r');
+  try {
+    for (;;) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest('hex');
+}
+
+export function verifyOriginalBlob(input: VerifyOriginalBlobInput): VerifyOriginalBlobResult {
+  assertSafeHash(input.hash);
+  const absPath = assertWithinRoot(input.root, blobAbsPath(input.root, input.hash, input.ext));
+  if (!existsSync(absPath)) return { ok: false, absPath };
+  return { ok: sha256File(absPath) === input.hash, absPath };
+}
+
 export interface PutOriginalInput {
   /** Absolute library root. */
   root: string;
@@ -104,10 +168,110 @@ export function putOriginal(input: PutOriginalInput): PutOriginalResult {
   const relPath = blobRelPath(input.hash, input.ext);
   const absPath = join(input.root, relPath);
   assertWithinRoot(input.root, absPath);
-  if (existsSync(absPath)) return { relPath, absPath, copied: false };
+  if (existsSync(absPath)) {
+    const verified = verifyOriginalBlob({ root: input.root, hash: input.hash, ext: input.ext });
+    if (!verified.ok) rejectIntegrity('stored blob bytes do not match content hash');
+    return { relPath, absPath, copied: false };
+  }
   mkdirSync(dirname(absPath), { recursive: true });
-  copyFileSync(input.sourcePath, absPath);
+  const tempPath = `${absPath}.part-${randomUUID()}`;
+  try {
+    copyFileSync(input.sourcePath, tempPath);
+    if (sha256File(tempPath) !== input.hash) {
+      rejectIntegrity('copied bytes do not match content hash');
+    }
+    renameSync(tempPath, absPath);
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
   return { relPath, absPath, copied: true };
+}
+
+export interface OriginalGcOptions {
+  limit?: number;
+  afterHash?: string | null;
+}
+
+export interface OriginalGcResult {
+  scanned: number;
+  deleted: number;
+  nextCursor: string | null;
+}
+
+interface BlobCandidate {
+  hash: string;
+  ext: string | null;
+  absPath: string;
+  cursor: string;
+}
+
+function gcCursor(hash: string, ext: string | null): string {
+  return `${hash}\t${ext ?? ''}`;
+}
+
+function candidateAfter(cursor: string, after: string | null): boolean {
+  if (after === null) return true;
+  if (!after.includes('\t')) return cursor.split('\t')[0] > after;
+  return cursor > after;
+}
+
+function listOriginalCandidates(root: string, afterHash: string | null, limit: number): BlobCandidate[] {
+  const originals = join(root, 'originals');
+  if (!existsSync(originals)) return [];
+  const candidates: BlobCandidate[] = [];
+  for (const shard of readdirSync(originals, { withFileTypes: true })) {
+    if (!shard.isDirectory()) continue;
+    const shardPath = join(originals, shard.name);
+    for (const entry of readdirSync(shardPath, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const file = entry.name;
+      const dot = file.indexOf('.');
+      const hash = dot === -1 ? file : file.slice(0, dot);
+      const ext = extname(file) || null;
+      const cursor = gcCursor(hash, ext);
+      if (!HASH_RE.test(hash) || !candidateAfter(cursor, afterHash)) continue;
+      candidates.push({ hash, ext, absPath: join(shardPath, file), cursor });
+    }
+  }
+  return candidates.sort((a, b) => a.cursor.localeCompare(b.cursor)).slice(0, limit);
+}
+
+function hasContentAddressedReference(db: CatalogDatabase, hash: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS found
+       FROM item_occurrences o
+       JOIN items i ON i.id = o.item_id
+       WHERE i.content_hash = @hash AND o.original_kind = 'content_addressed'
+       LIMIT 1`,
+    )
+    .get<{ found: number }>({ hash });
+  return row !== undefined;
+}
+
+export function garbageCollectOrphanedOriginals(
+  db: CatalogDatabase,
+  root: string,
+  options: OriginalGcOptions = {},
+): OriginalGcResult {
+  const limit = Math.max(1, options.limit ?? 500);
+  const afterHash = options.afterHash ?? null;
+  const candidates = listOriginalCandidates(root, afterHash, limit);
+  let deleted = 0;
+  for (const candidate of candidates) {
+    assertSafeHash(candidate.hash);
+    assertWithinRoot(root, candidate.absPath);
+    if (!hasContentAddressedReference(db, candidate.hash)) {
+      rmSync(candidate.absPath, { force: true });
+      deleted += 1;
+    }
+  }
+  return {
+    scanned: candidates.length,
+    deleted,
+    nextCursor: candidates.length === limit ? candidates.at(-1)?.cursor ?? null : null,
+  };
 }
 
 interface OriginalRef {
