@@ -369,10 +369,20 @@ describe('release workflow publishes ONE consolidated GitHub Release — no publ
     // after the human-gated publish job starts.
     expect(build).toMatch(/dist\/\*\.yml/);
     expect(publish).toMatch(/channel="\$\{tag#\*-\}"/);
+    expect(publish).toMatch(/channel="\$\{channel%%\.\*\}"/);
+    expect(publish).toMatch(/latest\|alpha\|beta\|rc/);
     expect(publish).toMatch(/"\$\{channel\}-mac\.yml"/);
     expect(publish).toMatch(/"\$\{channel\}\.yml"/);
     expect(publish).not.toMatch(/\[ -f latest-mac\.yml \]/);
     expect(publish).not.toMatch(/\[ -f latest\.yml \]/);
+  });
+
+  it('passes the resolved tag into shell via env instead of interpolating it in a run block', () => {
+    // The publish job has contents: write. A tag like `v1.2.3-rc.1"; curl ...; "`
+    // must be data in "$TAG", never workflow-expression text spliced into bash.
+    expect(publish).toMatch(/env:\n(?: {10}.+\n)* {10}TAG: \$\{\{ steps\.tag\.outputs\.tag \}\}/);
+    expect(publish).toMatch(/tag="\$TAG"/);
+    expect(publish).not.toMatch(/tag="\$\{\{ steps\.tag\.outputs\.tag \}\}"/);
   });
 
   it('keeps the protected `release` environment human gate on the single publish job only', () => {
