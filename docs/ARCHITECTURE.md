@@ -230,7 +230,7 @@ response) unless marked *event* (main → renderer stream).
 | `import:progress` | **event** | `ImportProgressEvent` | — |
 | `catalog:timeline` | invoke | `{ limit: int(1..200), cursor?: string }` | `{ items: ItemCard[], nextCursor: string \| null }` |
 | `catalog:search` | invoke | `{ query: string(1..512), limit?: int(1..200), offset?: int, source?: SourceType }` | `{ items: ItemCard[], total: number }` |
-| `catalog:thumbnail` | invoke | `{ id: uuid, size?: int(64..320) }` | `data:image/... \| null` |
+| `catalog:thumbnail` | invoke | `{ id: uuid, size?: int(16..320) }` | `data:image/... \| null` |
 | `catalog:getTranscript` | invoke | `{ id: uuid }` | `TranscriptView` |
 | `transcription:downloadModel` | invoke | `{}` | `{ status: 'started' \| 'already-present' }` |
 | `transcription:modelStatus` | invoke | `{}` | `{ ready: boolean }` |
@@ -238,28 +238,61 @@ response) unless marked *event* (main → renderer stream).
 | `transcription:status` | invoke | `{}` | `TranscriptionSnapshot` |
 | `transcription:cancel` | invoke | `{}` | `{ cancelled: boolean }` |
 
-Representative schemas (`electron/main/ipc/schemas.ts`, imported by preload too):
+Representative schemas live in `shared/ipc/schemas.ts`; channel names and request/response pairing live in
+`shared/ipc/contract.ts`, and both preload and main import the shared contract:
 
 ```ts
-export const SourceType = z.enum(['folder','whatsapp','google_takeout','facebook','linkedin','imessage']);
+export const sourceTypeSchema = z.enum(['folder','whatsapp','google_takeout','facebook','linkedin','imessage']);
 
-export const ImportStartSchema = z.strictObject({
-  sourceType: SourceType,
-  inputPath: pathSchema,                       // an absolute path the user picked via dialog
+export const importSummarySchema = z.strictObject({
+  recordCount: z.number().int().nonnegative(),
+  itemsTouched: z.number().int().nonnegative(),
+  occurrencesAdded: z.number().int().nonnegative(),
+  assetsAdded: z.number().int().nonnegative(),
+  thumbnailFailures: z.number().int().nonnegative(),
+  skipped: z.array(skippedItemSchema),
+  cancelled: z.boolean(),
 });
 
-export const SearchOptsSchema = z.strictObject({
-  query:  z.string().min(1).max(512),
-  source: SourceType.optional(),
-  limit:  z.number().int().min(1).max(200).default(50),
-  offset: z.number().int().min(0).default(0),
-});
+export const thumbnailDataUrlSchema = z
+  .string()
+  .regex(/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/u)
+  .max(1024 * 1024)
+  .nullable();
+```
 
-export const IMPORT_PROGRESS_PHASES = ['discover', 'parse', 'normalize', 'emit', 'done'] as const;
+The `ipcContract` is the single enumerated runtime contract:
 
+```ts
+// shared/ipc/contract.ts
+export const IMPORT_START = 'import:start';
+export const CATALOG_THUMBNAIL = 'catalog:thumbnail';
+
+export const ipcContract = {
+  [IMPORT_START]: {
+    request: z.strictObject({
+      sourceType: sourceTypeSchema,
+      inputPath: pathSchema,
+    }),
+    response: z.strictObject({ jobId: z.uuid() }),
+  },
+  [CATALOG_THUMBNAIL]: {
+    request: z.strictObject({
+      id: z.uuid(),
+      size: z.number().int().min(16).max(320).optional(),
+    }),
+    response: thumbnailDataUrlSchema,
+  },
+  // ...one entry for every exposed channel...
+} as const;
+```
+
+Events use the same shared schema vocabulary:
+
+```ts
 export const importProgressEventSchema = z.strictObject({
   jobId: z.uuid(),
-  phase: z.enum(IMPORT_PROGRESS_PHASES),
+  phase: z.enum(['discover', 'parse', 'normalize', 'emit', 'done']),
   processed: z.number().int().nonnegative(),
   total: z.number().int().nonnegative().nullable(),
   message: z.string().nullable(),
@@ -268,17 +301,35 @@ export const importProgressEventSchema = z.strictObject({
 });
 ```
 
-Handlers re-validate and check origin:
+Preload validates against `ipcContract` before invoking:
+
+```ts
+// electron/preload/index.ts
+const invoke = createValidatedInvoke((channel, payload) => ipcRenderer.invoke(channel, payload));
+const subscribe = createValidatedSubscribe((channel, listener) => {
+  const handler = (_event: IpcRendererEvent, payload: unknown): void => listener(payload);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+});
+
+contextBridge.exposeInMainWorld('kawsayAPI', createKawsayApi(invoke, subscribe));
+```
+
+Handlers re-validate and check origin centrally:
 
 ```ts
 // electron/main/ipc/register.ts
-ipcMain.handle('import:start', async (event, raw) => {
-  if (!isTrustedSenderUrl(event.senderFrame?.url ?? '', trustedSenderOptions)) {
-    throw new Error('bad sender origin');
-  }
-  const { sourceType, inputPath } = ImportStartSchema.parse(raw);   // never trust the preload alone
-  return ingestion.start(sourceType, inputPath);                    // returns { jobId }
-});
+for (const channel of Object.keys(ipcContract) as IpcChannel[]) {
+  const { request: requestSchema, response: responseSchema } = ipcContract[channel];
+  ipcMain.handle(channel, async (event, payload) => {
+    if (!isTrustedSenderUrl(event.senderFrame?.url ?? '', trustedSenderOptions)) {
+      throw new Error(`Rejected IPC on "${channel}" from untrusted sender`);
+    }
+    const request = requestSchema.parse(payload);        // never trust preload alone
+    const response = await handlers[channel](request as never);
+    return responseSchema.parse(response);
+  });
+}
 ```
 
 ### 2.4 The `kawsay-media://` custom protocol (no `file://` to the renderer)

@@ -151,7 +151,7 @@ jobs:
         # electron-builder reads electron-builder.yml: it builds the per-OS targets
         # and rebuilds the native module for Electron's ABI. `--publish never` means
         # NO leg creates or uploads a GitHub Release (this is the #122 fix); it still
-        # writes the installers AND the latest*.yml / blockmap auto-update metadata
+        # writes the installers AND the channel *.yml / blockmap auto-update metadata
         # into dist/ (that metadata is generated whenever a publish provider is
         # configured, independent of the publish policy) for the publish job to ship.
         run: pnpm exec electron-builder --publish never
@@ -172,7 +172,7 @@ jobs:
             dist/*.zip
             dist/*.exe
             dist/*.blockmap
-            dist/latest*.yml
+            dist/*.yml
           # Fail the leg if it produced nothing to publish (defence in depth).
           if-no-files-found: error
           retention-days: 7
@@ -231,6 +231,8 @@ jobs:
         # auto-update metadata are present before publishing, so a missing leg fails
         # here instead of shipping the partial release that #122 produced.
         shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -240,12 +242,24 @@ jobs:
           dmgs=(*.dmg)
           zips=(*.zip)
           exes=(*.exe)
+          tag="$TAG"
+          channel="latest"
+          if [[ "$tag" == *-* ]]; then
+            channel="${tag#*-}"
+            channel="${channel%%.*}"
+          fi
+          case "$channel" in
+            latest|alpha|beta|rc) ;;
+            *) echo "unsupported update metadata channel: $channel" >&2; exit 1 ;;
+          esac
+          mac_metadata="${channel}-mac.yml"
+          win_metadata="${channel}.yml"
           [ "${#dmgs[@]}" -ge 1 ] || { echo "missing macOS .dmg" >&2; exit 1; }
           [ "${#zips[@]}" -ge 1 ] || { echo "missing macOS .zip" >&2; exit 1; }
           [ "${#exes[@]}" -ge 1 ] || { echo "missing Windows .exe" >&2; exit 1; }
-          [ -f latest-mac.yml ] || { echo "missing latest-mac.yml" >&2; exit 1; }
-          [ -f latest.yml ] || { echo "missing latest.yml (Windows update metadata)" >&2; exit 1; }
-          echo "ok: macOS + Windows installers and auto-update metadata all present"
+          [ -f "$mac_metadata" ] || { echo "missing $mac_metadata" >&2; exit 1; }
+          [ -f "$win_metadata" ] || { echo "missing $win_metadata (Windows update metadata)" >&2; exit 1; }
+          echo "ok: macOS + Windows installers and $channel auto-update metadata all present"
 
       - name: Publish single consolidated GitHub Release
         # ONE release for the tag carrying every platform's assets (dmg/zip/exe,

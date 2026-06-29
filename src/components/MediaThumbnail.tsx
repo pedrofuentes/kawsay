@@ -22,7 +22,26 @@ import type { ItemCardDTO } from '@shared/kawsay-api';
 
 // Resolved data: URLs (or null for "no thumbnail"), keyed by item id, kept across
 // virtualized remounts so re-scrolling a card never reloads or flickers.
+const THUMBNAIL_MEMO_LIMIT = 256;
 const thumbnailMemo = new Map<string, string | null>();
+
+function readThumbnailMemo(id: string): string | null | undefined {
+  const value = thumbnailMemo.get(id);
+  if (value === undefined) return undefined;
+  thumbnailMemo.delete(id);
+  thumbnailMemo.set(id, value);
+  return value;
+}
+
+function writeThumbnailMemo(id: string, value: string | null): void {
+  if (thumbnailMemo.has(id)) thumbnailMemo.delete(id);
+  thumbnailMemo.set(id, value);
+  while (thumbnailMemo.size > THUMBNAIL_MEMO_LIMIT) {
+    const oldest = thumbnailMemo.keys().next().value;
+    if (oldest === undefined) break;
+    thumbnailMemo.delete(oldest);
+  }
+}
 
 interface MediaThumbnailProps {
   item: ItemCardDTO;
@@ -43,14 +62,14 @@ export function MediaThumbnail({
   const api = useKawsayApi();
   const reducedMotion = usePrefersReducedMotion();
   const caption = (item.title ?? item.description ?? '').trim();
-  const [dataUrl, setDataUrl] = useState<string | null>(() => thumbnailMemo.get(item.id) ?? null);
+  const [dataUrl, setDataUrl] = useState<string | null>(() => readThumbnailMemo(item.id) ?? null);
 
   useEffect(() => {
     // Only renderable memories ask for bytes; a browser preview (no bridge) and
     // non-visual items simply keep the icon.
     if (!item.hasThumbnail || api === undefined) return;
 
-    const cached = thumbnailMemo.get(item.id);
+    const cached = readThumbnailMemo(item.id);
     if (cached !== undefined) {
       setDataUrl(cached);
       return;
@@ -60,12 +79,12 @@ export function MediaThumbnail({
     void api
       .getThumbnail({ id: item.id })
       .then((url) => {
-        thumbnailMemo.set(item.id, url);
+        writeThumbnailMemo(item.id, url);
         if (active) setDataUrl(url);
       })
       .catch(() => {
         // One unreadable original must never break the view — fall back to the icon.
-        thumbnailMemo.set(item.id, null);
+        writeThumbnailMemo(item.id, null);
         if (active) setDataUrl(null);
       });
     return () => {
