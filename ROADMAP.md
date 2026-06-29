@@ -132,7 +132,7 @@ text/sender/date provenance plus linked attachments. Next slice: **AC-26** adds 
 nesting and service-message semantics are follow-ups. **AC-27** adds a Facebook Messenger (Meta DYI
 JSON) connector for inbox/archived/filtered `message_*.json` threads, sender/date/content
 provenance, mojibake repair, bounded streaming parse, and traversal-safe photo/video/audio refs;
-reactions, call logs, share/link unfurls, and nuanced group membership are follow-ups.
+reactions, call logs, share/link unfurls, and nuanced group membership are follow-ups. **AC-28** adds an Instagram (Meta DYI JSON) connector for `your_instagram_activity/messages/inbox/<thread>/message_*.json` direct messages, sender/date/content provenance, mojibake repair, bounded streaming parse, and traversal-safe photo/video/audio refs; posts, stories, reels, comments, and likes are follow-ups.
 **Authorization:** time-boxed per connector (export/file-based, reversible) — no new egress.
 
 ### M4 — AI categorization & smart search · **P2 · proposed**
