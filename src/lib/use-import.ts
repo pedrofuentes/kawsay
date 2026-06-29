@@ -135,8 +135,9 @@ export function useImport(): UseImportResult {
         dispatch({ type: 'failed', error: 'Kawsay is not connected on this device.' });
         return;
       }
-      startingRef.current = true;
       pendingProgressRef.current = [];
+      jobIdRef.current = null;
+      startingRef.current = true;
       dispatch({ type: 'start' });
       try {
         const { jobId } = await api.startImport(input);

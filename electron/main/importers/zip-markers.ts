@@ -4,6 +4,7 @@ function toPosixZipName(name: string): string {
   return name.replace(/\\/g, '/');
 }
 
+const ZIP_ENTRY_NAME_CACHE_LIMIT = 32;
 const zipEntryNameCache = new Map<string, Promise<readonly string[]>>();
 
 async function readZipEntryNames(inputPath: string): Promise<readonly string[]> {
@@ -44,7 +45,15 @@ async function readZipEntryNames(inputPath: string): Promise<readonly string[]> 
 function zipEntryNames(inputPath: string): Promise<readonly string[]> {
   const cached = zipEntryNameCache.get(inputPath);
   if (cached !== undefined) {
+    zipEntryNameCache.delete(inputPath);
+    zipEntryNameCache.set(inputPath, cached);
     return cached;
+  }
+  if (zipEntryNameCache.size >= ZIP_ENTRY_NAME_CACHE_LIMIT) {
+    const oldest = zipEntryNameCache.keys().next().value;
+    if (oldest !== undefined) {
+      zipEntryNameCache.delete(oldest);
+    }
   }
   const pending = readZipEntryNames(inputPath).catch((error: unknown) => {
     zipEntryNameCache.delete(inputPath);
