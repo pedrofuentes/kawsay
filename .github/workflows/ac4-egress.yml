@@ -161,7 +161,7 @@ jobs:
 
       - name: Cache compiled whisper-cli
         id: whisper-cache
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: resources/whisper
           key: whisper-cli-v1-${{ runner.os }}-${{ env.WHISPER_CPP_REF }}-${{ env.WHISPER_CPP_COMMIT }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}
@@ -179,7 +179,7 @@ jobs:
           done
 
       - name: Cache egress fixtures (jfk.wav + tiny model)
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .harness-fixtures
           key: ac4-egress-fixtures-v1-${{ env.WHISPER_CPP_COMMIT }}-tiny
@@ -238,7 +238,7 @@ jobs:
 
       - name: Cache compiled whisper-cli
         id: whisper-cache
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: resources/whisper
           key: whisper-cli-v1-${{ runner.os }}-${{ env.WHISPER_CPP_REF }}-${{ env.WHISPER_CPP_COMMIT }}-${{ hashFiles('scripts/build-whisper-cli.sh') }}
@@ -257,7 +257,7 @@ jobs:
           echo "ok: $f ($(wc -c <"$f") bytes)"
 
       - name: Cache egress fixtures (jfk.wav + tiny model)
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .harness-fixtures
           key: ac4-egress-fixtures-v1-${{ env.WHISPER_CPP_COMMIT }}-tiny
