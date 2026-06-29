@@ -193,31 +193,21 @@ the URL — but note an external link is still a *user-initiated OS action*, not
 
 ### 2.2 Content-Security-Policy (canonical)
 
-Set in main via `session.defaultSession.webRequest.onHeadersReceived`, and mirrored in `index.html`'s
-`<meta http-equiv>` as belt-and-suspenders (research `security.md` Topic 3; PRD §5.1; AC-4):
+Set in main via `session.defaultSession.webRequest.onHeadersReceived` before the window loads any content
+(research `security.md` Topic 3; PRD §5.1; AC-4):
 
 ```
 default-src 'none';
 script-src 'self';
 style-src 'self';
-style-src-attr 'unsafe-inline';                 ← see note
-img-src 'self' kawsay-media: data: blob:;
-media-src 'self' kawsay-media: blob:;
+img-src 'self' data:;
 font-src 'self';
 connect-src 'none';                             ← the renderer-side egress kill-switch
-worker-src 'self' blob:;
 object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';
 ```
 
 - **`connect-src 'none'`** forbids `fetch`/XHR/WebSocket/`EventSource` from the renderer entirely — the
   CSP half of the zero-egress guarantee (§6).
-- **`style-src-attr 'unsafe-inline'`** is required because `@tanstack/react-virtual` sets inline
-  `style` *attributes* (transform/height) on virtual rows. We keep **stylesheets** locked to `'self'`
-  (`style-src 'self'`, no inline `<style>` injection — Tailwind compiles to a static sheet) and only
-  relax the narrower `style-src-attr`. This is stricter than blanket `'unsafe-inline'` and is the
-  deliberate reconciliation of PRD §5.1's strict stance with the virtualizer's needs. *(Flag for
-  red-team: confirm no library injects inline `<style>` blocks; if so, switch those to hashed styles.)*
-- **`kawsay-media:`** is our custom local-media scheme (§2.4), not a network origin.
 - **No remote anything** — fonts (`Lora`, `Inter`) ship as bundled `.woff2`; the icon set is a single
   bundled monochrome SVG sprite; no Google Fonts, no CDN (USER_FLOWS §5.4, §4 `Icon`).
 
@@ -265,13 +255,16 @@ export const SearchOptsSchema = z.strictObject({
   offset: z.number().int().min(0).default(0),
 });
 
-export const ImportProgress = z.object({
-  jobId: z.string().uuid(),
-  phase: z.enum(['extracting','scanning','ingesting','thumbnailing','done']),
-  processed: z.number().int(), total: z.number().int().nullable(),
-  found: z.object({ photos: z.number(), videos: z.number(), audios: z.number(),
-                    documents: z.number(), messages: z.number() }),
-  skipped: z.number().int(),
+export const IMPORT_PROGRESS_PHASES = ['discover', 'parse', 'normalize', 'emit', 'done'] as const;
+
+export const importProgressEventSchema = z.strictObject({
+  jobId: z.uuid(),
+  phase: z.enum(IMPORT_PROGRESS_PHASES),
+  processed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative().nullable(),
+  message: z.string().nullable(),
+  summary: importSummarySchema.nullable(),
+  error: z.string().nullable(),
 });
 ```
 
