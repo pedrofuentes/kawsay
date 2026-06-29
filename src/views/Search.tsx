@@ -130,6 +130,7 @@ function highlight(text: string, term: string): ReactNode {
 
 /** Local debounce — a few lines, no dependency (USER_FLOWS §E; AGENTS no-new-deps). */
 function useDebouncedValue<T>(value: T, delayMs: number): T {
+  // nosemgrep: semgrep.semgrep-rules.typescript.react.best-practice.react-props-in-state -- debounce intentionally delays mirroring the input value.
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
     const id = setTimeout(() => setDebounced(value), delayMs);

@@ -134,5 +134,5 @@ export function getSource(type: SourceType): SourceMeta {
 
 /** Replace every `{name}` placeholder with the loved one's name. */
 export function withName(template: string, name: string): string {
-  return template.replaceAll('{name}', name);
+  return template.replace(/\{name\}/g, name);
 }
