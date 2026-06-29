@@ -32,7 +32,8 @@ describe('createEventSender (main → renderer, validated before send)', () => {
 
   it('drops a malformed event BEFORE it crosses to the renderer (never sends it)', () => {
     const send = vi.fn();
-    const emit = createEventSender(send);
+    const diagnostics = vi.fn();
+    const emit = createEventSender(send, { onInvalidEvent: diagnostics });
 
     // A bad phase would otherwise reach React; the sender refuses to forward it.
     emit(IMPORT_PROGRESS, { ...validEvent, phase: 'teleporting' } as never);
@@ -40,6 +41,9 @@ describe('createEventSender (main → renderer, validated before send)', () => {
     emit(IMPORT_PROGRESS, { ...validEvent, rogue: true } as never);
 
     expect(send).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveBeenCalledTimes(2);
+    expect(diagnostics.mock.calls[0]?.[0]).toMatchObject({ channel: IMPORT_PROGRESS });
+    expect(diagnostics.mock.calls[0]?.[0].issues[0].path).toEqual(['phase']);
   });
 
   it('validates and forwards a transcription:progress snapshot (#157)', () => {

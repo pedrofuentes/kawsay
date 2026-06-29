@@ -509,6 +509,24 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(att2?.date?.value.getTime()).toBe(utc(2022, 5, 15, 8, 0, 0));
     });
 
+    it('reports E_WRITE_ATTACH and keeps the email when attachment materialization fails', async () => {
+      const f = buildFs(FILES);
+      f.fs.writeFile = async () => {
+        throw new Error('disk full');
+      };
+
+      const { records, result, skips } = await run(ROOT, makeDeps(f));
+
+      expect(records.some((r) => r.mediaType === 'message')).toBe(true);
+      expect(records.some((r) => r.sourceRef.includes('/att/'))).toBe(false);
+      expect(skips).toContainEqual({
+        ref: 'Mail/All mail.mbox#3/att/0',
+        reason: 'could not write attachment: disk full',
+        code: 'E_WRITE_ATTACH',
+      });
+      expect(result.skipped.some((s) => s.code === 'E_WRITE_ATTACH')).toBe(true);
+    });
+
     it('skips a malformed message (E_PARSE_MSG) and preserves the others (AC-15)', async () => {
       const f = buildFs(FILES);
       const { records, result, skips } = await run(ROOT, makeDeps(f));
@@ -631,6 +649,29 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(photo?.date?.source).toBe('exif');
       expect(photo?.date?.value.getTime()).toBe(utc(2018, 6, 4, 10, 30, 0));
       expect(photo?.gps).toEqual({ lat: 1.5, lon: 2.5 });
+    });
+
+    it('treats EXIF GPS 0/0 as a no-location sentinel when no sidecar is present', async () => {
+      const photoPath = abs('Google Photos/Trip/no-location.jpg');
+      const f = buildFs({ 'Google Photos/Trip/no-location.jpg': { content: 'jpeg' } });
+      const exif: ExifData = { gps: { lat: 0, lon: 0 } };
+
+      const { byRef } = await run(ROOT, makeDeps(f, { exif: { byPath: { [photoPath]: exif } } }));
+
+      expect(byRef.get('Google Photos/Trip/no-location.jpg')?.gps).toBeNull();
+    });
+
+    it('treats sidecar geoData 0/0 as a no-location sentinel', async () => {
+      const f = buildFs({
+        'Google Photos/Trip/sidecar-no-location.jpg': { content: 'jpeg' },
+        'Google Photos/Trip/sidecar-no-location.jpg.json': {
+          content: sidecar({ geoData: { latitude: 0, longitude: 0, altitude: 10 } }),
+        },
+      });
+
+      const { byRef } = await run(ROOT, makeDeps(f));
+
+      expect(byRef.get('Google Photos/Trip/sidecar-no-location.jpg')?.gps).toBeNull();
     });
 
     it('falls back to file mtime when neither sidecar nor EXIF has a date', async () => {

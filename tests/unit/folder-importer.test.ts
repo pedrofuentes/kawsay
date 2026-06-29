@@ -276,6 +276,19 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records[0]?.gps).toBeNull();
   });
 
+  it('treats EXIF GPS 0/0 as a no-location sentinel, not a real coordinate', async () => {
+    const fs = buildFs({ 'sentinel.jpg': { mtimeMs: 1 } });
+    const { deps } = makeDeps(fs, {
+      byPath: {
+        'sentinel.jpg': { gps: { lat: 0, lon: 0 } },
+      },
+    });
+
+    const { records } = await collect(makeContext(deps).ctx);
+
+    expect(records[0]?.gps).toBeNull();
+  });
+
   it('treats an EXIF read failure as no-EXIF (mtime fallback) and never drops the photo', async () => {
     const mtimeMs = Date.UTC(2020, 10, 5);
     const fs = buildFs({ 'corrupt.heic': { mtimeMs } });
@@ -315,7 +328,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(exifCalls).toEqual([]);
   });
 
-  it('keeps a video record with null duration when probeMedia fails', async () => {
+  it('keeps a video record with null duration and reports a diagnostic when probeMedia fails', async () => {
     const fs = buildFs({ 'broken.mp4': { mtimeMs: 7 } });
     const { deps } = makeDeps(fs, {}, { throwsFor: ['broken.mp4'] });
     const c = makeContext(deps);
@@ -324,7 +337,9 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.durationSec).toBeNull();
     expect(records[0]?.mimeType).toBe('video/mp4'); // falls back to the extension mime
-    expect(result.skipped).toEqual([]);
+    expect(result.skipped.map((item) => ({ ...item, reason: item.reason.replace(/\\/g, '/') }))).toEqual([
+      { ref: 'broken.mp4', reason: 'could not probe media: probe fail /import-root/broken.mp4', code: 'E_PROBE' },
+    ]);
   });
 
   it('honors a pre-aborted signal — emits nothing and returns a zero-count result', async () => {

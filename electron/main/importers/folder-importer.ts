@@ -141,14 +141,6 @@ async function readExifSafe(deps: ImporterDeps, absPath: string): Promise<ExifDa
   }
 }
 
-async function probeMediaSafe(deps: ImporterDeps, absPath: string): Promise<MediaInfo | null> {
-  try {
-    return await deps.probeMedia(absPath);
-  } catch {
-    return null;
-  }
-}
-
 function pickDate(
   exif: ExifData | null,
   stat: FileStat,
@@ -164,6 +156,9 @@ function toGps(exif: ExifData | null): CatalogRecord['gps'] {
     return null;
   }
   const { lat, lon, alt } = exif.gps;
+  if (lat === 0 && lon === 0) {
+    return null;
+  }
   return alt === undefined ? { lat, lon } : { lat, lon, alt };
 }
 
@@ -185,14 +180,26 @@ async function buildRecord(
   stat: FileStat,
   info: MediaKind,
   deps: ImporterDeps,
+  skipped: SkippedItem[],
+  ctx: ImportContext,
 ): Promise<CatalogRecord> {
   // EXIF (date/GPS/camera) is image-only; timed media (video/audio) is probed
   // for duration/dimensions. Documents need neither.
   const exif = info.mediaType === 'photo' ? await readExifSafe(deps, absPath) : null;
-  const media =
-    info.mediaType === 'video' || info.mediaType === 'audio'
-      ? await probeMediaSafe(deps, absPath)
-      : null;
+  let media: MediaInfo | null = null;
+  if (info.mediaType === 'video' || info.mediaType === 'audio') {
+    try {
+      media = await deps.probeMedia(absPath);
+    } catch (error) {
+      recordSkip(
+        ctx,
+        skipped,
+        toSourceRef(root, absPath),
+        `could not probe media: ${errorMessage(error)}`,
+        'E_PROBE',
+      );
+    }
+  }
 
   return {
     sourceType: 'folder',
@@ -292,7 +299,7 @@ export const folderImporter: Importer = {
       if (!info) {
         continue; // non-media → skip quietly (not a failure to report)
       }
-      const record = await buildRecord(inputPath, absPath, stat, info, ctx.deps);
+      const record = await buildRecord(inputPath, absPath, stat, info, ctx.deps, skipped, ctx);
       recordCount += 1;
       ctx.onProgress({ phase: 'emit', processed: recordCount, total: null });
       yield record;

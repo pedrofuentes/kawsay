@@ -131,4 +131,43 @@ describe('Importer contract (ARCHITECTURE §3.1)', () => {
     expect(result.recordCount).toBe(0);
     expect(result.skipped).toEqual([]);
   });
+
+  it('closes the importer generator when record consumption fails', async () => {
+    let cleanedUp = false;
+    const importer: Importer = {
+      id: 'folder',
+      displayName: 'Cleanup',
+      async canHandle() {
+        return true;
+      },
+      async *import(): AsyncGenerator<CatalogRecord, { recordCount: number; skipped: SkippedItem[] }> {
+        try {
+          yield {
+            sourceType: 'folder',
+            mediaType: 'photo',
+            originalPath: '/input/a.jpg',
+            mimeType: 'image/jpeg',
+            date: null,
+            author: null,
+            body: null,
+            gps: null,
+            durationSec: null,
+            sourceRef: 'a.jpg',
+            sourceMeta: {},
+          };
+          return { recordCount: 1, skipped: [] };
+        } finally {
+          cleanedUp = true;
+        }
+      },
+    };
+
+    const { ctx } = makeContext();
+    await expect(
+      drainImporter(importer, '/input', ctx, () => {
+        throw new Error('consumer failed');
+      }),
+    ).rejects.toThrow('consumer failed');
+    expect(cleanedUp).toBe(true);
+  });
 });
