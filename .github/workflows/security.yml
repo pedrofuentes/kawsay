@@ -56,10 +56,18 @@ jobs:
         # Run the official, digest-pinned semgrep container via `docker run`
         # rather than as a job `container:` — the image is Alpine/musl, which
         # cannot execute glibc-based JavaScript actions (e.g. actions/checkout).
-        # `--error` makes any finding fail the job. v1.167.0.
+        # `--error` makes any finding fail the job. v1.167.0. All configs are
+        # committed under .semgrep so CI never fetches rules from semgrep.dev.
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
             -w /src \
             semgrep/semgrep@sha256:06938c1f365d3f67b8cedd8bc117607ae64253f88a0e768e9da9408548927dd6 \
-            semgrep scan --config=.semgrep/kawsay.yml --error
+            semgrep scan \
+              --metrics=off \
+              --exclude=.semgrep/semgrep-rules \
+              --config=.semgrep/kawsay.yml \
+              --config=.semgrep/semgrep-rules/typescript \
+              --config=.semgrep/semgrep-rules/javascript \
+              --config=.semgrep/semgrep-rules/generic/secrets \
+              --error
