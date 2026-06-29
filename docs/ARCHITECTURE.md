@@ -230,9 +230,10 @@ response) unless marked *event* (main → renderer stream).
 |---------|-----------|---------------|---------|
 | `library:list` | invoke | `{}` | `LibrarySummary[]` |
 | `library:current` | invoke | `{}` | `LibrarySummary \| null` |
-| `library:create` | invoke | `{ path: string(1..4096), personName: string(1..200) }` | `LibrarySummary` |
-| `library:open` | invoke | `{ path: string(1..4096) }` | `LibrarySummary` |
-| `dialog:pickPath` | invoke | `{ kind: 'file'\|'folder', filters?: string[] }` | `{ path } \| { cancelled: true }` |
+| `library:create` | invoke | `{ path: absolute string(1..4096), personName?: string(1..200) }` | `LibrarySummary` |
+| `library:open` | invoke | `{ path: absolute string(1..4096) }` | `LibrarySummary` |
+| `dialog:openDirectory` | invoke | `{ title?: string(1..200), defaultPath?: absolute string(1..4096) }` | `string \| null` |
+| `dialog:openFile` | invoke | `{ title?: string(1..200), defaultPath?: absolute string(1..4096) }` | `string \| null` |
 | `import:start` | invoke | `ImportStartSchema` (below) | `{ jobId: string }` |
 | `import:cancel` | invoke | `{ jobId: string(uuid) }` | `{}` |
 | `import:undo` | invoke | `{ sourceId: string(uuid) }` | `{ removed: number }` |
@@ -286,9 +287,11 @@ export const ImportProgress = z.object({
 Handlers re-validate and check origin:
 
 ```ts
-// electron/main/ipc/handlers/import.ts
+// electron/main/ipc/register.ts
 ipcMain.handle('import:start', async (event, raw) => {
-  if (new URL(event.senderFrame.url).protocol !== 'file:') throw new Error('bad sender origin');
+  if (!isTrustedSenderUrl(event.senderFrame?.url ?? '', trustedSenderOptions)) {
+    throw new Error('bad sender origin');
+  }
   const { sourceType, inputPath } = ImportStartSchema.parse(raw);   // never trust the preload alone
   return ingestion.start(sourceType, inputPath);                    // returns { jobId }
 });

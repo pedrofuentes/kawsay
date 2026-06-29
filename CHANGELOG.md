@@ -11,7 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Docs/CI/test-polish follow-ups are now folded into one cleanup PR** (#173, #38, #41, #45, #52, #62, #72, #73, #74, #86, #87, #88, #89, #112, #116, #119): line endings are normalized, local Semgrep rules avoid scanner egress, IPC/path/importer edge cases are covered, and stale ADR/architecture comments were corrected. Future cards should keep adding their own CHANGELOG entry in the same PR so release notes never drift.
+
 ### Fixed
+
+- **Windows IPC/navigation hardening is recorded in release notes** (#41): the prior Windows fix keeps the app trusting only the exact packaged renderer entry (or the dev server in development), so Windows path semantics no longer make IPC/navigation tests fail only on `windows-latest`.
+- **Folder imports now handle edge-case metadata and symlinked selected roots more clearly** (#52, #62): a symlink chosen as the import root can be accepted while recursive walking still refuses symlink entries, and corrupt EXIF/ffprobe metadata is surfaced as a non-fatal partial-metadata skip instead of disappearing silently.
+- **IPC contracts now reject relative renderer-supplied paths and pin null/undefined adversarial cases** (#88, #89), while Browse tests assert the native-picker title/default path passed over the bridge (#116).
 
 ### Security
 
@@ -489,7 +495,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   searchable). System notices (the end-to-end-encryption banner, group events) are preserved and
   flagged, "media omitted" placeholders are kept as notes, and a missing attachment or an
   unparseable line is skipped and reported rather than aborting the import, which can also be
-  cancelled while it runs.
+  cancelled while it runs. No new dependencies; no network access.
 - Ingestion engine (card F3b): the concrete, sandboxed `ImporterDeps` wrappers and the off-UI-thread
   **ingestion orchestrator** that turn an `Importer`'s `CatalogRecord` stream into catalogued memories.
   Wrappers: a streaming **SHA-256** `FileHasher` (lowercase hex), an **`exifr`** `ExifReader` (capture
@@ -534,7 +540,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   data-access layer implements **dedup-with-provenance** (`INSERT … ON CONFLICT … RETURNING`),
   cross-source `search_meta` token merging, a composite **keyset timeline** (`capture_date DESC, id DESC`,
   NULLS LAST), and FTS5 search with hardened input. A **content-addressed originals store**
-  (`originals/<hash[0:2]>/<hash>`) stores each original once and **reference-counts it by occurrence** —
+  (`originals/<hash[0:2]>/<hash>[.ext]`) stores each original once and **reference-counts it by occurrence** —
   deleting a blob only when its last `content_addressed` occurrence is removed and never touching
   in-place folder originals (AC-14). The connector **`Importer` interface** (DI-friendly, unit-testable)
   and the library lifecycle (create/open the self-contained ADR-0008 folder layout with a `library.json`

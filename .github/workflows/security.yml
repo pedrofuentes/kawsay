@@ -41,8 +41,8 @@ jobs:
           # No license needed: this repo is owned by a personal account.
           # Comments stay off so the job never needs pull-requests: write; a
           # real finding still fails the check and surfaces in the SARIF summary.
-          GITLEAKS_ENABLE_COMMENTS: "false"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
 
   semgrep:
     name: Semgrep (SAST)
@@ -62,4 +62,4 @@ jobs:
             -v "${{ github.workspace }}:/src" \
             -w /src \
             semgrep/semgrep@sha256:06938c1f365d3f67b8cedd8bc117607ae64253f88a0e768e9da9408548927dd6 \
-            semgrep scan --config=auto --error
+            semgrep scan --config=.semgrep/kawsay.yml --error
