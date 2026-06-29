@@ -80,10 +80,10 @@ export function useTranscriptionRun(): UseTranscriptionRunResult {
           setSnapshot((prev) => prev ?? snap);
         }
       })
-      .catch(() => {
+      .catch((error) => {
         // A failed status read is treated as "nothing running" — the resting intro
-        // still offers Start, and the next start() reports the real state. There is
-        // no renderer logger to route a diagnostic to, and it self-heals.
+        // still offers Start, and the next start() reports the real state.
+        console.warn('[kawsay] transcription status read failed; leaving controls at rest', error);
       });
     return () => {
       active = false;
@@ -98,9 +98,10 @@ export function useTranscriptionRun(): UseTranscriptionRunResult {
     try {
       const result = await api.startTranscription();
       setLastOutcome(result);
-    } catch {
+    } catch (error) {
       // A rejected start leaves the resting intro in place rather than alarming the
       // user; they can simply try again.
+      console.warn('[kawsay] transcription start request failed; leaving controls at rest', error);
     } finally {
       setStarting(false);
     }
@@ -112,8 +113,9 @@ export function useTranscriptionRun(): UseTranscriptionRunResult {
     }
     try {
       await api.cancelTranscription();
-    } catch {
+    } catch (error) {
       // The stream settles the final state regardless; nothing to surface here.
+      console.warn('[kawsay] transcription cancel request failed; waiting for stream state', error);
     }
   }, [api]);
 

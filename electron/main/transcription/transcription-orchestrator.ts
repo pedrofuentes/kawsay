@@ -268,7 +268,14 @@ export function createTranscriptionOrchestrator(
       };
 
       activeJobId = jobId;
-      worker.start(jobSpec);
+      try {
+        worker.start(jobSpec);
+      } catch (error) {
+        activeJobId = null;
+        counts = { ...counts, inFlight: 0 };
+        console.warn('[kawsay] transcription worker failed to start; run left idle for retry', error);
+        throw error;
+      }
       emit();
       return { outcome: 'started', reason: null, counts: { ...startCounts } };
     },

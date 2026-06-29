@@ -301,6 +301,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       if (importer === undefined) {
         throw new CatalogSessionError(`no importer available for source type: ${input.sourceType}`);
       }
+      const { ffmpegPath, ffprobePath } = resolveMediaBinaries();
       const sourceId = library.repo.registerSource({
         sourceKey: `${input.sourceType}:${input.inputPath}`,
         type: input.sourceType,
@@ -309,7 +310,6 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         rootPath: input.inputPath,
       });
       const jobId = newId();
-      const { ffmpegPath, ffprobePath } = resolveMediaBinaries();
       const job: IngestionJobSpec = {
         jobId,
         sourceType: input.sourceType,

@@ -130,6 +130,8 @@ describe('media binary staging sources are correct for shipped targets (#175/#18
   });
 
   it('keeps Windows on installer-provided prebuilt binaries', () => {
+    // macOS is source-built before staging; this Windows-only path-forwarding
+    // guard proves the remaining prebuilt leg still points at the installer .exe.
     for (const tool of ['ffmpeg', 'ffprobe'] as const) {
       expect(mediaBinarySourceKind(tool, 'win-x64')).toBe('installer');
       const src = sourceBinaryPath(tool, 'win-x64');

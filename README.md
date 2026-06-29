@@ -88,6 +88,9 @@ pnpm typecheck
 # Lint (ESLint — zero warnings expected)
 pnpm lint
 
+# Check dependency advisories
+pnpm audit
+
 # Format code (Prettier)
 pnpm format
 

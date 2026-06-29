@@ -15,6 +15,7 @@ set -euo pipefail
 FFMPEG_REPO="${FFMPEG_REPO:-FFmpeg/FFmpeg}"
 FFMPEG_REF="${FFMPEG_REF:-n7.1}"
 FFMPEG_COMMIT="${FFMPEG_COMMIT:-b08d7969c550a804a59511c7b83f2dd8cc0499b8}"
+NASM_MIN_VERSION="${NASM_MIN_VERSION:-2.16.01}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -24,6 +25,29 @@ SRC_DIR="$WORK_DIR/src"
 
 log() { printf '\n\033[1m[ffmpeg]\033[0m %s\n' "$*"; }
 die() { printf '\n\033[31m[ffmpeg] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+version_ge() {
+  local current="$1" minimum="$2"
+  local IFS=.
+  local -a cur min
+  read -r -a cur <<<"$current"
+  read -r -a min <<<"$minimum"
+  for i in 0 1 2; do
+    local c="${cur[$i]:-0}" m="${min[$i]:-0}"
+    ((10#$c > 10#$m)) && return 0
+    ((10#$c < 10#$m)) && return 1
+  done
+  return 0
+}
+
+assert_nasm_version() {
+  local version
+  version="$(nasm --version | sed -E 's/.*version ([0-9]+([.][0-9]+)+).*/\1/')"
+  if ! version_ge "$version" "$NASM_MIN_VERSION"; then
+    die "nasm $version is below required minimum $NASM_MIN_VERSION"
+  fi
+  log "nasm version verified: $version (minimum $NASM_MIN_VERSION)"
+}
 
 case "${RUNNER_OS:-$(uname -s)}" in
   macOS|Darwin) ;;
@@ -42,6 +66,7 @@ if ! command -v nasm >/dev/null 2>&1; then
     die "nasm not found on PATH and Homebrew is unavailable"
   fi
 fi
+assert_nasm_version
 
 if [ ! -d "$SRC_DIR/.git" ]; then
   log "Cloning $FFMPEG_REPO @ $FFMPEG_REF (shallow)"

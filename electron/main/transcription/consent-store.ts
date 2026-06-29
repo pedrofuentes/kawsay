@@ -64,15 +64,19 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
     let raw: string;
     try {
       raw = fs.readFileSync(filePath, 'utf8');
-    } catch {
+    } catch (error) {
       // No file yet (or unreadable) ⇒ never opted in.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('[kawsay] transcription consent could not be read; treating as opted-out', error);
+      }
       return false;
     }
     try {
       const parsed = JSON.parse(raw) as Partial<ConsentFile>;
       return parsed.transcriptionOptedIn === true;
-    } catch {
+    } catch (error) {
       // A corrupt file is treated as opted-out — calm default, never a crash.
+      console.warn('[kawsay] transcription consent was malformed; treating as opted-out', error);
       return false;
     }
   }
@@ -91,7 +95,10 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
         // calm main process. Fail closed — the choice simply is not persisted (a
         // relaunch reads the prior/absent value, defaulting to opted-OUT) — and
         // leave a diagnostic rather than throwing out of the seam.
-        console.warn('[kawsay] could not persist transcription consent:', filePath, error);
+        console.warn(
+          '[kawsay] could not persist transcription consent; future launches may remain opted-out',
+          error,
+        );
       }
     },
   };
