@@ -93,7 +93,6 @@ kawsay/
 │   │   ├── ingestion/
 │   │   │   ├── coordinator.ts       # orchestrates workers, relays progress, tallies skips (AC-9/15)
 │   │   │   ├── safe-extract.ts      # yauzl guarded extractor (AC-3/AC-10)
-│   │   │   ├── errors.ts            # ERR_ARCHIVE_* error codes + user message keys
 │   │   │   ├── metadata.ts          # exifr capture-date + EXIF/GPS
 │   │   │   ├── thumbnail.ts         # rendition generation (sharp images / ffmpeg video)
 │   │   │   ├── media-binaries.ts     # resolve staged per-arch ffmpeg/ffprobe path (#175)
@@ -141,13 +140,13 @@ kawsay/
 |----|-----------------------|-------|
 | **AC-1** WhatsApp E2E | `importers/whatsapp/` + `features/import/whatsapp/` | integration + e2e |
 | **AC-2** Folder photos/videos + dates + thumbs | `importers/folder/` + `ingestion/metadata.ts` + `ingestion/thumbnail.ts` | integration |
-| **AC-3** Safe extraction (zip-slip) | `ingestion/safe-extract.ts` + `ingestion/errors.ts` | unit + integration |
+| **AC-3** Safe extraction (zip-slip) | `importers/safe-extract.ts` | unit + integration |
 | **AC-4** Zero egress | `security/network-guard.ts` + `security/csp.ts` | `tests/ac4/*` (Node spies, Playwright, **mandatory** CI firewall + positive controls) |
 | **AC-5** Build/publish | `electron-builder.yml` + `.github/workflows/release.yml` + `main/index.ts` smoke | CI + e2e smoke |
 | **AC-6/7** Browse + search | `db/search.ts` + `features/timeline/` + `features/search/` | e2e + integration |
 | **AC-8** Virtualized timeline | `features/timeline/TimelineGrid.tsx` | e2e / perf |
 | **AC-9** Off-thread ingestion | `workers/ingestion-worker.ts` + `ingestion/coordinator.ts` | integration / perf |
-| **AC-10** Bomb/symlink rejection | `ingestion/safe-extract.ts` + `ingestion/errors.ts` | unit + integration |
+| **AC-10** Bomb/symlink rejection | `importers/safe-extract.ts` | unit + integration |
 | **AC-11** Takeout content | `importers/takeout/` | integration |
 | **AC-12** Walkthrough + Browse-first | `features/import/walkthrough/` | e2e |
 | **AC-13** Accessibility | `src/ui/*` + `styles/tokens.css` | e2e (axe) |
@@ -956,14 +955,14 @@ HUMAN-REQUIRED.
 
 ### 7.1 Guarded extraction (`yauzl`)
 
-One extractor — `ingestion/safe-extract.ts` — is the **only** way archives are opened (no `adm-zip`/
+One extractor — `electron/main/importers/safe-extract.ts` — is the **only** way archives are opened (no `adm-zip`/
 `unzipper`). It applies the full checklist (research `security.md` Topic 1) on **every** entry, before
 any byte is written:
 
 | Guard | Check | Error code | AC |
 |-------|-------|-----------|----|
 | Filename validation | `yauzl.validateFileName` (auto via `decodeStrings:true`) — rejects `/`, `..`, `\` | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
-| Resolved-path containment | `path.join(dest, name)` then `startsWith(dest + sep)` (belt-and-suspenders) | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
+| Resolved-path containment | `path.resolve(dest, name)` then exact-boundary `dest` / `dest + sep` check (belt-and-suspenders) | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
 | Per-entry size cap | `uncompressedSize ≤ 500 MB` | `ERR_ARCHIVE_BOMB` | AC-10 |
 | Total size cap | running total ≤ 2 GB | `ERR_ARCHIVE_BOMB` | AC-10 |
 | Compression-ratio cap | `uncompressed/compressed ≤ 100` | `ERR_ARCHIVE_BOMB` | AC-10 |
@@ -972,14 +971,16 @@ any byte is written:
 | Symlink rejection | Unix mode `(externalFileAttributes>>>16)&0xF000 === 0xA000` | `ERR_ARCHIVE_SYMLINK` | AC-10 |
 | Strict filenames | `strictFileNames:true` (reject `\` on non-Windows) | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
 | Corrupt/invalid zip | open/read failure | `ERR_ARCHIVE_CORRUPT` | AC-3 |
+| Abort | `AbortSignal` checked before open and during streaming | `ERR_ARCHIVE_ABORTED` | AC-9 |
 
 ```ts
-// electron/main/ingestion/errors.ts
+// electron/main/importers/safe-extract.ts
 export type ArchiveErrorCode =
   | 'ERR_ARCHIVE_UNSAFE_PATH'   // AC-3: zip-slip / absolute / backslash traversal
   | 'ERR_ARCHIVE_BOMB'          // AC-10: ratio / total / per-entry / entry-count
   | 'ERR_ARCHIVE_SYMLINK'       // AC-10: symlink entry (refinement; see note)
-  | 'ERR_ARCHIVE_CORRUPT';      // unreadable / invalid archive
+  | 'ERR_ARCHIVE_CORRUPT'       // unreadable / invalid archive
+  | 'ERR_ARCHIVE_ABORTED';      // user/system cancelled extraction
 export class ArchiveError extends Error {
   constructor(readonly code: ArchiveErrorCode, readonly messageKey: string, msg?: string) { super(msg); }
 }
@@ -988,7 +989,10 @@ export class ArchiveError extends Error {
 - **Stable, assertable codes** are what AC-3 (`ERR_ARCHIVE_UNSAFE_PATH`) and AC-10 (`ERR_ARCHIVE_BOMB`)
   bind their tests to. They surface to the user as **clear, non-technical** copy via `messageKey`
   (e.g. `import.error.unsafeArchive`) — never a raw code in the UI (USER_FLOWS `ErrorBanner`, "no
-  codes").
+  codes"). Error details are diagnostic only and strip C0/C1 control characters before formatting.
+- A stream failure after a file has been opened unlinks that partial file before surfacing
+  `ERR_ARCHIVE_CORRUPT` / `ERR_ARCHIVE_BOMB`, so `extract/<source-id>/` never retains truncated bytes as
+  a valid original.
 - **Refinement flagged for red-team:** PRD AC-10 names `ERR_ARCHIVE_BOMB` for the bomb-and-symlink
   scenario; this architecture adds a dedicated **`ERR_ARCHIVE_SYMLINK`** for clarity. AC-10's
   observable guarantees ("no symlink is materialized" + a stable assertable `ERR_ARCHIVE_*` code) are
@@ -1093,7 +1097,7 @@ publish: { provider: github, owner: pedrofuentes, repo: kawsay, releaseType: rel
 | `electron/preload/index.ts` | The entire renderer capability surface (zod-validated) |
 | `electron/main/ipc/schemas.ts` | zod schemas shared by preload + main |
 | `electron/main/importers/types.ts` | `Importer` / `CatalogRecord` / `ImporterDeps` — the extensibility boundary |
-| `electron/main/ingestion/safe-extract.ts` | Guarded archive extraction + `ERR_ARCHIVE_*` |
+| `electron/main/importers/safe-extract.ts` | Guarded archive extraction + `ERR_ARCHIVE_*` |
 | `electron/main/ingestion/coordinator.ts` | Off-thread ingestion + progress + skips (AC-9/AC-15) |
 | `electron/main/db/migrations/001_initial.sql` | The catalog schema (dedup-with-provenance) |
 | `electron/main/db/catalog-repo.ts` | Items / occurrences / sources; dedup write path |

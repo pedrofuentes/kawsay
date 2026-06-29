@@ -363,7 +363,7 @@ async function gather(
 
   if (isZip(inputPath)) {
     try {
-      const entries = await ctx.deps.extractArchive(inputPath, ctx.workDir);
+      const entries = await ctx.deps.extractArchive(inputPath, ctx.workDir, { signal: ctx.signal });
       for (const entry of entries) {
         const name = basename(entry.entryPath);
         if (name === CHAT_FILENAME) chatAbsPath = entry.absPath;

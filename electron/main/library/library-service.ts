@@ -1,5 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { openCatalog } from '../db/connection';
 import { runMigrations } from '../db/migrate';
@@ -63,6 +71,29 @@ function assertAbsoluteRoot(root: string): void {
   }
 }
 
+function assertNoSymlinkRoot(root: string): void {
+  const resolvedRoot = resolve(root);
+  if (existsSync(resolvedRoot)) {
+    if (lstatSync(resolvedRoot).isSymbolicLink()) {
+      throw new Error(`library root must not be a symlink: ${root}`);
+    }
+    if (realpathSync.native(resolvedRoot) !== resolvedRoot) {
+      throw new Error(`library root must not resolve through a symlink: ${root}`);
+    }
+    return;
+  }
+
+  let parent = dirname(resolvedRoot);
+  while (!existsSync(parent)) {
+    const next = dirname(parent);
+    if (next === parent) break;
+    parent = next;
+  }
+  if (realpathSync.native(parent) !== parent) {
+    throw new Error(`library root parent must not resolve through a symlink: ${root}`);
+  }
+}
+
 function libraryName(root: string, personName?: string): string {
   const trimmed = personName?.trim();
   if (trimmed) return trimmed;
@@ -103,6 +134,7 @@ function readManifest(root: string): LibraryManifest | null {
  */
 export function createLibrary({ root, personName }: CreateLibraryInput): LibrarySummary {
   assertAbsoluteRoot(root);
+  assertNoSymlinkRoot(root);
   if (existsSync(catalogPath(root))) {
     throw new Error(`a Kawsay library already exists at ${root}`);
   }
@@ -127,6 +159,7 @@ export function createLibrary({ root, personName }: CreateLibraryInput): Library
  */
 export function openLibrary({ root }: OpenLibraryInput): LibrarySummary {
   assertAbsoluteRoot(root);
+  assertNoSymlinkRoot(root);
   if (!existsSync(catalogPath(root))) {
     throw new Error(`no Kawsay library at ${root}`);
   }
