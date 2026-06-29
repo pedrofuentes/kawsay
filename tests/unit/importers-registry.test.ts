@@ -247,11 +247,25 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
     const whatsappDir = '/d/whatsapp';
     const takeoutDir = '/d/Takeout';
     const messengerDir = '/d/messenger';
+    const messengerMessagesDir = join(messengerDir, 'your_activity_across_facebook', 'messages');
+    const messengerInboxDir = join(messengerMessagesDir, 'inbox');
+    const messengerThreadDir = join(messengerInboxDir, 'family_abcd');
+    const messengerMessageFile = join(messengerThreadDir, 'message_1.json');
     const facebookDir = '/d/facebook';
     const linkedinDir = '/d/linkedin';
     const telegramDir = '/d/telegram';
     const deps = fakeDeps({
-      dirs: [whatsappDir, takeoutDir, messengerDir, facebookDir, linkedinDir, telegramDir],
+      dirs: [
+        whatsappDir,
+        takeoutDir,
+        messengerDir,
+        messengerMessagesDir,
+        messengerInboxDir,
+        messengerThreadDir,
+        facebookDir,
+        linkedinDir,
+        telegramDir,
+      ],
       files: [
         join(whatsappDir, '_chat.txt'),
         join(messengerDir, 'your_activity_across_facebook'),
@@ -262,11 +276,17 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
       entries: {
         [takeoutDir]: ['archive_browser.html'],
         [messengerDir]: ['your_activity_across_facebook'],
+        [messengerInboxDir]: ['family_abcd'],
+        [messengerThreadDir]: ['message_1.json'],
         [facebookDir]: ['your_activity_across_facebook'],
         [linkedinDir]: ['Connections.csv'],
         [telegramDir]: ['result.json'],
       },
-      zipMarkers: { [join(telegramDir, 'result.json')]: '{"chats":[{"messages":[]}]}' },
+      zipMarkers: {
+        [join(telegramDir, 'result.json')]: '{"chats":[{"messages":[]}]}',
+        [messengerMessageFile]:
+          '{"participants":[{"name":"Mamá"}],"messages":[{"sender_name":"Mamá","timestamp_ms":1,"content":"hola"}]}',
+      },
     });
     expect(await selectImporter(whatsappDir, deps)).toBe(whatsappImporter);
     expect(await selectImporter(takeoutDir, deps)).toBe(takeoutImporter);

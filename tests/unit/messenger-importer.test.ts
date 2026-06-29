@@ -24,7 +24,8 @@ function ps(path: string | null | undefined): string {
 
 function depsForRealDir(): ImporterDeps {
   const fs: FsLike = {
-    readFile: async (path: string) => await import('node:fs/promises').then((m) => m.readFile(path)),
+    readFile: async (path: string) =>
+      await import('node:fs/promises').then((m) => m.readFile(path)),
     readDir: readdir,
     stat,
     exists: async (path: string) =>
@@ -70,7 +71,13 @@ async function run(inputPath: string, deps: ImporterDeps, signal?: AbortSignal) 
   return { ...c, records, result, byRef: new Map(records.map((r) => [r.sourceRef, r])) };
 }
 
-function writeMessageFile(root: string, bucket: string, thread: string, name: string, data: unknown): string {
+function writeMessageFile(
+  root: string,
+  bucket: string,
+  thread: string,
+  name: string,
+  data: unknown,
+): string {
   const dir = join(root, MESSAGES_ROOT, bucket, thread);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, name);
@@ -96,7 +103,9 @@ describe('messengerImporter (M3 — Facebook Messenger export connector)', () =>
 
       expect(await messengerImporter.canHandle(messengerDir, depsForRealDir())).toBe(true);
       expect(await messengerImporter.canHandle(plainDir, depsForRealDir())).toBe(false);
-      expect(await messengerImporter.canHandle(join(plainDir, 'missing'), depsForRealDir())).toBe(false);
+      expect(await messengerImporter.canHandle(join(plainDir, 'missing'), depsForRealDir())).toBe(
+        false,
+      );
 
       const deps = depsForRealDir();
       deps.fs.readDir = async () => {
@@ -194,7 +203,9 @@ describe('messengerImporter (M3 — Facebook Messenger export connector)', () =>
             sender_name: 'Me',
             timestamp_ms: 1_706_933_106_000,
             content: 'look',
-            photos: [{ uri: 'your_activity_across_facebook/messages/inbox/media_abcd/photos/pic.jpg' }],
+            photos: [
+              { uri: 'your_activity_across_facebook/messages/inbox/media_abcd/photos/pic.jpg' },
+            ],
             videos: [{ uri: 'messages/inbox/media_abcd/videos/clip.mp4' }],
             audio: [{ uri: 'messages/inbox/media_abcd/audio/voice.m4a' }],
           },

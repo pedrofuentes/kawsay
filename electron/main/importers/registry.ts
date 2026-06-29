@@ -1,6 +1,7 @@
 import type { Importer, ImporterDeps } from './types';
 import { folderImporter } from './folder-importer';
 import { whatsappImporter } from './whatsapp-importer';
+import { messengerImporter } from './messenger-importer';
 import { facebookImporter } from './facebook-importer';
 import { linkedinImporter } from './linkedin-importer';
 import { imessageImporter } from './imessage-importer';
@@ -19,6 +20,8 @@ import { takeoutImporter } from './takeout-importer';
  *
  * - `whatsapp` claims only on its unique `_chat.txt` marker (a `.zip`
  *   central-directory byte-scan, or that file inside an unpacked folder).
+ * - `messenger` claims Facebook Messenger thread exports by shape before the
+ *   broader Facebook DYI connector sees the same Meta archive.
  * - `facebook` / `linkedin` claim only on their distinctive named export markers
  *   (Facebook activity/messages/posts paths; LinkedIn `Connections.csv` /
  *   `messages.csv` / `Rich_Media.csv`). They precede `takeout` so an export whose
@@ -42,6 +45,7 @@ import { takeoutImporter } from './takeout-importer';
  */
 export const importers: readonly Importer[] = [
   whatsappImporter,
+  messengerImporter,
   facebookImporter,
   linkedinImporter,
   imessageImporter,

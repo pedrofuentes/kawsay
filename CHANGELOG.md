@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   interface, flatten rich text, preserve sender/timestamps/provenance, and link photo/video/voice
   files through traversal-safe local paths for the content-addressed blob store. Full multi-account
   `chats/` nesting and service-message semantics are deferred follow-ups.
+- **Facebook Messenger import first slice (M3 · AC-27)**: Kawsay can now recognize Meta JSON
+  Messenger exports, stream `message_*.json` threads from inbox/archived/filtered folders, fix the
+  Facebook mojibake quirk, preserve sender/timestamp/provenance, and link photo/video/audio refs
+  through traversal-safe local paths for the content-addressed blob store. Reactions, call logs,
+  share/link unfurls, and nuanced group membership are deferred follow-ups.
 
 ### Changed
 
