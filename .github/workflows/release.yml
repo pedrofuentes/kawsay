@@ -231,6 +231,8 @@ jobs:
         # auto-update metadata are present before publishing, so a missing leg fails
         # here instead of shipping the partial release that #122 produced.
         shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -240,7 +242,7 @@ jobs:
           dmgs=(*.dmg)
           zips=(*.zip)
           exes=(*.exe)
-          tag="${{ steps.tag.outputs.tag }}"
+          tag="$TAG"
           channel="latest"
           if [[ "$tag" == *-* ]]; then
             channel="${tag#*-}"
