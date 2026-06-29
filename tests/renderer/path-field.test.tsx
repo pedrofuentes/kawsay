@@ -151,6 +151,24 @@ describe('PathField — Browse… native picker (W2, AC-12 usability)', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('clears a stale Browse error as soon as the user types a path instead of retrying (#127)', async () => {
+    const openDirectory = vi.fn(() => Promise.reject(new Error('dialog hiccup')));
+    const api = makeFakeApi({ openDirectory });
+    const onChange = vi.fn();
+    renderWithApi(
+      <PathField label="Folder" value="/keep/me" onChange={onChange} browseFor="directory" />,
+      api,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /browse/i }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('Folder'), '/typed');
+
+    expect(onChange).toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('exposes an accessible, keyboard-operable Browse control with zero axe violations', async () => {
     const api = makeFakeApi({ openDirectory: vi.fn(() => Promise.resolve('/picked')) });
     const onChange = vi.fn();
