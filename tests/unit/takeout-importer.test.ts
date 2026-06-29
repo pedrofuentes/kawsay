@@ -359,6 +359,17 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       }
     });
 
+    it('rejects a present .zip whose entry names carry no Takeout markers', async () => {
+      const dir = makeTmpDir('takeout-negative-can-handle-');
+      const archive = join(dir, 'plain.zip');
+      writeFileSync(archive, buildZip([{ name: 'exports/plain/data.json' }]));
+      try {
+        expect(await takeoutImporter.canHandle(archive, makeDeps(buildFs({})))).toBe(false);
+      } finally {
+        removeTmpDir(dir);
+      }
+    });
+
     it('accepts a Takeout directory (Mail/ + Google Photos/) and rejects a plain folder', async () => {
       const takeout = buildFs({
         'archive_browser.html': { content: '<html></html>' },

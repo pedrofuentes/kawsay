@@ -244,18 +244,11 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
   });
 
   describe('canHandle discriminates Facebook from LinkedIn and unknown zips', () => {
-    function zipWithBytes(marker: string): ImporterDeps {
-      const deps = makeZipDeps([]).deps;
-      (deps.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async () =>
-        Buffer.from(`PK\u0003\u0004........${marker}........`);
-      return deps;
-    }
-
     it('accepts a zip whose central directory carries Facebook markers', async () => {
       const dir = makeTmpDir('fb-can-handle-');
       const archive = join(dir, 'fb.zip');
       writeFileSync(archive, buildZip([{ name: 'messages/inbox/thread/message_1.json' }]));
-      const deps = zipWithBytes('unused');
+      const deps = makeZipDeps([]).deps;
       deps.fs.readFile = async () => {
         throw new Error('canHandle must not materialize zip bytes');
       };
@@ -267,12 +260,19 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
     });
 
     it('rejects a LinkedIn zip and an unrelated zip', async () => {
-      expect(
-        await facebookImporter.canHandle('/drop/li.zip', zipWithBytes('Connections.csv')),
-      ).toBe(false);
-      expect(
-        await facebookImporter.canHandle('/drop/x.zip', zipWithBytes('Takeout/index.html')),
-      ).toBe(false);
+      const dir = makeTmpDir('fb-negative-can-handle-');
+      const linkedinArchive = join(dir, 'linkedin.zip');
+      const unrelatedArchive = join(dir, 'unrelated.zip');
+      writeFileSync(linkedinArchive, buildZip([{ name: 'Connections.csv' }]));
+      writeFileSync(unrelatedArchive, buildZip([{ name: 'Takeout/index.html' }]));
+      try {
+        expect(await facebookImporter.canHandle(linkedinArchive, makeZipDeps([]).deps)).toBe(false);
+        expect(await facebookImporter.canHandle(unrelatedArchive, makeZipDeps([]).deps)).toBe(
+          false,
+        );
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
     it('accepts a folder that contains the Facebook layout', async () => {

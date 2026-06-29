@@ -186,18 +186,11 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
   });
 
   describe('canHandle discriminates LinkedIn from Facebook and unknown', () => {
-    function zipWithBytes(marker: string): ImporterDeps {
-      const deps = makeZipDeps([]).deps;
-      (deps.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async () =>
-        Buffer.from(`PK\u0003\u0004........${marker}........`);
-      return deps;
-    }
-
     it('accepts a zip whose central directory carries LinkedIn markers', async () => {
       const dir = makeTmpDir('li-can-handle-');
       const archive = join(dir, 'li.zip');
       writeFileSync(archive, buildZip([{ name: 'Rich_Media.csv' }]));
-      const deps = zipWithBytes('unused');
+      const deps = makeZipDeps([]).deps;
       deps.fs.readFile = async () => {
         throw new Error('canHandle must not materialize zip bytes');
       };
@@ -209,12 +202,19 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
     });
 
     it('rejects a Facebook zip and an unrelated zip', async () => {
-      expect(
-        await linkedinImporter.canHandle('/drop/fb.zip', zipWithBytes('posts/your_posts_1.json')),
-      ).toBe(false);
-      expect(
-        await linkedinImporter.canHandle('/drop/x.zip', zipWithBytes('Takeout/index.html')),
-      ).toBe(false);
+      const dir = makeTmpDir('li-negative-can-handle-');
+      const facebookArchive = join(dir, 'facebook.zip');
+      const unrelatedArchive = join(dir, 'unrelated.zip');
+      writeFileSync(facebookArchive, buildZip([{ name: 'posts/your_posts_1.json' }]));
+      writeFileSync(unrelatedArchive, buildZip([{ name: 'Takeout/index.html' }]));
+      try {
+        expect(await linkedinImporter.canHandle(facebookArchive, makeZipDeps([]).deps)).toBe(false);
+        expect(await linkedinImporter.canHandle(unrelatedArchive, makeZipDeps([]).deps)).toBe(
+          false,
+        );
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
     it('accepts a folder that contains the LinkedIn layout', async () => {
