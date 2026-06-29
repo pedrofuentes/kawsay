@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { openCatalog } from '../../electron/main/db/connection';
@@ -7,17 +8,29 @@ import { createCatalogRepo, type CatalogRepo } from '../../electron/main/db/cata
 import {
   blobAbsPath,
   blobRelPath,
+  garbageCollectOrphanedOriginals,
   putOriginal,
   removeOccurrence,
   resolveOriginal,
+  verifyOriginalBlob,
 } from '../../electron/main/library/originals-store';
 import type { CatalogDatabase } from '../../electron/main/db/connection';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
-const HASH_A = 'a'.repeat(64);
-const HASH_B = 'b'.repeat(64);
-const HASH_C = 'c'.repeat(64);
-const HASH_D = 'd'.repeat(64);
+const BYTES_A = 'JPEG-BYTES';
+const BYTES_B = 'bytes-b';
+const BYTES_C = 'bytes-c';
+const BYTES_D = 'bytes-d';
+const HASH_A = createHash('sha256').update(BYTES_A).digest('hex');
+const HASH_B = createHash('sha256').update(BYTES_B).digest('hex');
+const HASH_C = createHash('sha256').update(BYTES_C).digest('hex');
+const HASH_D = createHash('sha256').update(BYTES_D).digest('hex');
+const BYTES_BY_HASH = new Map([
+  [HASH_A, BYTES_A],
+  [HASH_B, BYTES_B],
+  [HASH_C, BYTES_C],
+  [HASH_D, BYTES_D],
+]);
 
 describe('content-addressed blob paths', () => {
   it('shards by the first two hex characters and appends the original extension', () => {
@@ -41,24 +54,70 @@ describe('putOriginal (store once, content-addressed)', () => {
 
   it('copies the bytes into the sharded blob path on first call', () => {
     const incoming = join(root, 'incoming.jpg');
-    writeFileSync(incoming, 'JPEG-BYTES');
+    writeFileSync(incoming, BYTES_A);
     const put = putOriginal({ root, hash: HASH_A, ext: '.jpg', sourcePath: incoming });
     expect(put.copied).toBe(true);
     expect(put.absPath).toBe(blobAbsPath(root, HASH_A, '.jpg'));
-    expect(readFileSync(put.absPath, 'utf8')).toBe('JPEG-BYTES');
+    expect(readFileSync(put.absPath, 'utf8')).toBe(BYTES_A);
   });
 
   it('is idempotent — a second put with the same hash does not re-copy', () => {
     const incoming = join(root, 'incoming.jpg');
-    writeFileSync(incoming, 'ORIGINAL');
-    const first = putOriginal({ root, hash: HASH_A, ext: '.jpg', sourcePath: incoming });
+    const bytes = 'ORIGINAL';
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    writeFileSync(incoming, bytes);
+    const first = putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming });
     // Mutate the source; an idempotent put must NOT overwrite the stored blob.
     writeFileSync(incoming, 'CHANGED');
-    const second = putOriginal({ root, hash: HASH_A, ext: '.jpg', sourcePath: incoming });
+    const second = putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming });
     expect(first.copied).toBe(true);
     expect(second.copied).toBe(false);
     expect(second.absPath).toBe(first.absPath);
     expect(readFileSync(first.absPath, 'utf8')).toBe('ORIGINAL');
+  });
+
+  it('refuses to reuse an existing blob whose bytes do not match the content hash', () => {
+    const incoming = join(root, 'incoming.jpg');
+    const bytes = 'correct';
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    writeFileSync(incoming, bytes);
+    const put = putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming });
+    writeFileSync(put.absPath, 'corrupted');
+
+    expect(() => putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming })).toThrow(
+      /ERR_ORIGINAL_INTEGRITY/,
+    );
+  });
+
+  it('can verify a stored blob against its declared hash', () => {
+    const content = Buffer.from('verified-by-sha');
+    const hash = createHash('sha256').update(content).digest('hex');
+    const incoming = join(root, 'verified.bin');
+    writeFileSync(incoming, content);
+
+    const put = putOriginal({ root, hash, ext: '.bin', sourcePath: incoming });
+
+    expect(verifyOriginalBlob({ root, hash, ext: '.bin' })).toEqual({
+      ok: true,
+      absPath: put.absPath,
+    });
+  });
+
+  it('rolls back a half-created destination when the copy fails', () => {
+    const missing = join(root, 'missing.jpg');
+
+    expect(() => putOriginal({ root, hash: HASH_B, ext: '.jpg', sourcePath: missing })).toThrow();
+    expect(existsSync(blobAbsPath(root, HASH_B, '.jpg'))).toBe(false);
+  });
+
+  it('refuses to publish newly copied bytes under the wrong content hash', () => {
+    const incoming = join(root, 'incoming.jpg');
+    writeFileSync(incoming, 'not-the-declared-hash');
+
+    expect(() => putOriginal({ root, hash: HASH_C, ext: '.jpg', sourcePath: incoming })).toThrow(
+      /ERR_ORIGINAL_INTEGRITY/,
+    );
+    expect(existsSync(blobAbsPath(root, HASH_C, '.jpg'))).toBe(false);
   });
 });
 
@@ -84,7 +143,7 @@ describe('originals reference-counting (AC-14: never dangle)', () => {
 
   function stageBlob(hash: string): string {
     const incoming = join(root, `incoming-${hash.slice(0, 6)}.jpg`);
-    writeFileSync(incoming, `bytes-${hash.slice(0, 6)}`);
+    writeFileSync(incoming, BYTES_BY_HASH.get(hash) ?? hash);
     return putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming }).absPath;
   }
 
@@ -197,6 +256,46 @@ describe('originals reference-counting (AC-14: never dangle)', () => {
     const result = removeOccurrence(db, root, occ.id);
     expect(result.itemRemoved).toBe(true);
     expect(existsSync(thumbAbs)).toBe(false);
+  });
+
+  it('garbage-collects unreferenced blobs in keyset-sized batches', () => {
+    const keptItem = repo.insertItem({ mediaType: 'photo', contentHash: HASH_A, originalExt: '.jpg' });
+    repo.addOccurrence({
+      itemId: keptItem,
+      sourceId: sourceA,
+      sourceRef: 'kept.jpg',
+      originalKind: 'content_addressed',
+    });
+    const kept = stageBlob(HASH_A);
+    const orphanB = stageBlob(HASH_B);
+    const orphanC = stageBlob(HASH_C);
+
+    const first = garbageCollectOrphanedOriginals(db, root, { limit: 1 });
+    expect(first.scanned).toBe(1);
+    expect(first.nextCursor).toBeTypeOf('string');
+    expect(existsSync(kept)).toBe(true);
+
+    const second = garbageCollectOrphanedOriginals(db, root, { limit: 10, afterHash: first.nextCursor });
+    expect(first.deleted + second.deleted).toBe(2);
+    expect(second.nextCursor).toBeNull();
+    expect(existsSync(kept)).toBe(true);
+    expect(existsSync(orphanB)).toBe(false);
+    expect(existsSync(orphanC)).toBe(false);
+  });
+
+  it('continues keyset GC across blobs that share a hash but have different extensions', () => {
+    const incoming = join(root, 'incoming');
+    writeFileSync(incoming, 'dup');
+    const hash = createHash('sha256').update('dup').digest('hex');
+    putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming });
+    putOriginal({ root, hash, ext: '.png', sourcePath: incoming });
+
+    const first = garbageCollectOrphanedOriginals(db, root, { limit: 1 });
+    const second = garbageCollectOrphanedOriginals(db, root, { limit: 1, afterHash: first.nextCursor });
+
+    expect(first.deleted + second.deleted).toBe(2);
+    expect(existsSync(blobAbsPath(root, hash, '.jpg'))).toBe(false);
+    expect(existsSync(blobAbsPath(root, hash, '.png'))).toBe(false);
   });
 
   it('is a no-op for an unknown occurrence id', () => {

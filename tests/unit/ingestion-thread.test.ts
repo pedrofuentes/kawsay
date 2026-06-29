@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
+import { bindIngestionWorkerEntry } from '../../electron/main/importers/workers/ingestion-worker';
 import { createIngestionCoordinator } from '../../electron/main/importers/ingestion/coordinator';
 import { createWorkerThreadsHostHandle } from '../../electron/main/importers/ingestion/worker-threads-transport';
 import type { IngestionJobSpec } from '../../electron/main/importers/ingestion/protocol';
@@ -57,6 +58,21 @@ function runOnRealThread(onFirstProgress?: (coordinator: ReturnType<typeof creat
 }
 
 describe('ingestion over a real worker_threads thread (AC-9 off-thread proof)', () => {
+  it('binds the real worker entry to the concrete ingestion context opener', () => {
+    const posts: unknown[] = [];
+    const listeners: ((message: unknown) => void)[] = [];
+
+    bindIngestionWorkerEntry({
+      parentPort: {
+        postMessage: (value) => posts.push(value),
+        on: (_event, listener) => listeners.push(listener),
+      },
+    });
+
+    expect(listeners).toHaveLength(1);
+    expect(posts).toEqual([{ type: 'ready' }]);
+  });
+
   it('streams progress off-thread and tears the thread down on completion', async () => {
     const { coordinator, events, done, exited } = runOnRealThread();
 

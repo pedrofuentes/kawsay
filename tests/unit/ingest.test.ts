@@ -334,6 +334,61 @@ describe('runIngestion (the off-thread ingestion orchestrator, ARCHITECTURE §5)
     expect(item.content_hash).toBe(goodHash);
   });
 
+  it('deletes a newly copied archive blob when the catalog transaction fails', async () => {
+    const file = write('orphaned.mp4', 'ORPHAN-ME');
+    const hash = createHash('sha256').update('ORPHAN-ME').digest('hex');
+    const importer = makeImporter([
+      record({
+        sourceType: 'whatsapp',
+        mediaType: 'video',
+        mimeType: 'video/mp4',
+        originalPath: file,
+        sourceRef: 'media/orphaned.mp4',
+      }),
+    ]);
+    const brokenRepo = {
+      ...repo,
+      insertItem: () => {
+        throw new Error('database is locked');
+      },
+    } as CatalogRepo;
+
+    await expect(run(importer, { repo: brokenRepo }).promise).rejects.toThrow('database is locked');
+
+    expect(existsSync(join(libraryRoot, 'originals', hash.slice(0, 2), `${hash}.mp4`))).toBe(false);
+  });
+
+  it('does not delete a newly copied blob on transaction failure when another occurrence references it', async () => {
+    const file = write('referenced.mp4', 'REFERENCED');
+    const hash = createHash('sha256').update('REFERENCED').digest('hex');
+    const existingItem = repo.insertItem({ mediaType: 'video', contentHash: hash, originalExt: '.mp4' });
+    repo.addOccurrence({
+      itemId: existingItem,
+      sourceId: 'src-1',
+      sourceRef: 'already-committed.mp4',
+      originalKind: 'content_addressed',
+    });
+    const importer = makeImporter([
+      record({
+        sourceType: 'whatsapp',
+        mediaType: 'video',
+        mimeType: 'video/mp4',
+        originalPath: file,
+        sourceRef: 'media/referenced.mp4',
+      }),
+    ]);
+    const brokenRepo = {
+      ...repo,
+      insertItem: () => {
+        throw new Error('database is locked');
+      },
+    } as CatalogRepo;
+
+    await expect(run(importer, { repo: brokenRepo }).promise).rejects.toThrow('database is locked');
+
+    expect(existsSync(join(libraryRoot, 'originals', hash.slice(0, 2), `${hash}.mp4`))).toBe(true);
+  });
+
   it('a thumbnail failure does not fail the item (counted as thumbnailFailures)', async () => {
     const file = write('photo.jpg', 'THUMBFAIL');
     const importer = makeImporter([
