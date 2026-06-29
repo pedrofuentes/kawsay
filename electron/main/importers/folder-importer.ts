@@ -188,6 +188,9 @@ function toGps(exif: ExifData | null): CatalogRecord['gps'] {
     return null;
   }
   const { lat, lon, alt } = exif.gps;
+  if (lat === 0 && lon === 0) {
+    return null;
+  }
   return alt === undefined ? { lat, lon } : { lat, lon, alt };
 }
 

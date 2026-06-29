@@ -41,6 +41,7 @@ const packageJson = JSON.parse(readFileSync(repoRoot('package.json'), 'utf8')) a
   scripts: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  pnpm?: { onlyBuiltDependencies?: string[] };
 };
 
 // The release automation harness (.github/workflows/release.yml) is the other half
@@ -123,6 +124,18 @@ describe('electron-builder packaging contract (AC-5, ADR-0007)', () => {
   it('rebuilds native modules against the Electron ABI from source', () => {
     expect(builderYml).toMatch(/^npmRebuild:\s*true\s*$/m);
     expect(builderYml).toMatch(/^buildDependenciesFromSource:\s*true\s*$/m);
+  });
+
+  it('does not depend on the standalone @electron/rebuild supply-chain path', () => {
+    // electron-builder owns the production rebuild using its app-scoped rebuild
+    // pipeline. Keeping the standalone CLI in devDependencies/scripts widens the
+    // native-install supply chain and is unsafe in nested worktrees (#46).
+    expect(packageJson.devDependencies ?? {}).not.toHaveProperty('@electron/rebuild');
+    expect(packageJson.scripts).not.toHaveProperty('rebuild:native');
+  });
+
+  it('tracks the only dependency allowed to run native install scripts', () => {
+    expect(packageJson.pnpm?.onlyBuiltDependencies).toEqual(['better-sqlite3']);
   });
 
   it('targets macOS .dmg + .zip (arm64 + x64) and ships unsigned in v1', () => {

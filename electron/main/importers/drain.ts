@@ -14,10 +14,15 @@ export async function drainImporter(
   onRecord: (record: CatalogRecord) => void,
 ): Promise<ImportResult> {
   const generator = importer.import(inputPath, ctx);
-  let next = await generator.next();
-  while (!next.done) {
-    onRecord(next.value);
-    next = await generator.next();
+  try {
+    let next = await generator.next();
+    while (!next.done) {
+      onRecord(next.value);
+      next = await generator.next();
+    }
+    return next.value;
+  } catch (error) {
+    await generator.return(undefined as never).catch(() => undefined);
+    throw error;
   }
-  return next.value;
 }

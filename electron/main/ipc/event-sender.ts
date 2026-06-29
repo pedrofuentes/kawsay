@@ -10,21 +10,33 @@ import {
   type IpcEventChannel,
   type IpcEventPayload,
 } from '@shared/ipc/events';
+import type { z } from 'zod';
 
 /** The underlying one-way transport (`webContents.send`), injected. */
 export type RawEventSend = (channel: string, payload: unknown) => void;
+
+export interface InvalidEventDiagnostic {
+  channel: IpcEventChannel;
+  issues: z.ZodIssue[];
+}
+
+export interface EventSenderOptions {
+  onInvalidEvent?: (diagnostic: InvalidEventDiagnostic) => void;
+}
 
 /**
  * Build the validated `emit` helper the main process uses to stream events to
  * the renderer. A payload that fails its schema is dropped (a main-side bug
  * should never crash the relay nor push an unexpected shape at React).
  */
-export function createEventSender(send: RawEventSend) {
+export function createEventSender(send: RawEventSend, options: EventSenderOptions = {}) {
   return function emit<C extends IpcEventChannel>(channel: C, payload: IpcEventPayload<C>): void {
     const schema = ipcEventContract[channel];
     const result = schema.safeParse(payload);
     if (result.success) {
       send(channel, result.data);
+    } else {
+      options.onInvalidEvent?.({ channel, issues: result.error.issues });
     }
   };
 }

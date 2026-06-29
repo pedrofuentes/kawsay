@@ -18,8 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Windows IPC/navigation hardening is recorded in release notes** (#41): the prior Windows fix keeps the app trusting only the exact packaged renderer entry (or the dev server in development), so Windows path semantics no longer make IPC/navigation tests fail only on `windows-latest`.
 - **Folder imports now handle edge-case metadata and symlinked selected roots more clearly** (#52, #62): a symlink chosen as the import root can be accepted while recursive walking still refuses symlink entries, and corrupt EXIF/ffprobe metadata is surfaced as a non-fatal partial-metadata skip instead of disappearing silently.
 - **IPC contracts now reject relative renderer-supplied paths and pin null/undefined adversarial cases** (#88, #89), while Browse tests assert the native-picker title/default path passed over the bridge (#116).
+- Hardened content-addressed originals against corrupted existing blobs, catalog-transaction orphan files,
+  orphan garbage collection, ffprobe local-path diagnostics, worker fault leaks, malformed progress-event
+  drops, and media-probe/EXIF edge cases (#44, #58, #78, #80, #81, #83, #84, #90).
 
 ### Security
+
+- Removed the standalone `@electron/rebuild` dev dependency and `rebuild:native` script; packaging relies on
+  electron-builder's app-scoped native rebuild path and keeps native install-script tracking pinned to
+  `better-sqlite3` only (#46).
 
 ### Removed
 

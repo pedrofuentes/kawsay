@@ -361,6 +361,19 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records[0]?.gps).toBeNull();
   });
 
+  it('treats EXIF GPS 0/0 as a no-location sentinel, not a real coordinate', async () => {
+    const fs = buildFs({ 'sentinel.jpg': { mtimeMs: 1 } });
+    const { deps } = makeDeps(fs, {
+      byPath: {
+        'sentinel.jpg': { gps: { lat: 0, lon: 0 } },
+      },
+    });
+
+    const { records } = await collect(makeContext(deps).ctx);
+
+    expect(records[0]?.gps).toBeNull();
+  });
+
   it('treats an EXIF read failure as no-EXIF (mtime fallback), reports it, and never drops the photo', async () => {
     const mtimeMs = Date.UTC(2020, 10, 5);
     const fs = buildFs({ 'corrupt.heic': { mtimeMs } });
