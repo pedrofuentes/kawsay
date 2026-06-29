@@ -237,16 +237,17 @@ function listOriginalCandidates(root: string, afterHash: string | null, limit: n
   return candidates.sort((a, b) => a.cursor.localeCompare(b.cursor)).slice(0, limit);
 }
 
-function hasContentAddressedReference(db: CatalogDatabase, hash: string): boolean {
+function hasContentAddressedReference(db: CatalogDatabase, hash: string, ext: string | null): boolean {
   const row = db
     .prepare(
       `SELECT 1 AS found
        FROM item_occurrences o
        JOIN items i ON i.id = o.item_id
        WHERE i.content_hash = @hash AND o.original_kind = 'content_addressed'
+         AND COALESCE(i.original_ext, '') = @ext
        LIMIT 1`,
     )
-    .get<{ found: number }>({ hash });
+    .get<{ found: number }>({ hash, ext: normalizeExt(ext) });
   return row !== undefined;
 }
 
@@ -262,7 +263,7 @@ export function garbageCollectOrphanedOriginals(
   for (const candidate of candidates) {
     assertSafeHash(candidate.hash);
     assertWithinRoot(root, candidate.absPath);
-    if (!hasContentAddressedReference(db, candidate.hash)) {
+    if (!hasContentAddressedReference(db, candidate.hash, candidate.ext)) {
       rmSync(candidate.absPath, { force: true });
       deleted += 1;
     }
