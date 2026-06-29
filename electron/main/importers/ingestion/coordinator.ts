@@ -23,6 +23,8 @@ export interface IngestionCoordinatorOptions {
   spawn: SpawnIngestionWorker;
   /** Sinks one renderer-facing progress event (the validated event sender). */
   emitProgress: (event: ImportProgressEvent) => void;
+  /** Main-process diagnostic sink for worker faults. Defaults to console.error. */
+  logWorkerFault?: (error: Error) => void;
 }
 
 /**
@@ -34,10 +36,19 @@ export interface IngestionCoordinatorOptions {
  * the worker down — the import settles with a typed failure instead of hanging.
  */
 export class IngestionWorkerFaultError extends Error {
-  constructor(message: string) {
+  readonly rendererMessage: string;
+
+  constructor(message: string, rendererMessage = 'ingestion worker crashed before completing') {
     super(message);
     this.name = 'IngestionWorkerFaultError';
+    this.rendererMessage = rendererMessage;
   }
+}
+
+function preserveFaultStack(error: Error, prefix: string): IngestionWorkerFaultError {
+  const fault = new IngestionWorkerFaultError(`${prefix}: ${error.message}`);
+  fault.stack = error.stack;
+  return fault;
 }
 
 export interface IngestionCoordinator {
@@ -91,6 +102,11 @@ export function createIngestionCoordinator(
   options: IngestionCoordinatorOptions,
 ): IngestionCoordinator {
   const { spawn, emitProgress } = options;
+  const logWorkerFault =
+    options.logWorkerFault ??
+    ((error: Error) => {
+      console.error(error.stack ?? error.message);
+    });
   const handles = new Map<string, IngestionWorkerHandle>();
 
   function teardown(jobId: string): void {
@@ -108,7 +124,8 @@ export function createIngestionCoordinator(
   // done/cancel — that exit arrives after teardown removed the handle.
   function settleFault(jobId: string, fault: IngestionWorkerFaultError): void {
     if (!handles.has(jobId)) return;
-    emitProgress(errorEvent(jobId, fault.message));
+    logWorkerFault(fault);
+    emitProgress(errorEvent(jobId, fault.rendererMessage));
     teardown(jobId);
   }
 
@@ -142,7 +159,7 @@ export function createIngestionCoordinator(
       // 'error'/'exit' EVENT, never a protocol message. Observing both keeps a
       // crash off the main process and stops an abnormal exit orphaning the handle.
       handle.onError((error) =>
-        settleFault(job.jobId, new IngestionWorkerFaultError(`ingestion worker crashed: ${error.message}`)),
+        settleFault(job.jobId, preserveFaultStack(error, 'ingestion worker crashed')),
       );
       handle.onExit((code) =>
         settleFault(

@@ -8,12 +8,23 @@ import { parentPort } from 'node:worker_threads';
 import { createParentPortWorkerPort } from '../ingestion/worker-threads-transport';
 import { startIngestionJob } from './ingestion-job';
 import { openIngestionContext } from './ingestion-context';
+import type { MessagePortLike } from '../ingestion/worker-threads-transport';
 
-if (parentPort === null) {
-  throw new Error('ingestion-worker must be run as a worker thread');
+export interface IngestionWorkerEntryOptions {
+  parentPort: MessagePortLike | null;
 }
 
-startIngestionJob({
-  port: createParentPortWorkerPort(parentPort),
-  openContext: openIngestionContext,
-});
+export function bindIngestionWorkerEntry(options: IngestionWorkerEntryOptions): void {
+  if (options.parentPort === null) {
+    throw new Error('ingestion-worker must be run as a worker thread');
+  }
+
+  startIngestionJob({
+    port: createParentPortWorkerPort(options.parentPort),
+    openContext: openIngestionContext,
+  });
+}
+
+if (parentPort !== null) {
+  bindIngestionWorkerEntry({ parentPort });
+}

@@ -90,6 +90,7 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
     const coordinator = createIngestionCoordinator({
       spawn: () => worker.handle,
       emitProgress: (e) => events.push(e),
+      logWorkerFault: () => {},
     });
 
     coordinator.start(job());
@@ -107,6 +108,7 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
     const coordinator = createIngestionCoordinator({
       spawn: () => worker.handle,
       emitProgress: (e) => events.push(e),
+      logWorkerFault: () => {},
     });
 
     coordinator.start(job());
@@ -125,6 +127,7 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
     const coordinator = createIngestionCoordinator({
       spawn: () => worker.handle,
       emitProgress: (e) => events.push(e),
+      logWorkerFault: () => {},
     });
 
     coordinator.start(job());
@@ -189,9 +192,11 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
   it('settles the import with a terminal error and tears down when the worker emits an error event', () => {
     const worker = fakeHandle();
     const events: ImportProgressEvent[] = [];
+    const faultLog: Error[] = [];
     const coordinator = createIngestionCoordinator({
       spawn: () => worker.handle,
       emitProgress: (e) => events.push(e),
+      logWorkerFault: (error) => faultLog.push(error),
     });
 
     coordinator.start(job());
@@ -201,8 +206,12 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
 
     const terminal = events.at(-1);
     expect(terminal).toMatchObject({ jobId: UUID, phase: 'done', summary: null });
-    expect(terminal?.error).toEqual(expect.stringContaining('native crash in better-sqlite3'));
+    expect(terminal?.error).toBe('ingestion worker crashed before completing');
+    expect(terminal?.error).not.toContain('better-sqlite3');
     expect(terminal?.error).not.toBeNull();
+    expect(faultLog).toHaveLength(1);
+    expect(faultLog[0]?.message).toContain('native crash in better-sqlite3');
+    expect(faultLog[0]?.stack).toContain('Error: native crash in better-sqlite3');
     expect(importProgressEventSchema.safeParse(terminal).success).toBe(true);
     expect(worker.terminations).toBe(1); // handle torn down — no orphan
     expect(coordinator.active()).toEqual([]);
@@ -214,6 +223,7 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
     const coordinator = createIngestionCoordinator({
       spawn: () => worker.handle,
       emitProgress: (e) => events.push(e),
+      logWorkerFault: () => {},
     });
 
     coordinator.start(job());
@@ -257,6 +267,7 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
     const coordinator = createIngestionCoordinator({
       spawn: () => worker.handle,
       emitProgress: (e) => events.push(e),
+      logWorkerFault: () => {},
     });
 
     coordinator.start(job());
