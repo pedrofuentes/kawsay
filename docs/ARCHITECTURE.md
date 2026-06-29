@@ -154,6 +154,7 @@ kawsay/
 | **AC-15** Resilient partial import | `ingestion/coordinator.ts` (`onSkip`) | integration |
 | **AC-16** Facebook + LinkedIn | `importers/facebook/` + `importers/linkedin/` | integration |
 | **AC-25** iMessage/SMS `chat.db` | `importers/imessage-importer.ts` | unit + integration |
+| **AC-27** Facebook Messenger JSON | `importers/messenger-importer.ts` | unit + integration |
 
 ---
 
@@ -470,6 +471,7 @@ export interface ImportResult { recordCount: number; skipped: SkippedItem[]; }
 | `whatsapp` | `.zip` | `whatsapp-chat-parser`; media co-located | copied **once, content-addressed** → `originals/<hash[0:2]>/<hash>[.ext]` | AC-1, AC-12, AC-15 |
 | `google_takeout` | `.zip`(s) | `mbox-parser` (streaming split) → `postal-mime` (per message) + sidecar `.json` + `exifr` | copied once, content-addressed | AC-11, AC-15 |
 | `facebook` | `.zip` | JSON traversal + mojibake fix (`Buffer.from(s,'latin1').toString('utf8')`) | copied once, content-addressed | AC-16, AC-3, AC-10, AC-15 |
+| `messenger` | Meta JSON folder / `.zip` (`your_activity_across_facebook/messages/.../message_*.json`) | cheap Messenger-shape detection, bounded streaming parse, mojibake fix, Unix ms → UTC | messages (`none`) plus linked photo/video/audio originals copied once, content-addressed | AC-27, AC-4, AC-15 |
 | `linkedin` | `.zip` | `papaparse` (trim headers; multiline cells) | copied once, content-addressed (rarely any media) | AC-16, AC-15 |
 | `imessage` | macOS Messages folder (`chat.db` + `Attachments/`) | cheap SQLite header check, then `better-sqlite3` opened read-only; iterate `message`/`handle`/`chat` plus `attachment`/`message_attachment_join`; Apple epoch → UTC | messages (`none`) plus linked photo/video/audio attachments copied once, content-addressed | AC-25, AC-4, AC-15 |
 

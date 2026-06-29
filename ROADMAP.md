@@ -129,7 +129,10 @@ zero egress (AC-4)** and partial-import resilience (AC-15). One new AC per conne
 First slice: **AC-25** adds a read-only macOS Messages `chat.db` iMessage/SMS connector for message
 text/sender/date provenance plus linked attachments. Next slice: **AC-26** adds a Telegram Desktop
 `result.json` connector for messages plus photo/video/voice file refs; full multi-account `chats/`
-nesting and service-message semantics are follow-ups.
+nesting and service-message semantics are follow-ups. **AC-27** adds a Facebook Messenger (Meta DYI
+JSON) connector for inbox/archived/filtered `message_*.json` threads, sender/date/content
+provenance, mojibake repair, bounded streaming parse, and traversal-safe photo/video/audio refs;
+reactions, call logs, share/link unfurls, and nuanced group membership are follow-ups.
 **Authorization:** time-boxed per connector (export/file-based, reversible) — no new egress.
 
 ### M4 — AI categorization & smart search · **P2 · proposed**

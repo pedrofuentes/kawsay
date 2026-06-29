@@ -6,6 +6,7 @@ export const SOURCE_TYPES = [
   'folder',
   'whatsapp',
   'google_takeout',
+  'messenger',
   'facebook',
   'linkedin',
   'imessage',
