@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **iMessage/SMS import first slice (M3 · AC-25)**: Kawsay can now recognize a local macOS Messages
+  `chat.db` folder (with `Attachments/`) and import text messages through the existing importer
+  pipeline, preserving sender, bounded text, source provenance, and Apple-epoch timestamps as UTC.
+  The connector reads SQLite read-only, honors cancellation, reports partial failures as skips, and
+  adds no network egress. Attachment materialization/linkage and deeper SMS-vs-iMessage behavior are
+  deferred follow-ups; the raw `service` value is retained in provenance.
+
 ### Changed
 
 ### Fixed

@@ -153,6 +153,7 @@ kawsay/
 | **AC-14** Originals + undo | `library/library-service.ts` + occurrence model (§4) | integration |
 | **AC-15** Resilient partial import | `ingestion/coordinator.ts` (`onSkip`) | integration |
 | **AC-16** Facebook + LinkedIn | `importers/facebook/` + `importers/linkedin/` | integration |
+| **AC-25** iMessage/SMS `chat.db` | `importers/imessage-importer.ts` | unit + integration |
 
 ---
 
@@ -251,7 +252,7 @@ response) unless marked *event* (main → renderer stream).
 Representative schemas (`electron/main/ipc/schemas.ts`, imported by preload too):
 
 ```ts
-export const SourceType = z.enum(['folder','whatsapp','google_takeout','facebook','linkedin']);
+export const SourceType = z.enum(['folder','whatsapp','google_takeout','facebook','linkedin','imessage']);
 
 export const ImportStartSchema = z.object({
   sourceType: SourceType,
@@ -352,7 +353,7 @@ parse failure on one record is a **skip** (AC-15), never a crash.
 
 ```ts
 // electron/main/importers/types.ts
-export type SourceType = 'folder' | 'whatsapp' | 'google_takeout' | 'facebook' | 'linkedin';
+export type SourceType = 'folder' | 'whatsapp' | 'google_takeout' | 'facebook' | 'linkedin' | 'imessage';
 
 /** One normalized memory *occurrence* emitted by an importer. */
 export interface CatalogRecord {
@@ -433,6 +434,7 @@ export interface ImportResult { recordCount: number; skipped: SkippedItem[]; }
 | `google_takeout` | `.zip`(s) | `mbox-parser` (streaming split) → `postal-mime` (per message) + sidecar `.json` + `exifr` | copied once, content-addressed | AC-11, AC-15 |
 | `facebook` | `.zip` | JSON traversal + mojibake fix (`Buffer.from(s,'latin1').toString('utf8')`) | copied once, content-addressed | AC-16, AC-3, AC-10, AC-15 |
 | `linkedin` | `.zip` | `papaparse` (trim headers; multiline cells) | copied once, content-addressed (rarely any media) | AC-16, AC-15 |
+| `imessage` | macOS Messages folder (`chat.db` + `Attachments/`) | `better-sqlite3` opened read-only; iterate `message`/`handle`/`chat` rows; Apple epoch → UTC | pure messages in first slice (`none`); attachment originals deferred | AC-25, AC-4, AC-15 |
 
 ### 3.4 Plugging in a new connector
 
@@ -503,7 +505,7 @@ CREATE TABLE sources (
   -- occurrences) while genuinely-new files still add occurrences.
   source_key    TEXT NOT NULL UNIQUE,
   type          TEXT NOT NULL CHECK (type IN
-                  ('folder','whatsapp','google_takeout','facebook','linkedin')),
+                  ('folder','whatsapp','google_takeout','facebook','linkedin','imessage')),
   label         TEXT NOT NULL,                             -- "Mum's WhatsApp backup"
   origin_path   TEXT,                                      -- the original .zip / chosen folder (untouched)
   root_path     TEXT,                                      -- folder root, or extracted-archive copy root

@@ -3,6 +3,7 @@ import { folderImporter } from './folder-importer';
 import { whatsappImporter } from './whatsapp-importer';
 import { facebookImporter } from './facebook-importer';
 import { linkedinImporter } from './linkedin-importer';
+import { imessageImporter } from './imessage-importer';
 import { takeoutImporter } from './takeout-importer';
 
 /**
@@ -22,6 +23,9 @@ import { takeoutImporter } from './takeout-importer';
  *   `messages.csv` / `Rich_Media.csv`). They precede `takeout` so an export whose
  *   root also happens to carry a top-level JSON + media file is not swallowed by
  *   Takeout's broad Google-Photos-album fallback.
+ * - `imessage` claims only a macOS Messages folder with a readable `chat.db`
+ *   carrying the Messages schema plus its sibling `Attachments/` directory. It
+ *   precedes `folder` so `~/Library/Messages` is not treated as generic files.
  * - `google_takeout` matches specific Takeout markers (`archive_browser.html`,
  *   `Mail`, `Google Photos`, a `Takeout` basename, a `.mbox`) PLUS a permissive
  *   `hasJson && hasMedia` album heuristic, making it the broadest concrete
@@ -36,6 +40,7 @@ export const importers: readonly Importer[] = [
   whatsappImporter,
   facebookImporter,
   linkedinImporter,
+  imessageImporter,
   takeoutImporter,
   folderImporter,
 ];

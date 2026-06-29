@@ -21,7 +21,7 @@ CREATE TABLE sources (
   -- occurrences) while genuinely-new files still add occurrences.
   source_key    TEXT NOT NULL UNIQUE,
   type          TEXT NOT NULL CHECK (type IN
-                  ('folder','whatsapp','google_takeout','facebook','linkedin')),
+                  ('folder','whatsapp','google_takeout','facebook','linkedin','imessage')),
   label         TEXT NOT NULL,                             -- "Mum's WhatsApp backup"
   origin_path   TEXT,                                      -- the original .zip / chosen folder (untouched)
   root_path     TEXT,                                      -- folder root, or extracted-archive copy root
