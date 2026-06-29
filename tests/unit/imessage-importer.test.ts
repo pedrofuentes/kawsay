@@ -42,7 +42,7 @@ function makeContext(
   };
 }
 
-function depsForRealDir(root: string): ImporterDeps {
+function depsForRealDir(): ImporterDeps {
   const fs: FsLike = {
     async readFile(path: string): Promise<Buffer> {
       return await import('node:fs/promises').then((fs) => fs.readFile(path));
@@ -136,8 +136,8 @@ describe('imessageImporter (M3 — macOS Messages chat.db connector)', () => {
       mkdirSync(join(plain, 'Attachments'), { recursive: true });
       new Database(join(plain, 'chat.db')).close();
 
-      expect(await imessageImporter.canHandle(dir, depsForRealDir(dir))).toBe(true);
-      expect(await imessageImporter.canHandle(plain, depsForRealDir(plain))).toBe(false);
+      expect(await imessageImporter.canHandle(dir, depsForRealDir())).toBe(true);
+      expect(await imessageImporter.canHandle(plain, depsForRealDir())).toBe(false);
     } finally {
       removeTmpDir(dir);
       removeTmpDir(plain);
@@ -152,7 +152,7 @@ describe('imessageImporter (M3 — macOS Messages chat.db connector)', () => {
         { text: 'x'.repeat(25_000), date: appleNs('2024-02-03T04:06:07.000Z'), fromMe: true },
       ]);
 
-      const { records, result, byRef, skips } = await run(dir, depsForRealDir(dir));
+      const { records, result, byRef, skips } = await run(dir, depsForRealDir());
 
       expect(result.recordCount).toBe(2);
       expect(skips).toEqual([]);
@@ -185,7 +185,7 @@ describe('imessageImporter (M3 — macOS Messages chat.db connector)', () => {
       createMessagesDb(dir, [{ text: 'do not emit', date: appleNs('2024-02-03T04:05:06.000Z') }]);
       controller.abort();
 
-      const { records, result } = await run(dir, depsForRealDir(dir), controller.signal);
+      const { records, result } = await run(dir, depsForRealDir(), controller.signal);
 
       expect(records).toEqual([]);
       expect(result.recordCount).toBe(0);
