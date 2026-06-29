@@ -234,6 +234,32 @@ describe('Onboarding — Step 5: import (progress, cancel, completion)', () => {
     expect(await screen.findByText(/couldn't read/i)).toBeInTheDocument();
   });
 
+  it('surfaces partial-metadata warnings without implying the memory was skipped', async () => {
+    const { api, user } = setup();
+    await reachImportLocate(user);
+    await user.type(screen.getByLabelText(/file|folder|where/i), '/exports/photos');
+    await user.click(screen.getByRole('button', { name: /bring .*memories in/i }));
+
+    api.emitProgress(
+      makeProgressEvent({
+        phase: 'done',
+        summary: makeImportSummary({
+          occurrencesAdded: 1,
+          skipped: [
+            {
+              ref: 'IMG_1.heic',
+              reason: 'partial metadata unavailable: corrupt EXIF',
+              code: 'E_EXIF',
+            },
+          ],
+        }),
+      }),
+    );
+
+    expect(await screen.findByText(/couldn't read every detail/i)).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't read 1 item/i)).toBeNull();
+  });
+
   it('shows a calm error (never a raw ERR_ code) when the import fails', async () => {
     const { api, user } = setup();
     await reachImportLocate(user);
