@@ -126,6 +126,8 @@ Messenger, Instagram, iMessage/SMS, Outlook/PST**, etc. (MISSION §4).
 **Acceptance direction:** each connector imports its media + messages with correct dates into the
 library (mirrors AC-1/AC-2/AC-11), extracts **safely** (must satisfy AC-3, AC-10), and **preserves
 zero egress (AC-4)** and partial-import resilience (AC-15). One new AC per connector.
+First slice: **AC-25** adds a read-only macOS Messages `chat.db` iMessage/SMS connector for message
+text/sender/date provenance; attachment materialization and deeper SMS-vs-iMessage semantics are follow-ups.
 **Authorization:** time-boxed per connector (export/file-based, reversible) — no new egress.
 
 ### M4 — AI categorization & smart search · **P2 · proposed**

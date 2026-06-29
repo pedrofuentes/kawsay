@@ -435,6 +435,19 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   around the single egress AC-4 now permits — ties to AC-17 / AC-22; sequenced after the model-asset **publication**
   pre-step in M2-1, harness edits HUMAN-REQUIRED.)*
 
+### M3 acceptance addendum (AC-25 — iMessage/SMS connector, **post-v1 / proposed**)
+
+**AC-25 — iMessage/SMS `chat.db` import (content correctness, first slice).**
+- **Given** a local macOS Messages source folder containing a readable SQLite `chat.db` and sibling `Attachments/`
+  directory,
+- **When** the user imports it through the shared importer interface,
+- **Then** Kawsay recognizes only real Messages folders, reads `chat.db` **read-only**, streams/iterates `message`,
+  `handle`, and `chat` rows into message catalog records with sender, bounded text, provenance, and Apple-epoch
+  timestamps converted to UTC; cancellation is honored; malformed/unreadable rows are surfaced as skips (AC-15);
+  no network egress is introduced (AC-4). **Deferred:** attachment materialization/linkage and deeper SMS-vs-iMessage
+  semantics beyond preserving the row `service` value in provenance.
+- **Test kind:** unit + integration. *(M3 first vertical slice; no live Apple account/login and no cloud access.)*
+
 ### 4.1 AC traceability table (AC-id → feature → test kind)
 
 | AC | Source | Feature / capability | Test kind |
@@ -463,6 +476,7 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 | **AC-22** | M2 · ADR-0027 | User control / opt-in over transcription (consent; privacy) | integration / e2e |
 | **AC-23** | M2 · ADR-0027 | NOTICES / attribution for bundled binary + **downloaded** model weights (provenance) | integration / packaging |
 | **AC-24** | M2 · ADR-0027 | Model-download integrity & resilience — SHA-256 verify-before-use **+ re-verify before each spawn**, atomic, resumable, corrupt→refetch, offline-safe; only egress = the **exact pinned-URL `GET`** (method + URL + empty body), origin **+ redirect/CDN host**, asserted at `webRequest` + OS firewall (not the Node spies) | integration + scoped AC-4 harness |
+| **AC-25** | M3 | iMessage/SMS `chat.db` connector — read-only Messages SQLite detection + message text/sender/Apple-epoch timestamps + provenance; attachments and deeper service semantics deferred | unit + integration |
 
 > **AC-17 … AC-24 are M2 (post-v1), proposed, and HUMAN-REQUIRED** — they activate only on @pedrofuentes sign-off of
 > ADR-0027 and must keep AC-1 … AC-16 green (cumulative regression). AC-4's **user-data** zero-egress is **never
