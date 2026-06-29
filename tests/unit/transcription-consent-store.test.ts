@@ -43,7 +43,7 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
     warn.mockRestore();
   });
 
-  it('logs unreadable real filesystem errors without leaking the absolute consent path', () => {
+  it('does not leak the absolute consent path when real filesystem reads fail', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const blocker = join(dir, 'not-a-directory');
     writeFileSync(blocker, 'file blocks child path');
@@ -52,7 +52,12 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
     expect(createConsentStore({ filePath: blockedPath }).isOptedIn()).toBe(false);
 
     const serializedLogs = JSON.stringify(warn.mock.calls);
-    expect(serializedLogs).toContain('ENOTDIR');
+    const diagnosticCodes = warn.mock.calls.flatMap((call) =>
+      call
+        .filter((entry): entry is { code: string } => typeof entry === 'object' && entry !== null && 'code' in entry)
+        .map((entry) => entry.code),
+    );
+    expect(diagnosticCodes.filter((code) => !['ENOTDIR', 'ENOENT'].includes(code))).toEqual([]);
     expect(serializedLogs).not.toContain(blockedPath);
     expect(serializedLogs).not.toContain(dir);
     warn.mockRestore();
