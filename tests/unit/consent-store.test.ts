@@ -25,7 +25,7 @@ describe('transcription consent store observability (#170)', () => {
     expect(store.isOptedIn()).toBe(false);
     expect(warn).toHaveBeenCalledWith(
       '[kawsay] transcription consent could not be read; treating as opted-out',
-      expect.any(Error),
+      { name: 'Error' },
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain('/Users/alice');
     warn.mockRestore();
@@ -41,7 +41,7 @@ describe('transcription consent store observability (#170)', () => {
     expect(store.isOptedIn()).toBe(false);
     expect(warn).toHaveBeenCalledWith(
       '[kawsay] transcription consent was malformed; treating as opted-out',
-      expect.any(Error),
+      { name: 'SyntaxError' },
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain('/Users/alice');
     warn.mockRestore();

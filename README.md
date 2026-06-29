@@ -88,7 +88,7 @@ pnpm typecheck
 # Lint (ESLint — zero warnings expected)
 pnpm lint
 
-# Check dependency advisories
+# Optional local dependency advisory check (CI currently gates gitleaks + semgrep)
 pnpm audit
 
 # Format code (Prettier)

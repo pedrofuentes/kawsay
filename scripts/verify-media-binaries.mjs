@@ -122,6 +122,9 @@ export function ffmpegLicenseFailures(
   const notices = String(readNoticesText());
   const noticesClaimLgplOnly = /configure policy:\s*lgpl-only/i.test(notices);
   const isMacSourceBuild = label.startsWith('mac-');
+  const gplMismatchMessage = noticesClaimLgplOnly
+    ? `GPL-MISMATCH ${label}: ffmpeg build configuration enables GPL while NOTICES declares LGPL-only (${path})`
+    : `GPL-MISMATCH ${label}: ffmpeg build configuration enables GPL while macOS ffmpeg must be LGPL-only (${path})`;
   if (
     normalized.includes('--enable-nonfree') ||
     normalized.includes('has nonfree parts') ||
@@ -131,10 +134,8 @@ export function ffmpegLicenseFailures(
       `NONFREE ${label}: ffmpeg -L/build configuration contains nonfree/not legally redistributable (${path})`,
     ];
   }
-  if (isMacSourceBuild && noticesClaimLgplOnly && normalized.includes('--enable-gpl')) {
-    return [
-      `GPL-MISMATCH ${label}: ffmpeg build configuration enables GPL while NOTICES declares LGPL-only (${path})`,
-    ];
+  if (isMacSourceBuild && normalized.includes('--enable-gpl')) {
+    return [gplMismatchMessage];
   }
   return [];
 }

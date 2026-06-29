@@ -248,7 +248,7 @@ describe('transcription orchestrator — enumerate + dispatch (AC-18)', () => {
     expect(emitted.at(-1)).toEqual({ state: 'idle', counts: ZERO_COUNTS, lastItem: null });
     expect(warn).toHaveBeenCalledWith(
       '[kawsay] transcription worker failed to start; run left idle for retry',
-      expect.any(Error),
+      { name: 'Error' },
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain('/Users/alice');
     warn.mockRestore();

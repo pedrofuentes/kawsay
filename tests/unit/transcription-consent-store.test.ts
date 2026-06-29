@@ -34,11 +34,13 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
   });
 
   it('treats a corrupt consent file as opted-out (calm default, never throws)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const flat = join(dir, 'flat.json');
     writeFileSync(flat, '{ not valid json');
     const store = createConsentStore({ filePath: flat });
     expect(() => store.isOptedIn()).not.toThrow();
     expect(store.isOptedIn()).toBe(false);
+    warn.mockRestore();
   });
 
   it('logs unreadable real filesystem errors without leaking the absolute consent path', () => {
@@ -72,6 +74,7 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
   });
 
   it('does not throw when persisting fails — writes are best-effort (#160)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // The header contract promises a write failure "must not crash the calm main
     // process". A read-only / unwritable location surfaces as a throwing
     // mkdirSync or writeFileSync; setOptedIn must swallow it (fail-closed: the
@@ -103,5 +106,6 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
       },
     });
     expect(() => failingWrite.setOptedIn(true)).not.toThrow();
+    warn.mockRestore();
   });
 });
