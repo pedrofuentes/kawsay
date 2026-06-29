@@ -64,6 +64,11 @@ export function PathField({
   const api = useKawsayApi();
   const canBrowse = browseFor !== undefined && api !== undefined;
 
+  const handleInputChange = (event: ChangeEvent<HTMLInputElement>): void => {
+    setBrowseError(null);
+    onChange(event.target.value);
+  };
+
   const handleBrowse = async (): Promise<void> => {
     if (api === undefined || browseFor === undefined) {
       return;
@@ -115,7 +120,7 @@ export function PathField({
           placeholder={placeholder}
           aria-describedby={describedByIds === '' ? undefined : describedByIds}
           aria-invalid={invalid ? true : undefined}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+          onChange={handleInputChange}
           className="min-h-12 flex-1 rounded-lg border border-border-interactive bg-surface-raised px-4 font-body text-base text-text-primary placeholder:text-text-secondary"
         />
         {canBrowse ? (

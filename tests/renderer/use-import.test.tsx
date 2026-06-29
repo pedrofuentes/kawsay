@@ -49,7 +49,6 @@ describe('useImport', () => {
   });
 
   it('replays progress that arrives before startImport resolves with the job id (#97)', async () => {
-    let api: FakeApi;
     const startImport = vi.fn(async () => {
       api.emitProgress(
         makeProgressEvent({
@@ -61,7 +60,7 @@ describe('useImport', () => {
       );
       return { jobId: FAKE_JOB_ID };
     });
-    api = makeFakeApi({ startImport });
+    const api = makeFakeApi({ startImport });
     const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });
 
     await act(async () => {

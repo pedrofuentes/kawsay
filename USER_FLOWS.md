@@ -621,7 +621,7 @@ candlelit parchment, aged wood, dried botanicals; nothing harsh, nothing cold.*
 --color-text-primary:    #2A1F1A;  /* body — 14.4:1 on canvas */
 --color-text-secondary:  #5C504A;  /* captions, labels, timestamps, hints — 6.98:1 (use for ALL small text) */
 --color-text-tertiary:   #8A7D76;  /* decorative / non-text only — 3.57:1; NEVER small text */
---color-text-disabled:   #C0B4AC;  /* disabled, placeholder (exempt from contrast minimums) */
+--color-text-disabled:   #C0B4AC;  /* disabled controls only; placeholders use text-secondary */
 --color-text-inverse:    #FAF7F4;  /* text on dark surfaces */
 --color-text-on-primary: #FFFFFF;  /* label on the sage-600 CTA fill — 7.46:1 (use large/semibold) */
 ```
@@ -797,7 +797,7 @@ minimum and this doc's self-imposed goal for the audience.
 | `--color-text-primary` #2A1F1A | canvas | **14.40:1** | ≥7:1 body | ✅ pass |
 | `--color-text-secondary` #5C504A | canvas | **6.98:1** | ≥4.5:1 small text | ✅ pass — **use for all small text** (timestamps, hints, captions, provenance) |
 | `--color-text-tertiary` #8A7D76 | canvas | **3.57:1** | ≥4.5:1 small text | ❌ fail for text → **restricted to decorative/non-text** (meets 3:1 non-text) |
-| `--color-text-disabled` #C0B4AC | canvas | 1.82:1 | n/a | ⊘ exempt (WCAG 1.4.3 — disabled/placeholder) |
+| `--color-text-disabled` #C0B4AC | canvas | 1.82:1 | n/a | ⊘ exempt only for disabled/inactive controls — **never placeholder text** |
 | `--color-sage-500` #3F7D64 | canvas | **4.36:1** | ≥4.5:1 non-text/large | ❌ fail doc target → **demoted to large-text/non-text accent; NOT CTA fill, NOT small text** (was wrongly "5.2:1") |
 | `--color-sage-600` #2E5E4A (CTA fill / focus ring) | canvas | **6.70:1** | ≥4.5:1 non-text/large | ✅ pass |
 | `--color-sage-600` #2E5E4A (focus ring on card) | surface-raised #FFFFFF | **7.46:1** | ≥4.5:1 non-text | ✅ pass |

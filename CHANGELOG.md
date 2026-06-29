@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Import and recovery UI follow-ups (#94, #96, #97, #98, #127, #128): early import progress is no longer
+  dropped, cancelling cannot hang on "Stopping…", dropped zip auto-detection reuses one large-archive scan, and
+  Browse/Timeline retry focus and placeholder-contrast polish are tightened.
+
 ### Security
 
 ### Removed

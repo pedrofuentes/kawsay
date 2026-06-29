@@ -4,8 +4,8 @@ import { App } from '@renderer/App';
 
 describe('App (composed renderer)', () => {
   it('renders the first-run welcome inside a main landmark, tolerating no api bridge', () => {
-    const original = (window as { kawsayAPI?: unknown }).kawsayAPI;
-    delete (window as { kawsayAPI?: unknown }).kawsayAPI;
+    const original = window.kawsayAPI;
+    delete window.kawsayAPI;
     try {
       render(<App />);
       expect(screen.getByRole('main')).toBeInTheDocument();
@@ -13,7 +13,7 @@ describe('App (composed renderer)', () => {
         screen.getByRole('button', { name: /start bringing memories/i }),
       ).toBeInTheDocument();
     } finally {
-      if (original !== undefined) (window as { kawsayAPI?: unknown }).kawsayAPI = original;
+      if (original !== undefined) window.kawsayAPI = original;
     }
   });
 });

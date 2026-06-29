@@ -106,13 +106,22 @@ export function useImport(): UseImportResult {
   const api = useKawsayApi();
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const jobIdRef = useRef<string | null>(null);
+  const startingRef = useRef(false);
+  const pendingProgressRef = useRef<ImportProgressEvent[]>([]);
 
   useEffect(() => {
     if (api === undefined) {
       return undefined;
     }
     const unsubscribe = api.onImportProgress((event) => {
-      if (jobIdRef.current === null || event.jobId !== jobIdRef.current) {
+      const activeJobId = jobIdRef.current;
+      if (activeJobId === null) {
+        if (startingRef.current) {
+          pendingProgressRef.current.push(event);
+        }
+        return;
+      }
+      if (event.jobId !== activeJobId) {
         return;
       }
       dispatch({ type: 'progress', event });
@@ -126,12 +135,22 @@ export function useImport(): UseImportResult {
         dispatch({ type: 'failed', error: 'Kawsay is not connected on this device.' });
         return;
       }
+      startingRef.current = true;
+      pendingProgressRef.current = [];
       dispatch({ type: 'start' });
       try {
         const { jobId } = await api.startImport(input);
         jobIdRef.current = jobId;
+        startingRef.current = false;
         dispatch({ type: 'started', jobId });
+        const pending = pendingProgressRef.current.filter((event) => event.jobId === jobId);
+        pendingProgressRef.current = [];
+        for (const event of pending) {
+          dispatch({ type: 'progress', event });
+        }
       } catch (cause) {
+        startingRef.current = false;
+        pendingProgressRef.current = [];
         dispatch({ type: 'failed', error: cause instanceof Error ? cause.message : String(cause) });
       }
     },
@@ -146,13 +165,18 @@ export function useImport(): UseImportResult {
     dispatch({ type: 'cancelling' });
     try {
       await api.cancelImport({ jobId });
-    } catch {
-      // The worker still emits a terminal progress event; that resolves the UI.
+    } catch (cause) {
+      dispatch({
+        type: 'failed',
+        error: cause instanceof Error ? `Unable to stop import: ${cause.message}` : 'Unable to stop import.',
+      });
     }
   }, [api]);
 
   const reset = useCallback((): void => {
     jobIdRef.current = null;
+    startingRef.current = false;
+    pendingProgressRef.current = [];
     dispatch({ type: 'reset' });
   }, []);
 

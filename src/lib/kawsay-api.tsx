@@ -13,7 +13,7 @@ function resolveBridge(): KawsayAPI | undefined {
   if (typeof window === 'undefined') {
     return undefined;
   }
-  return (window as { kawsayAPI?: KawsayAPI }).kawsayAPI;
+  return window.kawsayAPI;
 }
 
 export function KawsayApiProvider({

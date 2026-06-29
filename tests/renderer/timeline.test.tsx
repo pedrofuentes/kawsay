@@ -306,8 +306,8 @@ describe('Timeline — opening a memory', () => {
 
 describe('Timeline — tolerates a missing bridge (browser preview)', () => {
   it('shows a calm not-connected message instead of crashing', () => {
-    const original = (window as { kawsayAPI?: unknown }).kawsayAPI;
-    delete (window as { kawsayAPI?: unknown }).kawsayAPI;
+    const original = window.kawsayAPI;
+    delete window.kawsayAPI;
     try {
       render(
         <KawsayApiProvider>
@@ -320,7 +320,7 @@ describe('Timeline — tolerates a missing bridge (browser preview)', () => {
       );
       expect(screen.getByText(/not connected/i)).toBeInTheDocument();
     } finally {
-      if (original !== undefined) (window as { kawsayAPI?: unknown }).kawsayAPI = original;
+      if (original !== undefined) window.kawsayAPI = original;
     }
   });
 });
