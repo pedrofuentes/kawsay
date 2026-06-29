@@ -73,6 +73,12 @@ describe('ingestion over a real worker_threads thread (AC-9 off-thread proof)', 
     expect(posts).toEqual([{ type: 'ready' }]);
   });
 
+  it('rejects direct main-thread binding when no parent worker port exists', () => {
+    expect(() => bindIngestionWorkerEntry({ parentPort: null })).toThrow(
+      'ingestion-worker must be run as a worker thread',
+    );
+  });
+
   it('streams progress off-thread and tears the thread down on completion', async () => {
     const { coordinator, events, done, exited } = runOnRealThread();
 

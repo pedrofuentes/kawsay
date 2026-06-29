@@ -623,6 +623,19 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(byRef.get('Google Photos/Trip/no-location.jpg')?.gps).toBeNull();
     });
 
+    it('treats sidecar geoData 0/0 as a no-location sentinel', async () => {
+      const f = buildFs({
+        'Google Photos/Trip/sidecar-no-location.jpg': { content: 'jpeg' },
+        'Google Photos/Trip/sidecar-no-location.jpg.json': {
+          content: sidecar({ geoData: { latitude: 0, longitude: 0, altitude: 10 } }),
+        },
+      });
+
+      const { byRef } = await run(ROOT, makeDeps(f));
+
+      expect(byRef.get('Google Photos/Trip/sidecar-no-location.jpg')?.gps).toBeNull();
+    });
+
     it('falls back to file mtime when neither sidecar nor EXIF has a date', async () => {
       const f = buildFs({
         'Google Photos/Trip/photo3.jpg': { content: 'jpeg', mtimeMs: utc(2017, 2, 3, 4, 5, 6) },

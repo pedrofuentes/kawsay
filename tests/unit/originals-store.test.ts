@@ -298,6 +298,27 @@ describe('originals reference-counting (AC-14: never dangle)', () => {
     expect(existsSync(blobAbsPath(root, hash, '.png'))).toBe(false);
   });
 
+  it('garbage-collects an unreferenced same-hash blob with a different extension', () => {
+    const incoming = join(root, 'incoming-same-hash');
+    writeFileSync(incoming, 'same-bytes');
+    const hash = createHash('sha256').update('same-bytes').digest('hex');
+    const referencedItem = repo.insertItem({ mediaType: 'photo', contentHash: hash, originalExt: '.jpg' });
+    repo.addOccurrence({
+      itemId: referencedItem,
+      sourceId: sourceA,
+      sourceRef: 'kept.jpg',
+      originalKind: 'content_addressed',
+    });
+    putOriginal({ root, hash, ext: '.jpg', sourcePath: incoming });
+    putOriginal({ root, hash, ext: '.png', sourcePath: incoming });
+
+    const result = garbageCollectOrphanedOriginals(db, root);
+
+    expect(result.deleted).toBe(1);
+    expect(existsSync(blobAbsPath(root, hash, '.jpg'))).toBe(true);
+    expect(existsSync(blobAbsPath(root, hash, '.png'))).toBe(false);
+  });
+
   it('is a no-op for an unknown occurrence id', () => {
     expect(removeOccurrence(db, root, 'no-such-occurrence')).toEqual({
       removed: false,

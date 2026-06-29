@@ -337,7 +337,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.durationSec).toBeNull();
     expect(records[0]?.mimeType).toBe('video/mp4'); // falls back to the extension mime
-    expect(result.skipped).toEqual([
+    expect(result.skipped.map((item) => ({ ...item, reason: item.reason.replace(/\\/g, '/') }))).toEqual([
       { ref: 'broken.mp4', reason: 'could not probe media: probe fail /import-root/broken.mp4', code: 'E_PROBE' },
     ]);
   });
