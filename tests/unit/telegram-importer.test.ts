@@ -180,6 +180,47 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
     }
   });
 
+  it('uses JSON structure rather than quoted text when associating messages with chat metadata', async () => {
+    const dir = makeTmpDir('telegram-json-structure-');
+    try {
+      writeResult(dir, {
+        chats: [
+          {
+            name: 'Family',
+            type: 'private_group',
+            id: 42,
+            pinned_message: {
+              id: 999,
+              type: 'message',
+              name: 'Nested Trap',
+              text: 'Ignore nested JSON-looking metadata with : and { braces',
+            },
+            messages: [
+              {
+                id: 1,
+                type: 'message',
+                date: '2024-02-03T04:05:06Z',
+                from: 'Mamá',
+                text: 'literal punctuation should stay text: "name": "Trap" and : {',
+              },
+            ],
+          },
+        ],
+      });
+
+      const { result, byRef, skips } = await run(dir, depsForRealDir());
+
+      expect(result.recordCount).toBe(1);
+      expect(skips).toEqual([]);
+      expect(byRef.get('message:1')).toMatchObject({
+        body: 'literal punctuation should stay text: "name": "Trap" and : {',
+        sourceMeta: { chatId: 42, chatName: 'Family', chatType: 'private_group' },
+      });
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
   it('links photo/video/voice files and skips traversal refs without statting outside the export root', async () => {
     const dir = makeTmpDir('telegram-media-');
     try {
