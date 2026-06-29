@@ -91,14 +91,17 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
     const jsonDir = makeTmpDir('telegram-json-');
     const htmlDir = makeTmpDir('telegram-html-');
     const plainDir = makeTmpDir('telegram-plain-');
+    const genericJsonDir = makeTmpDir('telegram-generic-json-');
     try {
       writeResult(jsonDir, { name: 'Mamá', type: 'personal_chat', id: 42, messages: [] });
       writeFileSync(join(htmlDir, 'messages.html'), '<html><title>Telegram Desktop</title></html>');
       writeFileSync(join(plainDir, 'result.json'), '{"not":"telegram"}');
+      writeResult(genericJsonDir, { messages: [] });
 
       expect(await telegramImporter.canHandle(jsonDir, depsForRealDir())).toBe(true);
       expect(await telegramImporter.canHandle(htmlDir, depsForRealDir())).toBe(true);
       expect(await telegramImporter.canHandle(plainDir, depsForRealDir())).toBe(false);
+      expect(await telegramImporter.canHandle(genericJsonDir, depsForRealDir())).toBe(false);
       expect(await telegramImporter.canHandle(join(plainDir, 'result.json'), depsForRealDir())).toBe(
         false,
       );
@@ -107,6 +110,7 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
       removeTmpDir(jsonDir);
       removeTmpDir(htmlDir);
       removeTmpDir(plainDir);
+      removeTmpDir(genericJsonDir);
     }
   });
 
