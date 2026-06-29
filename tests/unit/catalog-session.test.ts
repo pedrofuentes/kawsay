@@ -366,17 +366,18 @@ describe('createCatalogSession (the IPC application service)', () => {
     }
   });
 
-  it('beginImport reaches every newly wired connector (Takeout, Facebook, LinkedIn)', () => {
+  it('beginImport reaches every newly wired connector (Takeout, Facebook, LinkedIn, iMessage/SMS)', () => {
     session.createLibrary({ path: root });
-    for (const sourceType of ['google_takeout', 'facebook', 'linkedin'] as const) {
+    for (const sourceType of ['google_takeout', 'facebook', 'linkedin', 'imessage'] as const) {
       const { jobId } = session.beginImport({ sourceType, inputPath: root });
       expect(jobId).toBe(JOB_ID);
     }
-    expect(coordinator.started).toHaveLength(3);
+    expect(coordinator.started).toHaveLength(4);
     expect(coordinator.started.map((job) => job.sourceType)).toEqual([
       'google_takeout',
       'facebook',
       'linkedin',
+      'imessage',
     ]);
   });
 
