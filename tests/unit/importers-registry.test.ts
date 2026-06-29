@@ -1,5 +1,7 @@
 import { join } from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { access, readdir, stat } from 'node:fs/promises';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { importers, selectImporter } from '../../electron/main/importers/registry';
 import { folderImporter } from '../../electron/main/importers/folder-importer';
@@ -7,6 +9,7 @@ import { whatsappImporter } from '../../electron/main/importers/whatsapp-importe
 import { takeoutImporter } from '../../electron/main/importers/takeout-importer';
 import { facebookImporter } from '../../electron/main/importers/facebook-importer';
 import { linkedinImporter } from '../../electron/main/importers/linkedin-importer';
+import { imessageImporter } from '../../electron/main/importers/imessage-importer';
 import type { ImporterDeps } from '../../electron/main/importers/types';
 import { buildZip } from '../helpers/zip';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
@@ -20,6 +23,40 @@ interface FakeFsOptions {
   entries?: Record<string, readonly string[]>;
   /** Verbatim bytes returned by `readFile(path)` — the zip central-directory scan seam. */
   zipMarkers?: Record<string, string>;
+}
+
+function realDirDeps(): ImporterDeps {
+  return {
+    fs: {
+      readFile: async () => Buffer.from(''),
+      readDir: readdir,
+      stat,
+      exists: async (path: string) =>
+        access(path).then(
+          () => true,
+          () => false,
+        ),
+    },
+    extractArchive: async () => [],
+    readExif: async () => null,
+    probeMedia: async () => ({ durationSec: null, width: null, height: null, mimeType: null }),
+    hashFile: async () => 'deadbeef',
+  };
+}
+
+function createMinimalMessagesDb(root: string): void {
+  mkdirSync(join(root, 'Attachments'), { recursive: true });
+  const db = new Database(join(root, 'chat.db'));
+  try {
+    db.exec(`
+      CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+      CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, display_name TEXT);
+      CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, date INTEGER, is_from_me INTEGER, handle_id INTEGER, service TEXT);
+      CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+    `);
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -63,6 +100,7 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
       whatsappImporter,
       facebookImporter,
       linkedinImporter,
+      imessageImporter,
       takeoutImporter,
       folderImporter,
     ]);
@@ -73,10 +111,23 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
       'whatsapp',
       'facebook',
       'linkedin',
+      'imessage',
       'google_takeout',
       'folder',
     ]);
     expect(importers[importers.length - 1]).toBe(folderImporter);
+  });
+
+  it('routes a macOS Messages chat.db folder to the iMessage/SMS importer (not folder)', async () => {
+    const dir = makeTmpDir('registry-imessage-');
+    try {
+      createMinimalMessagesDb(dir);
+      const chosen = await selectImporter(dir, realDirDeps());
+      expect(chosen).toBe(imessageImporter);
+      expect(chosen).not.toBe(folderImporter);
+    } finally {
+      removeTmpDir(dir);
+    }
   });
 
   it('routes an unpacked WhatsApp export folder to the WhatsApp importer (not folder)', async () => {
