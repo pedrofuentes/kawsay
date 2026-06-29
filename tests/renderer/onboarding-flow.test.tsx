@@ -162,6 +162,18 @@ describe('Onboarding — Step 4: guided "how to export" walkthrough (AC-12)', ()
 });
 
 describe('Onboarding — Step 5: import (progress, cancel, completion)', () => {
+  it('surfaces a failed startImport bridge call in the import step instead of swallowing it (#25)', async () => {
+    const api = makeFakeApi({
+      startImport: vi.fn(() => Promise.reject(new Error('ERR_IMPORT_START_FAILED'))),
+    });
+    const { user } = setup(api);
+    await reachImportLocate(user);
+    await user.type(screen.getByLabelText(/file|folder|where/i), '/exports/whatsapp.zip');
+    await user.click(screen.getByRole('button', { name: /bring .*memories in/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/interrupted bringing/i);
+  });
+
   it('starts the import through the typed api with the chosen source and path', async () => {
     const { api, user } = setup();
     await reachImportLocate(user);

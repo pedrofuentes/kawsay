@@ -69,6 +69,18 @@ describe('parseCsv (RFC 4180 reader for LinkedIn exports, card C5)', () => {
     expect(parseCsv('')).toEqual([]);
   });
 
+  it('throws E_PARSE for an unterminated quoted field instead of keeping a truncated row', () => {
+    expect(() => parseCsv('Content,From\n"hello,Ana\n')).toThrowError(
+      expect.objectContaining({ code: 'E_PARSE' }),
+    );
+  });
+
+  it('throws E_PARSE for a NUL byte in CSV text', () => {
+    expect(() => parseCsv('Content,From\nhello\u0000there,Ana\n')).toThrowError(
+      expect.objectContaining({ code: 'E_PARSE' }),
+    );
+  });
+
   it('keeps empty fields (consecutive commas) rather than collapsing them', () => {
     expect(parseCsv('a,,c\n')).toEqual([['a', '', 'c']]);
   });
