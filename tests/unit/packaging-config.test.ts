@@ -58,6 +58,7 @@ const releaseYml = readFileSync(repoRoot('.github/workflows/release.yml'), 'utf8
   /\r\n/g,
   '\n',
 );
+const ciYml = readFileSync(repoRoot('.github/workflows/ci.yml'), 'utf8').replace(/\r\n/g, '\n');
 
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
@@ -356,6 +357,32 @@ describe('release workflow preserves the M1 hardening + whisper-cli build (#129,
     for (const line of releaseUsesLines) {
       expect(line).toMatch(/uses:\s*[^@\s]+@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/);
     }
+  });
+
+  describe('CI workflow preserves media-binary hardening (#178/#182)', () => {
+    const verify = (() => {
+      const lines = ciYml.split(/\r?\n/);
+      const start = lines.findIndex((l) => /^ {2}verify:\s*$/.test(l));
+      if (start === -1) return '';
+      const body: string[] = [];
+      for (let i = start + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.trim() !== '' && /^ {0,2}\S/.test(line)) break;
+        body.push(line);
+      }
+      return body.join('\n');
+    })();
+
+    it('builds macOS media binaries from source before staging and verifying them', () => {
+      expect(verify).toMatch(/if:\s*runner\.os == 'macOS'/);
+      expect(verify).toMatch(/\.\/scripts\/build-ffmpeg\.sh/);
+      expect(verify).toMatch(/pnpm stage:media/);
+      expect(verify).toMatch(/scripts\/verify-media-binaries\.mjs/);
+    });
+
+    it('pins the nasm assembler floor in CI so source ffmpeg builds are reproducible', () => {
+      expect(verify).toMatch(/NASM_MIN_VERSION:\s*[0-9]+\.[0-9]+\.[0-9]+/);
+    });
   });
 
   it('builds + verifies the per-arch whisper-cli before packaging', () => {

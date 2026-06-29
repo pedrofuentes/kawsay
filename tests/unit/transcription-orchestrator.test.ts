@@ -230,6 +230,27 @@ describe('transcription orchestrator — enumerate + dispatch (AC-18)', () => {
     expect(job.items[0].language).toBe('es');
     expect(job.items[0].durationSec).toBeNull();
   });
+
+  it('contains a worker.start throw, logs it, and leaves the run idle for retry (#170)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { orchestrator, worker } = harness({
+      items: [{ id: ITEM_A, sourcePath: '/Users/alice/private/voice.m4a', durationSec: 10 }],
+    });
+    worker.port.start = () => {
+      throw new Error('worker crashed');
+    };
+
+    await expect(orchestrator.start()).rejects.toThrow('worker crashed');
+
+    expect(orchestrator.status().state).toBe('idle');
+    expect(orchestrator.status().counts.inFlight).toBe(0);
+    expect(warn).toHaveBeenCalledWith(
+      '[kawsay] transcription worker failed to start; run left idle for retry',
+      expect.any(Error),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('/Users/alice');
+    warn.mockRestore();
+  });
 });
 
 describe('transcription orchestrator — stray worker events (resilience)', () => {
