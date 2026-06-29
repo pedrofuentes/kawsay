@@ -290,39 +290,82 @@ async function openTextStream(path: string, deps: ImporterDeps): Promise<Readabl
   return Readable.from(await deps.fs.readFile(path));
 }
 
-function extractStringField(prefix: string, field: string): string | null {
-  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const matches = Array.from(
-    prefix.matchAll(new RegExp(`"${escaped}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`, 'g')),
-  );
-  const last = matches.at(-1);
-  if (!last) return null;
-  try {
-    return JSON.parse(`"${last[1]}"`) as string;
-  } catch {
-    return null;
-  }
-}
+function findMessagesArrayPrefix(
+  prefix: string,
+): { objectStart: number; arrayStart: number } | null {
+  const stack: Array<{ type: 'object' | 'array'; start: number }> = [];
+  let inString = false;
+  let escaped = false;
+  let token = '';
+  let pendingMessages: { objectStart: number; colonIndex: number } | null = null;
+  let latest: { objectStart: number; arrayStart: number } | null = null;
 
-function extractScalarField(prefix: string, field: string): string | number | null {
-  const stringValue = extractStringField(prefix, field);
-  if (stringValue !== null) return stringValue;
-  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const matches = Array.from(
-    prefix.matchAll(new RegExp(`"${escaped}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`, 'g')),
-  );
-  const last = matches.at(-1);
-  if (!last) return null;
-  const value = Number(last[1]);
-  return Number.isFinite(value) ? value : null;
+  for (let index = 0; index < prefix.length; index += 1) {
+    const ch = prefix[index];
+    if (inString) {
+      if (escaped) {
+        token += ch;
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+        let next = index + 1;
+        while (next < prefix.length && /\s/.test(prefix[next])) next += 1;
+        if (token === 'messages' && prefix[next] === ':') {
+          const object = stack.at(-1);
+          if (object?.type === 'object') {
+            pendingMessages = { objectStart: object.start, colonIndex: next };
+          }
+        }
+      } else {
+        token += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      escaped = false;
+      token = '';
+    } else if (ch === '{') {
+      stack.push({ type: 'object', start: index });
+    } else if (ch === '[') {
+      if (
+        pendingMessages !== null &&
+        prefix.slice(pendingMessages.colonIndex + 1, index).trim() === ''
+      ) {
+        latest = { objectStart: pendingMessages.objectStart, arrayStart: index };
+      }
+      stack.push({ type: 'array', start: index });
+      pendingMessages = null;
+    } else if (ch === '}' || ch === ']') {
+      stack.pop();
+      pendingMessages = null;
+    } else if (!/\s/.test(ch) && ch !== ':') {
+      pendingMessages = null;
+    }
+  }
+
+  return latest;
 }
 
 function chatFromPrefix(prefix: string): TelegramChatContext {
-  const chatId = extractScalarField(prefix, 'id');
+  const messagesArray = findMessagesArrayPrefix(prefix);
+  if (messagesArray === null) return EMPTY_CHAT;
+
+  let chat: Record<string, unknown>;
+  try {
+    chat = JSON.parse(`${prefix.slice(messagesArray.objectStart, messagesArray.arrayStart)}[]}`);
+  } catch {
+    return EMPTY_CHAT;
+  }
+
+  const chatId = chat.id;
   return {
-    chatId,
-    chatName: extractStringField(prefix, 'name'),
-    chatType: extractStringField(prefix, 'type'),
+    chatId: typeof chatId === 'string' || typeof chatId === 'number' ? chatId : null,
+    chatName: asString(chat.name),
+    chatType: asString(chat.type),
   };
 }
 
