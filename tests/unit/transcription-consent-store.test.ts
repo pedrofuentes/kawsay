@@ -43,7 +43,7 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
     warn.mockRestore();
   });
 
-  it('does not leak the absolute consent path when real filesystem reads fail', () => {
+  it('treats real not-a-directory consent paths as opted-out across platform-specific errors', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const blocker = join(dir, 'not-a-directory');
     writeFileSync(blocker, 'file blocks child path');
@@ -59,6 +59,33 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
     );
     expect(diagnosticCodes.filter((code) => !['ENOTDIR', 'ENOENT'].includes(code))).toEqual([]);
     expect(serializedLogs).not.toContain(blockedPath);
+    expect(serializedLogs).not.toContain(dir);
+    warn.mockRestore();
+  });
+
+  it('logs unreadable filesystem errors without leaking the absolute consent path', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const unreadablePath = join(dir, 'nested', 'transcription-consent.json');
+    const error = new Error(`EACCES: permission denied, open '${unreadablePath}'`) as NodeJS.ErrnoException;
+    error.code = 'EACCES';
+
+    expect(
+      createConsentStore({
+        filePath: unreadablePath,
+        fs: {
+          readFileSync: () => {
+            throw error;
+          },
+          writeFileSync: () => undefined,
+          mkdirSync: () => undefined,
+        },
+      }).isOptedIn(),
+    ).toBe(false);
+
+    const serializedLogs = JSON.stringify(warn.mock.calls);
+    expect(warn.mock.calls.length).toBeGreaterThan(0);
+    expect(serializedLogs).toContain('EACCES');
+    expect(serializedLogs).not.toContain(unreadablePath);
     expect(serializedLogs).not.toContain(dir);
     warn.mockRestore();
   });
