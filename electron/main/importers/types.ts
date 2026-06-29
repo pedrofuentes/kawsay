@@ -95,6 +95,7 @@ export interface ExtractedEntry {
 export type SafeExtractFn = (
   archivePath: string,
   destDir: string,
+  options?: { signal?: AbortSignal },
 ) => Promise<readonly ExtractedEntry[]>;
 
 export interface ExifData {

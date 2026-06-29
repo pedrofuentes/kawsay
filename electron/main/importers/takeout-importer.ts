@@ -189,8 +189,12 @@ function parentSegment(sourceRef: string): string | null {
 }
 
 /** Make a single, filesystem-safe path segment from an arbitrary name. */
-function sanitizeSegment(name: string): string {
-  const cleaned = name.replace(/[^\w.()-]+/g, '_');
+export function sanitizeSegment(name: string): string {
+  const cleaned = name
+    .replace(/[^\w.()-]+/g, '_')
+    .replace(/\.\.+/g, '.')
+    .replace(/^\.+$/g, '')
+    .replace(/^\.+|\.+$/g, '');
   return cleaned.length > 0 ? cleaned : 'unnamed';
 }
 
@@ -567,13 +571,25 @@ async function buildAttachmentRecord(
 
   const writeFile = ctx.deps.fs.writeFile;
   if (!writeFile) {
-    recordSkip(ctx, skipped, ref, 'cannot materialize attachment: writeFile seam unavailable', 'E_WRITE_ATTACH');
+    recordSkip(
+      ctx,
+      skipped,
+      ref,
+      'cannot materialize attachment: writeFile seam unavailable',
+      'E_WRITE_ATTACH',
+    );
     return null;
   }
   try {
     await writeFile(scratchPath, content);
   } catch (error) {
-    recordSkip(ctx, skipped, ref, `could not write attachment: ${errorMessage(error)}`, 'E_WRITE_ATTACH');
+    recordSkip(
+      ctx,
+      skipped,
+      ref,
+      `could not write attachment: ${errorMessage(error)}`,
+      'E_WRITE_ATTACH',
+    );
     return null;
   }
 
@@ -707,7 +723,13 @@ async function* streamMboxRecords(
     try {
       stream = opener(file.absPath);
     } catch (error) {
-      recordSkip(ctx, skipped, file.sourceRef, `could not open mbox: ${errorMessage(error)}`, 'E_READ_MBOX');
+      recordSkip(
+        ctx,
+        skipped,
+        file.sourceRef,
+        `could not open mbox: ${errorMessage(error)}`,
+        'E_READ_MBOX',
+      );
       return;
     }
   } else {
@@ -715,7 +737,13 @@ async function* streamMboxRecords(
     try {
       stream = Readable.from(await ctx.deps.fs.readFile(file.absPath));
     } catch (error) {
-      recordSkip(ctx, skipped, file.sourceRef, `could not read mbox: ${errorMessage(error)}`, 'E_READ_MBOX');
+      recordSkip(
+        ctx,
+        skipped,
+        file.sourceRef,
+        `could not read mbox: ${errorMessage(error)}`,
+        'E_READ_MBOX',
+      );
       return;
     }
   }
@@ -748,7 +776,13 @@ async function* streamMboxRecords(
     // A failed interface construction or a mid-stream read error (the file
     // vanished, or the readline stream emits `error` during iteration) is
     // reported, not thrown; any messages already emitted are preserved (AC-15).
-    recordSkip(ctx, skipped, file.sourceRef, `could not read mbox: ${errorMessage(error)}`, 'E_READ_MBOX');
+    recordSkip(
+      ctx,
+      skipped,
+      file.sourceRef,
+      `could not read mbox: ${errorMessage(error)}`,
+      'E_READ_MBOX',
+    );
   } finally {
     rl?.close();
     stream.destroy();

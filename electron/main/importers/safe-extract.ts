@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, unlink } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as yauzl from 'yauzl';
@@ -28,6 +28,8 @@ export const ARCHIVE_ERROR_CODES = {
   SYMLINK: 'ERR_ARCHIVE_SYMLINK',
   /** Unreadable / invalid archive. */
   CORRUPT: 'ERR_ARCHIVE_CORRUPT',
+  /** Cooperative cancellation via AbortSignal. */
+  ABORTED: 'ERR_ARCHIVE_ABORTED',
 } as const;
 
 export type ArchiveErrorCode = (typeof ARCHIVE_ERROR_CODES)[keyof typeof ARCHIVE_ERROR_CODES];
@@ -38,17 +40,27 @@ const ARCHIVE_MESSAGE_KEYS: Record<ArchiveErrorCode, string> = {
   ERR_ARCHIVE_BOMB: 'import.error.archiveTooLarge',
   ERR_ARCHIVE_SYMLINK: 'import.error.unsafeArchive',
   ERR_ARCHIVE_CORRUPT: 'import.error.corruptArchive',
+  ERR_ARCHIVE_ABORTED: 'import.error.cancelled',
 };
+
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f-\u009f]/gu;
+
+function cleanDetail(detail: string): string {
+  return detail.replace(CONTROL_CHARS_RE, '');
+}
 
 /** Typed failure carrying a stable {@link ArchiveErrorCode} and a UI message key. */
 export class ArchiveError extends Error {
   readonly code: ArchiveErrorCode;
   readonly messageKey: string;
+  readonly detail: string;
 
   constructor(code: ArchiveErrorCode, detail: string) {
-    super(`${code}: ${detail}`);
+    const safeDetail = cleanDetail(detail);
+    super(`${code}: ${safeDetail}`);
     this.name = 'ArchiveError';
     this.code = code;
+    this.detail = safeDetail;
     this.messageKey = ARCHIVE_MESSAGE_KEYS[code];
   }
 }
@@ -88,6 +100,9 @@ function isSymlinkEntry(entry: Entry): boolean {
  * mismatches surface from `validateEntrySizes`. Anything else is a corrupt zip.
  */
 function classifyYauzlError(err: unknown): ArchiveError {
+  if (isAbortError(err)) {
+    return new ArchiveError(ARCHIVE_ERROR_CODES.ABORTED, 'archive extraction aborted');
+  }
   const message = err instanceof Error ? err.message : String(err);
   if (
     message.startsWith('invalid characters in fileName:') ||
@@ -100,6 +115,19 @@ function classifyYauzlError(err: unknown): ArchiveError {
     return new ArchiveError(ARCHIVE_ERROR_CODES.BOMB, message);
   }
   return new ArchiveError(ARCHIVE_ERROR_CODES.CORRUPT, message);
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === 'AbortError' || err.message === 'archive extraction aborted')
+  );
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new ArchiveError(ARCHIVE_ERROR_CODES.ABORTED, 'archive extraction aborted');
+  }
 }
 
 /** Belt-and-suspenders name validation beyond yauzl's automatic check. */
@@ -166,9 +194,16 @@ async function openArchive(archivePath: string): Promise<yauzl.ZipFile> {
 export function createSafeExtract(overrides: Partial<ArchiveLimits> = {}): SafeExtractFn {
   const limits: ArchiveLimits = { ...DEFAULT_ARCHIVE_LIMITS, ...overrides };
 
-  return async (archivePath: string, destDir: string): Promise<readonly ExtractedEntry[]> => {
+  return async (
+    archivePath: string,
+    destDir: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<readonly ExtractedEntry[]> => {
+    const { signal } = options;
+    throwIfAborted(signal);
     const absDest = resolve(destDir);
     await mkdir(absDest, { recursive: true });
+    throwIfAborted(signal);
 
     const zipfile = await openArchive(archivePath);
     const extracted: ExtractedEntry[] = [];
@@ -177,6 +212,7 @@ export function createSafeExtract(overrides: Partial<ArchiveLimits> = {}): SafeE
 
     try {
       for await (const entry of zipfile.eachEntry()) {
+        throwIfAborted(signal);
         entryCount += 1;
         if (entryCount > limits.maxEntries) {
           throw new ArchiveError(
@@ -205,7 +241,12 @@ export function createSafeExtract(overrides: Partial<ArchiveLimits> = {}): SafeE
 
         await mkdir(dirname(absPath), { recursive: true });
         const readStream = await zipfile.openReadStreamPromise(entry);
-        await pipeline(readStream, createWriteStream(absPath));
+        try {
+          await pipeline(readStream, createWriteStream(absPath), { signal });
+        } catch (err) {
+          await unlink(absPath).catch(() => undefined);
+          throw err;
+        }
 
         extracted.push({ entryPath: entry.fileName, absPath });
       }

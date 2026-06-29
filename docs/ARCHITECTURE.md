@@ -956,14 +956,14 @@ HUMAN-REQUIRED.
 
 ### 7.1 Guarded extraction (`yauzl`)
 
-One extractor — `ingestion/safe-extract.ts` — is the **only** way archives are opened (no `adm-zip`/
+One extractor — `electron/main/importers/safe-extract.ts` — is the **only** way archives are opened (no `adm-zip`/
 `unzipper`). It applies the full checklist (research `security.md` Topic 1) on **every** entry, before
 any byte is written:
 
 | Guard | Check | Error code | AC |
 |-------|-------|-----------|----|
 | Filename validation | `yauzl.validateFileName` (auto via `decodeStrings:true`) — rejects `/`, `..`, `\` | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
-| Resolved-path containment | `path.join(dest, name)` then `startsWith(dest + sep)` (belt-and-suspenders) | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
+| Resolved-path containment | `path.resolve(dest, name)` then exact-boundary `dest` / `dest + sep` check (belt-and-suspenders) | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
 | Per-entry size cap | `uncompressedSize ≤ 500 MB` | `ERR_ARCHIVE_BOMB` | AC-10 |
 | Total size cap | running total ≤ 2 GB | `ERR_ARCHIVE_BOMB` | AC-10 |
 | Compression-ratio cap | `uncompressed/compressed ≤ 100` | `ERR_ARCHIVE_BOMB` | AC-10 |
@@ -972,6 +972,7 @@ any byte is written:
 | Symlink rejection | Unix mode `(externalFileAttributes>>>16)&0xF000 === 0xA000` | `ERR_ARCHIVE_SYMLINK` | AC-10 |
 | Strict filenames | `strictFileNames:true` (reject `\` on non-Windows) | `ERR_ARCHIVE_UNSAFE_PATH` | AC-3 |
 | Corrupt/invalid zip | open/read failure | `ERR_ARCHIVE_CORRUPT` | AC-3 |
+| Abort | `AbortSignal` checked before open and during streaming | `ERR_ARCHIVE_ABORTED` | AC-9 |
 
 ```ts
 // electron/main/ingestion/errors.ts
@@ -979,7 +980,8 @@ export type ArchiveErrorCode =
   | 'ERR_ARCHIVE_UNSAFE_PATH'   // AC-3: zip-slip / absolute / backslash traversal
   | 'ERR_ARCHIVE_BOMB'          // AC-10: ratio / total / per-entry / entry-count
   | 'ERR_ARCHIVE_SYMLINK'       // AC-10: symlink entry (refinement; see note)
-  | 'ERR_ARCHIVE_CORRUPT';      // unreadable / invalid archive
+  | 'ERR_ARCHIVE_CORRUPT'       // unreadable / invalid archive
+  | 'ERR_ARCHIVE_ABORTED';      // user/system cancelled extraction
 export class ArchiveError extends Error {
   constructor(readonly code: ArchiveErrorCode, readonly messageKey: string, msg?: string) { super(msg); }
 }
@@ -988,7 +990,10 @@ export class ArchiveError extends Error {
 - **Stable, assertable codes** are what AC-3 (`ERR_ARCHIVE_UNSAFE_PATH`) and AC-10 (`ERR_ARCHIVE_BOMB`)
   bind their tests to. They surface to the user as **clear, non-technical** copy via `messageKey`
   (e.g. `import.error.unsafeArchive`) — never a raw code in the UI (USER_FLOWS `ErrorBanner`, "no
-  codes").
+  codes"). Error details are diagnostic only and strip C0/C1 control characters before formatting.
+- A stream failure after a file has been opened unlinks that partial file before surfacing
+  `ERR_ARCHIVE_CORRUPT` / `ERR_ARCHIVE_BOMB`, so `extract/<source-id>/` never retains truncated bytes as
+  a valid original.
 - **Refinement flagged for red-team:** PRD AC-10 names `ERR_ARCHIVE_BOMB` for the bomb-and-symlink
   scenario; this architecture adds a dedicated **`ERR_ARCHIVE_SYMLINK`** for clarity. AC-10's
   observable guarantees ("no symlink is materialized" + a stable assertable `ERR_ARCHIVE_*` code) are
