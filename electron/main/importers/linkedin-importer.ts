@@ -241,7 +241,12 @@ async function readRows(
     recordSkip(ctx, skipped, entry.entryPath, `could not read: ${errorMessage(error)}`, 'E_READ');
     return undefined;
   }
-  return parseCsv(text);
+  try {
+    return parseCsv(text);
+  } catch (error) {
+    recordSkip(ctx, skipped, entry.entryPath, `could not parse: ${errorMessage(error)}`, 'E_PARSE');
+    return undefined;
+  }
 }
 
 const MESSAGE_HEADERS = ['content', 'from', 'date', 'subject'];

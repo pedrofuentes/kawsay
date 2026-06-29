@@ -40,7 +40,12 @@ describe('buildContentSecurityPolicy (zero-egress CSP, ARCHITECTURE §2.2 / AC-4
 
   it('relaxes ONLY for the dev server (HMR needs the dev origin + websocket)', () => {
     const csp = buildContentSecurityPolicy({ devServerUrl: 'http://localhost:5173' });
-    expectDirective(csp, 'script-src', ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'http://localhost:5173']);
+    expectDirective(csp, 'script-src', [
+      "'self'",
+      "'unsafe-inline'",
+      "'unsafe-eval'",
+      'http://localhost:5173',
+    ]);
     expectDirective(csp, 'style-src', ["'self'", "'unsafe-inline'", 'http://localhost:5173']);
     expectDirective(csp, 'connect-src', ["'self'", 'http://localhost:5173', 'ws://localhost:5173']);
     // Even relaxed, the dev policy keeps a default-src floor.

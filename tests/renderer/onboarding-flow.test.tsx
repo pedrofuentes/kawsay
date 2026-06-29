@@ -62,7 +62,7 @@ describe('Onboarding — Step 0: welcome (privacy you can feel)', () => {
 });
 
 describe('Onboarding — Step 1: name (by the second screen) + focus management', () => {
-  it('moves focus to the step heading and asks the loved one\'s name', async () => {
+  it("moves focus to the step heading and asks the loved one's name", async () => {
     const { user } = setup();
     await user.click(screen.getByRole('button', { name: /start bringing memories/i }));
     const heading = await screen.findByRole('heading', { level: 1, name: /who are you honoring/i });
@@ -73,9 +73,7 @@ describe('Onboarding — Step 1: name (by the second screen) + focus management'
   it('uses the entered name in the very next step', async () => {
     const { user } = setup();
     await reachLibraryStep(user);
-    expect(
-      screen.getByRole('heading', { level: 1, name: /elena/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: /elena/i })).toBeInTheDocument();
   });
 });
 
@@ -83,7 +81,10 @@ describe('Onboarding — Step 2: choose where the library lives (create / open)'
   it('creates a library through the typed api with the chosen path and name', async () => {
     const { api, user } = setup();
     await reachLibraryStep(user);
-    await user.type(screen.getByLabelText(/folder|where/i), '/Users/elena/Documents/Kawsay — Elena');
+    await user.type(
+      screen.getByLabelText(/folder|where/i),
+      '/Users/elena/Documents/Kawsay — Elena',
+    );
     await user.click(screen.getByRole('button', { name: /create .*library/i }));
 
     expect(api.createLibrary).toHaveBeenCalledWith({
@@ -97,7 +98,10 @@ describe('Onboarding — Step 2: choose where the library lives (create / open)'
     const { api, user } = setup();
     await reachLibraryStep(user);
     await user.click(screen.getByRole('button', { name: /already made|open a library/i }));
-    await user.type(screen.getByLabelText(/folder|where/i), '/Users/elena/Documents/Kawsay — Elena');
+    await user.type(
+      screen.getByLabelText(/folder|where/i),
+      '/Users/elena/Documents/Kawsay — Elena',
+    );
     await user.click(screen.getByRole('button', { name: /^open/i }));
 
     expect(api.openLibrary).toHaveBeenCalledWith({
@@ -193,7 +197,12 @@ describe('Onboarding — Step 5: import (progress, cancel, completion)', () => {
     await user.click(screen.getByRole('button', { name: /bring .*memories in/i }));
 
     api.emitProgress(
-      makeProgressEvent({ phase: 'parse', processed: 84, total: 200, message: 'Reading through messages…' }),
+      makeProgressEvent({
+        phase: 'parse',
+        processed: 84,
+        total: 200,
+        message: 'Reading through messages…',
+      }),
     );
 
     const bar = await screen.findByRole('progressbar');
@@ -290,7 +299,9 @@ describe('Onboarding — folder source has a one-screen primer (no export steps)
     const { user } = setup();
     await reachSourceStep(user);
     await user.click(screen.getByRole('button', { name: /folder of photos/i }));
-    expect(screen.getByText(/never changes or moves them|stay where they are/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/never changes or moves them|stay where they are/i),
+    ).toBeInTheDocument();
     const main = screen.getByRole('main');
     expect(within(main).getByRole('heading', { level: 1 })).toBeInTheDocument();
   });

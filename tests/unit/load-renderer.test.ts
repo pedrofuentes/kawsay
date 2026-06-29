@@ -10,7 +10,10 @@ describe('loadRenderer', () => {
     };
     const onLoadFailure = vi.fn();
 
-    await loadRenderer(window, { rendererEntryPath: '/app/out/renderer/index.html', onLoadFailure });
+    await loadRenderer(window, {
+      rendererEntryPath: '/app/out/renderer/index.html',
+      onLoadFailure,
+    });
 
     expect(onLoadFailure).toHaveBeenCalledWith(error);
   });

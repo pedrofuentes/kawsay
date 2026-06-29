@@ -23,7 +23,8 @@ pnpm test <file>    # run a single test file (fast feedback loop)
 pnpm lint           # ESLint — must be zero warnings
 pnpm typecheck      # tsc --noEmit (strict mode)
 pnpm format         # Prettier — run before every commit
-pnpm build          # electron-builder → .dmg (macOS) / .exe (Windows)
+pnpm build          # compile Electron main/preload/renderer bundles
+pnpm dist           # electron-builder → .dmg (macOS) / .exe (Windows)
 ```
 
 ---

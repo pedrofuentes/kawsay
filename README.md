@@ -94,8 +94,11 @@ pnpm audit
 # Format code (Prettier)
 pnpm format
 
-# Build installers for your platform
+# Compile the Electron main/preload/renderer bundles
 pnpm build
+
+# Build installers for your platform
+pnpm dist
 ```
 
 ---

@@ -16,10 +16,22 @@
  * preamble — is the importer's job, not this reader's.
  */
 
+export class CsvParseError extends Error {
+  readonly code = 'E_PARSE';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'CsvParseError';
+  }
+}
+
 /** Parse RFC 4180 CSV `input` into a matrix of rows × string fields. */
 export function parseCsv(input: string): string[][] {
   // A UTF-8 BOM belongs to the document, never to the first header cell.
   const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
+  if (text.includes('\u0000')) {
+    throw new CsvParseError('CSV contains a NUL byte');
+  }
 
   const rows: string[][] = [];
   let row: string[] = [];
@@ -77,8 +89,11 @@ export function parseCsv(input: string): string[][] {
     }
   }
 
-  // Flush a final row that did not end in a terminator (or an open quoted run
-  // truncated by EOF — its text is still kept, never dropped).
+  if (inQuotes) {
+    throw new CsvParseError('CSV ended inside a quoted field');
+  }
+
+  // Flush a final row that did not end in a terminator.
   if (rowHasContent || field !== '' || row.length > 0) {
     endRow();
   }

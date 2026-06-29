@@ -180,11 +180,12 @@ const win = new BrowserWindow({
   },
 });
 
-// Block navigation away from the app origin, and deny all window.open()
-win.webContents.on('will-navigate', (e, url) => {
-  if (new URL(url).origin !== new URL(win.webContents.getURL()).origin) e.preventDefault();
+// Block navigation away from the exact packaged entry (or the dev-server origin
+// in development), and deny all window.open().
+applyNavigationHardening(win.webContents, {
+  appEntryUrl: pathToFileURL(path.join(__dirname, '../renderer/index.html')).href,
+  devServerUrl: process.env.ELECTRON_RENDERER_URL,
 });
-win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 ```
 
 `shell.openExternal` is **not** used in v1 (no external links). If ever added it must allowlist-validate
@@ -229,51 +230,40 @@ response) unless marked *event* (main → renderer stream).
 
 | Channel | Direction | Payload (zod) | Returns |
 |---------|-----------|---------------|---------|
-| `library:list` | invoke | `{}` | `LibrarySummary[]` |
-| `library:current` | invoke | `{}` | `LibrarySummary \| null` |
+| `app:getVersion` | invoke | `{}` | `{ version: string }` |
 | `library:create` | invoke | `{ path: absolute string(1..4096), personName?: string(1..200) }` | `LibrarySummary` |
 | `library:open` | invoke | `{ path: absolute string(1..4096) }` | `LibrarySummary` |
 | `dialog:openDirectory` | invoke | `{ title?: string(1..200), defaultPath?: absolute string(1..4096) }` | `string \| null` |
 | `dialog:openFile` | invoke | `{ title?: string(1..200), defaultPath?: absolute string(1..4096) }` | `string \| null` |
-| `import:start` | invoke | `ImportStartSchema` (below) | `{ jobId: string }` |
-| `import:cancel` | invoke | `{ jobId: string(uuid) }` | `{}` |
-| `import:undo` | invoke | `{ sourceId: string(uuid) }` | `{ removed: number }` |
-| `import:progress` | **event** | `ImportProgress` (below) | — |
-| `import:done` | **event** | `{ jobId, sourceId, summary: ImportSummary }` | — |
-| `import:error` | **event** | `{ jobId, code: ArchiveErrorCode\|'ERR_IMPORT', messageKey }` | — |
-| `catalog:timeline` | invoke | `{ cursor?: string, limit: int(1..200), filter?: CatalogFilter }` | `{ items: ItemCard[], nextCursor?: string }` |
-| `catalog:search` | invoke | `SearchOptsSchema` (below) | `{ items: ItemCard[], total: number }` |
-| `catalog:item` | invoke | `{ itemId: string(uuid) }` | `ItemDetail` (incl. `occurrences[]` provenance) |
-| `catalog:months` | invoke | `{ filter?: CatalogFilter }` | `{ monthKey: string, count: number }[]` |
-| `item:setFavourite` | invoke | `{ itemId: string(uuid), value: boolean }` | `{}` |
-| `sources:list` | invoke | `{}` | `SourceSummary[]` |
-| `settings:get` | invoke | `{}` | `Settings` |
-| `settings:set` | invoke | `SettingsPatchSchema` | `Settings` |
+| `import:start` | invoke | `{ sourceType: SourceType, inputPath: absolute string(1..4096) }` | `{ jobId: uuid }` |
+| `import:cancel` | invoke | `{ jobId: uuid }` | `{ cancelled: boolean }` |
+| `import:progress` | **event** | `ImportProgressEvent` | — |
+| `catalog:timeline` | invoke | `{ limit: int(1..200), cursor?: string }` | `{ items: ItemCard[], nextCursor: string \| null }` |
+| `catalog:search` | invoke | `{ query: string(1..512), limit?: int(1..200), offset?: int, source?: SourceType }` | `{ items: ItemCard[], total: number }` |
+| `catalog:thumbnail` | invoke | `{ id: uuid, size?: int(64..320) }` | `data:image/... \| null` |
+| `catalog:getTranscript` | invoke | `{ id: uuid }` | `TranscriptView` |
+| `transcription:downloadModel` | invoke | `{}` | `{ status: 'started' \| 'already-present' }` |
+| `transcription:modelStatus` | invoke | `{}` | `{ ready: boolean }` |
+| `transcription:start` | invoke | `{}` | `TranscriptionStartResult` |
+| `transcription:status` | invoke | `{}` | `TranscriptionSnapshot` |
+| `transcription:cancel` | invoke | `{}` | `{ cancelled: boolean }` |
 
 Representative schemas (`electron/main/ipc/schemas.ts`, imported by preload too):
 
 ```ts
 export const SourceType = z.enum(['folder','whatsapp','google_takeout','facebook','linkedin','imessage']);
 
-export const ImportStartSchema = z.object({
+export const ImportStartSchema = z.strictObject({
   sourceType: SourceType,
-  inputPath: z.string().min(1).max(4096),     // an absolute path the user picked via dialog
+  inputPath: pathSchema,                       // an absolute path the user picked via dialog
 });
 
-export const CatalogFilter = z.object({
-  types:     z.array(z.enum(['photo','video','audio','document','message'])).optional(),
-  sourceIds: z.array(z.string().uuid()).optional(),
-  dateFrom:  z.string().datetime().optional(),
-  dateTo:    z.string().datetime().optional(),
-  favourite: z.boolean().optional(),
-}).strict();
-
-export const SearchOptsSchema = z.object({
-  query:  z.string().max(512),
-  filter: CatalogFilter.optional(),
+export const SearchOptsSchema = z.strictObject({
+  query:  z.string().min(1).max(512),
+  source: SourceType.optional(),
   limit:  z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
-}).strict();
+});
 
 export const ImportProgress = z.object({
   jobId: z.string().uuid(),

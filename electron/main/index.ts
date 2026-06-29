@@ -36,6 +36,7 @@ import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
 import { createCatalogSession } from './app/catalog-session';
+import { loadRenderer } from './app/load-renderer';
 import { createIngestionCoordinator } from './importers/ingestion/coordinator';
 import { createWorkerThreadsSpawner } from './importers/ingestion/worker-threads-transport';
 import { createFfmpegVideoFrameThumbnailer } from './importers/deps/thumbnail';
@@ -267,11 +268,13 @@ function createMainWindow(): void {
     }
   });
 
-  if (rendererDevUrl === undefined) {
-    void window.loadFile(rendererEntryPath);
-  } else {
-    void window.loadURL(rendererDevUrl);
-  }
+  void loadRenderer(window, {
+    rendererEntryPath,
+    rendererDevUrl,
+    onLoadFailure: (error) => {
+      console.error('[kawsay] renderer failed to load', error);
+    },
+  });
 }
 
 async function bootstrap(): Promise<void> {

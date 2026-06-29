@@ -3,7 +3,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drainImporter } from '../../electron/main/importers/drain';
-import { linkedinImporter, parseLinkedInDate } from '../../electron/main/importers/linkedin-importer';
+import {
+  linkedinImporter,
+  parseLinkedInDate,
+} from '../../electron/main/importers/linkedin-importer';
 import type {
   CatalogRecord,
   FileStat,
