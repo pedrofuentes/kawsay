@@ -131,20 +131,44 @@ function recordSkip(
   ctx.onSkip(item);
 }
 
-async function readExifSafe(deps: ImporterDeps, absPath: string): Promise<ExifData | null> {
+async function readExifSafe(
+  ctx: ImportContext,
+  skipped: SkippedItem[],
+  root: string,
+  absPath: string,
+): Promise<ExifData | null> {
   try {
-    return await deps.readExif(absPath);
-  } catch {
+    return await ctx.deps.readExif(absPath);
+  } catch (error) {
     // A corrupt/unsupported EXIF segment is not a failure to ingest — the file
     // is still catalogued with its mtime as the date (provenance: mtime).
+    recordSkip(
+      ctx,
+      skipped,
+      toSourceRef(root, absPath),
+      `partial metadata unavailable: ${errorMessage(error)}`,
+      'E_EXIF',
+    );
     return null;
   }
 }
 
-async function probeMediaSafe(deps: ImporterDeps, absPath: string): Promise<MediaInfo | null> {
+async function probeMediaSafe(
+  ctx: ImportContext,
+  skipped: SkippedItem[],
+  root: string,
+  absPath: string,
+): Promise<MediaInfo | null> {
   try {
-    return await deps.probeMedia(absPath);
-  } catch {
+    return await ctx.deps.probeMedia(absPath);
+  } catch (error) {
+    recordSkip(
+      ctx,
+      skipped,
+      toSourceRef(root, absPath),
+      `partial metadata unavailable: ${errorMessage(error)}`,
+      'E_PROBE',
+    );
     return null;
   }
 }
@@ -184,14 +208,15 @@ async function buildRecord(
   absPath: string,
   stat: FileStat,
   info: MediaKind,
-  deps: ImporterDeps,
+  ctx: ImportContext,
+  skipped: SkippedItem[],
 ): Promise<CatalogRecord> {
   // EXIF (date/GPS/camera) is image-only; timed media (video/audio) is probed
   // for duration/dimensions. Documents need neither.
-  const exif = info.mediaType === 'photo' ? await readExifSafe(deps, absPath) : null;
+  const exif = info.mediaType === 'photo' ? await readExifSafe(ctx, skipped, root, absPath) : null;
   const media =
     info.mediaType === 'video' || info.mediaType === 'audio'
-      ? await probeMediaSafe(deps, absPath)
+      ? await probeMediaSafe(ctx, skipped, root, absPath)
       : null;
 
   return {
@@ -269,7 +294,10 @@ export const folderImporter: Importer = {
   async canHandle(inputPath: string, deps: ImporterDeps): Promise<boolean> {
     try {
       const stat = await deps.fs.stat(inputPath);
-      return stat.isDirectory();
+      if (stat.isDirectory()) return true;
+      const realpath = await deps.fs.realpath?.(inputPath);
+      if (realpath === undefined) return false;
+      return (await deps.fs.stat(realpath)).isDirectory();
     } catch {
       return false;
     }
@@ -282,6 +310,9 @@ export const folderImporter: Importer = {
     const skipped: SkippedItem[] = [];
     let recordCount = 0;
 
+    if (ctx.signal.aborted) {
+      return { recordCount, skipped };
+    }
     ctx.onProgress({ phase: 'discover', processed: 0, total: null, message: null });
 
     for await (const { absPath, stat } of walkFiles(inputPath, inputPath, ctx, skipped)) {
@@ -292,7 +323,7 @@ export const folderImporter: Importer = {
       if (!info) {
         continue; // non-media → skip quietly (not a failure to report)
       }
-      const record = await buildRecord(inputPath, absPath, stat, info, ctx.deps);
+      const record = await buildRecord(inputPath, absPath, stat, info, ctx, skipped);
       recordCount += 1;
       ctx.onProgress({ phase: 'emit', processed: recordCount, total: null });
       yield record;

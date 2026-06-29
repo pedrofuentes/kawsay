@@ -83,8 +83,39 @@ const MONTHS: Record<string, number> = {
   dec: 11,
 };
 
-function utcDate(ms: number): RecordDate {
-  return Number.isNaN(ms) ? null : { value: new Date(ms), source: 'message' };
+function utcDate(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+): RecordDate {
+  if (
+    month < 0 ||
+    month > 11 ||
+    day < 1 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59 ||
+    second < 0 ||
+    second > 59
+  ) {
+    return null;
+  }
+  const value = new Date(Date.UTC(year, month, day, hour, minute, second));
+  if (
+    value.getUTCFullYear() !== year ||
+    value.getUTCMonth() !== month ||
+    value.getUTCDate() !== day ||
+    value.getUTCHours() !== hour ||
+    value.getUTCMinutes() !== minute ||
+    value.getUTCSeconds() !== second
+  ) {
+    return null;
+  }
+  return { value, source: 'message' };
 }
 
 /**
@@ -100,30 +131,28 @@ export function parseLinkedInDate(raw: string | null | undefined): RecordDate {
   // "YYYY-MM-DD[ HH:MM[:SS]] [UTC|Z]" — messages.csv / Rich_Media.csv.
   let m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?\s*(?:UTC|Z)?$/i.exec(s);
   if (m) {
-    return utcDate(
-      Date.UTC(+m[1], +m[2] - 1, +m[3], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0, m[6] ? +m[6] : 0),
-    );
+    return utcDate(+m[1], +m[2] - 1, +m[3], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0, m[6] ? +m[6] : 0);
   }
 
   // "DD Mon YYYY" — Connections.csv "Connected On".
   m = /^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/.exec(s);
   if (m) {
     const mon = MONTHS[m[2].slice(0, 3).toLowerCase()];
-    if (mon !== undefined) return utcDate(Date.UTC(+m[3], mon, +m[1]));
+    if (mon !== undefined) return utcDate(+m[3], mon, +m[1]);
   }
 
   // "Mon DD, YYYY" — some export locales.
   m = /^([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})$/.exec(s);
   if (m) {
     const mon = MONTHS[m[1].slice(0, 3).toLowerCase()];
-    if (mon !== undefined) return utcDate(Date.UTC(+m[3], mon, +m[2]));
+    if (mon !== undefined) return utcDate(+m[3], mon, +m[2]);
   }
 
   // "MM/DD/YYYY" or "MM/DD/YY".
   m = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(s);
   if (m) {
     const year = m[3].length === 2 ? 2000 + +m[3] : +m[3];
-    return utcDate(Date.UTC(year, +m[1] - 1, +m[2]));
+    return utcDate(year, +m[1] - 1, +m[2]);
   }
 
   return null;

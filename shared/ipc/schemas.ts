@@ -43,8 +43,16 @@ export const THUMBNAIL_MAX_SIZE = 320;
 export const THUMBNAIL_MAX_BYTES = 512 * 1024;
 export const THUMBNAIL_DATA_URL_MAX_LENGTH = 1024 * 1024;
 
+function isAbsoluteLocalPath(value: string): boolean {
+  return (
+    value.startsWith('/') ||
+    /^[A-Za-z]:[\\/]/u.test(value) ||
+    /^\\\\[^\\]+\\[^\\]+/u.test(value)
+  );
+}
+
 /** A non-empty, bounded absolute path supplied by the renderer. */
-export const pathSchema = z.string().min(1).max(PATH_MAX_LENGTH);
+export const pathSchema = z.string().min(1).max(PATH_MAX_LENGTH).refine(isAbsoluteLocalPath);
 
 /**
  * A bounded image `data:` URL (the entire thumbnail payload), or null when no

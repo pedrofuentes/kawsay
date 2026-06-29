@@ -64,6 +64,7 @@ export interface FsLike {
   readFile(path: string): Promise<Buffer>;
   readDir(path: string): Promise<readonly string[]>;
   stat(path: string): Promise<FileStat>;
+  realpath?(path: string): Promise<string>;
   exists(path: string): Promise<boolean>;
   /**
    * Stream a file's bytes for memory-bounded parsing of huge exports — a Gmail
