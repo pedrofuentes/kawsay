@@ -454,7 +454,9 @@ async function readMarkerPrefix(path: string, deps: ImporterDeps): Promise<strin
 function looksLikeTelegramJson(prefix: string): boolean {
   const trimmed = prefix.trimStart();
   if (!trimmed.startsWith('{')) return false;
-  return /"messages"\s*:/.test(prefix) || /"chats"\s*:/.test(prefix);
+  const hasChatIdentity =
+    /"name"\s*:/.test(prefix) && /"type"\s*:/.test(prefix) && /"id"\s*:/.test(prefix);
+  return (/"messages"\s*:/.test(prefix) && hasChatIdentity) || /"chats"\s*:/.test(prefix);
 }
 
 function looksLikeTelegramHtml(prefix: string): boolean {
