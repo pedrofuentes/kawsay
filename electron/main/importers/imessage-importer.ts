@@ -198,7 +198,7 @@ function resolveAttachmentPath(
 ): { absPath: string; relativePath: string; fileName: string } | null {
   const raw = filename ?? transferName;
   if (raw === null) return null;
-  const normalized = raw.replaceAll('\\', '/');
+  const normalized = raw.replace(/\\/g, '/');
   const attachmentsMarker = '/Attachments/';
   const markerIndex = normalized.lastIndexOf(attachmentsMarker);
   const relative =
