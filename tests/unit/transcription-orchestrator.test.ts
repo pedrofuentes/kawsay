@@ -18,6 +18,7 @@ const ITEM_A = '11111111-1111-4111-8111-111111111111';
 const ITEM_B = '22222222-2222-4222-8222-222222222222';
 const ITEM_C = '33333333-3333-4333-8333-333333333333';
 const JOB_ID = 'job-0001';
+const ZERO_COUNTS = { total: 0, transcribed: 0, failed: 0, skipped: 0, inFlight: 0 };
 
 function transcript(text = 'hello there'): Transcript {
   return { text, language: 'en', segments: [{ startMs: 0, endMs: 1200, text }] };
@@ -233,7 +234,7 @@ describe('transcription orchestrator — enumerate + dispatch (AC-18)', () => {
 
   it('contains a worker.start throw, logs it, and leaves the run idle for retry (#170)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { orchestrator, worker } = harness({
+    const { orchestrator, worker, emitted } = harness({
       items: [{ id: ITEM_A, sourcePath: '/Users/alice/private/voice.m4a', durationSec: 10 }],
     });
     worker.port.start = () => {
@@ -243,7 +244,8 @@ describe('transcription orchestrator — enumerate + dispatch (AC-18)', () => {
     await expect(orchestrator.start()).rejects.toThrow('worker crashed');
 
     expect(orchestrator.status().state).toBe('idle');
-    expect(orchestrator.status().counts.inFlight).toBe(0);
+    expect(orchestrator.status().counts).toEqual(ZERO_COUNTS);
+    expect(emitted.at(-1)).toEqual({ state: 'idle', counts: ZERO_COUNTS, lastItem: null });
     expect(warn).toHaveBeenCalledWith(
       '[kawsay] transcription worker failed to start; run left idle for retry',
       expect.any(Error),

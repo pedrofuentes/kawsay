@@ -9,6 +9,7 @@ describe('media binary verifier nonfree guard (#181)', () => {
       'mac-arm64/ffmpeg',
       '/repo/resources/media/mac-arm64/ffmpeg',
       () => `ffmpeg version n7.1\nconfiguration: --disable-nonfree --enable-nonfree\n`,
+      () => 'fixture notices',
     );
 
     expect(failures).toEqual([
@@ -21,6 +22,7 @@ describe('media binary verifier nonfree guard (#181)', () => {
       'mac-x64/ffmpeg',
       '/repo/resources/media/mac-x64/ffmpeg',
       () => `ffmpeg version n7.1\nThis version of ffmpeg has nonfree parts compiled in.\n`,
+      () => 'fixture notices',
     );
 
     expect(failures).toEqual([
@@ -33,6 +35,7 @@ describe('media binary verifier nonfree guard (#181)', () => {
       'mac-x64/ffmpeg',
       '/repo/resources/media/mac-x64/ffmpeg',
       () => `ffmpeg version n7.1\nTherefore it is not legally redistributable.\n`,
+      () => 'fixture notices',
     );
 
     expect(failures).toEqual([
@@ -53,6 +56,19 @@ describe('media binary verifier nonfree guard (#181)', () => {
     ]);
   });
 
+  it('rejects GPL-enabled macOS source builds based on build configuration, not NOTICES phrasing', () => {
+    const failures = ffmpegLicenseFailures(
+      'mac-arm64/ffmpeg',
+      '/repo/resources/media/mac-arm64/ffmpeg',
+      () => `ffmpeg version n7.1\nconfiguration: --enable-gpl --disable-nonfree\n`,
+      () => `Kawsay ships a source-built ffmpeg binary with pinned configure flags.`,
+    );
+
+    expect(failures).toEqual([
+      'GPL-MISMATCH mac-arm64/ffmpeg: ffmpeg build configuration enables GPL while macOS ffmpeg must be LGPL-only (/repo/resources/media/mac-arm64/ffmpeg)',
+    ]);
+  });
+
   it('accepts a clean LGPL-only ffmpeg build that matches NOTICES (#184)', () => {
     const failures = ffmpegLicenseFailures(
       'mac-arm64/ffmpeg',
@@ -68,8 +84,11 @@ ffmpeg is free software; you can redistribute it and/or modify it under the term
     expect(failures).toEqual([]);
   });
 
-  it('keeps repository NOTICES aligned with the LGPL-only macOS ffmpeg guard', () => {
-    const notices = readFileSync(fileURLToPath(new URL('../../NOTICES.md', import.meta.url)), 'utf8');
+  it('keeps an isolated NOTICES fixture aligned with the LGPL-only macOS ffmpeg guard', () => {
+    const notices = readFileSync(
+      fileURLToPath(new URL('../fixtures/media/NOTICES.lgpl-only.md', import.meta.url)),
+      'utf8',
+    );
 
     expect(notices).toMatch(/Configure policy: LGPL-only \(`--disable-gpl`, `--disable-nonfree`/);
     expect(notices).toMatch(/build guard rejects `--enable-nonfree`/);

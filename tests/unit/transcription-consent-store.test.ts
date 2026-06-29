@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createConsentStore } from '../../electron/main/transcription/consent-store';
@@ -39,6 +39,36 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
     const store = createConsentStore({ filePath: flat });
     expect(() => store.isOptedIn()).not.toThrow();
     expect(store.isOptedIn()).toBe(false);
+  });
+
+  it('logs unreadable real filesystem errors without leaking the absolute consent path', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const blocker = join(dir, 'not-a-directory');
+    writeFileSync(blocker, 'file blocks child path');
+    const blockedPath = join(blocker, 'transcription-consent.json');
+
+    expect(createConsentStore({ filePath: blockedPath }).isOptedIn()).toBe(false);
+
+    const serializedLogs = JSON.stringify(warn.mock.calls);
+    expect(serializedLogs).toContain('ENOTDIR');
+    expect(serializedLogs).not.toContain(blockedPath);
+    expect(serializedLogs).not.toContain(dir);
+    warn.mockRestore();
+  });
+
+  it('logs malformed JSON diagnostics without passing a raw Error object', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const malformed = join(dir, 'malformed.json');
+    writeFileSync(malformed, '{ not valid json');
+
+    expect(createConsentStore({ filePath: malformed }).isOptedIn()).toBe(false);
+
+    expect(warn).toHaveBeenCalledWith(
+      '[kawsay] transcription consent was malformed; treating as opted-out',
+      expect.not.objectContaining({ stack: expect.any(String) }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(malformed);
+    warn.mockRestore();
   });
 
   it('does not throw when persisting fails — writes are best-effort (#160)', () => {
