@@ -10,6 +10,7 @@ import { takeoutImporter } from '../../electron/main/importers/takeout-importer'
 import { facebookImporter } from '../../electron/main/importers/facebook-importer';
 import { linkedinImporter } from '../../electron/main/importers/linkedin-importer';
 import { imessageImporter } from '../../electron/main/importers/imessage-importer';
+import { telegramImporter } from '../../electron/main/importers/telegram-importer';
 import type { ImporterDeps } from '../../electron/main/importers/types';
 import { buildZip } from '../helpers/zip';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
@@ -101,6 +102,7 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
       facebookImporter,
       linkedinImporter,
       imessageImporter,
+      telegramImporter,
       takeoutImporter,
       folderImporter,
     ]);
@@ -112,10 +114,24 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
       'facebook',
       'linkedin',
       'imessage',
+      'telegram',
       'google_takeout',
       'folder',
     ]);
     expect(importers[importers.length - 1]).toBe(folderImporter);
+  });
+
+  it('routes a Telegram Desktop export folder to the Telegram importer (not folder)', async () => {
+    const dir = '/imp/telegram-export';
+    const deps = fakeDeps({
+      dirs: [dir],
+      files: [join(dir, 'result.json')],
+      entries: { [dir]: ['result.json', 'photos'] },
+      zipMarkers: { [join(dir, 'result.json')]: '{"name":"Mamá","messages":[]}' },
+    });
+    const chosen = await selectImporter(dir, deps);
+    expect(chosen).toBe(telegramImporter);
+    expect(chosen).not.toBe(folderImporter);
   });
 
   it('routes a macOS Messages chat.db folder to the iMessage/SMS importer (not folder)', async () => {
@@ -227,24 +243,29 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
     const takeoutDir = '/d/Takeout';
     const facebookDir = '/d/facebook';
     const linkedinDir = '/d/linkedin';
+    const telegramDir = '/d/telegram';
     const deps = fakeDeps({
-      dirs: [whatsappDir, takeoutDir, facebookDir, linkedinDir],
+      dirs: [whatsappDir, takeoutDir, facebookDir, linkedinDir, telegramDir],
       files: [
         join(whatsappDir, '_chat.txt'),
         join(facebookDir, 'your_activity_across_facebook'),
         join(linkedinDir, 'Connections.csv'),
+        join(telegramDir, 'result.json'),
       ],
       entries: {
         [takeoutDir]: ['archive_browser.html'],
         [facebookDir]: ['your_activity_across_facebook'],
         [linkedinDir]: ['Connections.csv'],
+        [telegramDir]: ['result.json'],
       },
+      zipMarkers: { [join(telegramDir, 'result.json')]: '{"chats":[{"messages":[]}]}' },
     });
     expect(await selectImporter(whatsappDir, deps)).toBe(whatsappImporter);
     expect(await selectImporter(takeoutDir, deps)).toBe(takeoutImporter);
     expect(await selectImporter(facebookDir, deps)).toBe(facebookImporter);
     expect(await selectImporter(linkedinDir, deps)).toBe(linkedinImporter);
-    for (const dir of [whatsappDir, takeoutDir, facebookDir, linkedinDir]) {
+    expect(await selectImporter(telegramDir, deps)).toBe(telegramImporter);
+    for (const dir of [whatsappDir, takeoutDir, facebookDir, linkedinDir, telegramDir]) {
       expect(await selectImporter(dir, deps)).not.toBe(folderImporter);
     }
   });
