@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Windows IPC/navigation hardening is recorded in release notes** (#41): the prior Windows fix keeps the app trusting only the exact packaged renderer entry (or the dev server in development), so Windows path semantics no longer make IPC/navigation tests fail only on `windows-latest`.
 - **Folder imports now handle edge-case metadata and symlinked selected roots more clearly** (#52, #62): a symlink chosen as the import root can be accepted while recursive walking still refuses symlink entries, and corrupt EXIF/ffprobe metadata is surfaced as a non-fatal partial-metadata skip instead of disappearing silently.
 - **IPC contracts now reject relative renderer-supplied paths and pin null/undefined adversarial cases** (#88, #89), while Browse tests assert the native-picker title/default path passed over the bridge (#116).
+- Import and recovery UI follow-ups (#94, #96, #97, #98, #127, #128): early import progress is no longer
+  dropped, cancelling cannot hang on "Stopping…", dropped zip auto-detection reuses one large-archive scan, and
+  Browse/Timeline retry focus and placeholder-contrast polish are tightened.
 - Hardened content-addressed originals against corrupted existing blobs, catalog-transaction orphan files,
   orphan garbage collection, ffprobe local-path diagnostics, worker fault leaks, malformed progress-event
   drops, and media-probe/EXIF edge cases (#44, #58, #78, #80, #81, #83, #84, #90).

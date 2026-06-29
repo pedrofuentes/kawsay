@@ -158,6 +158,14 @@ export function Timeline(): ReactElement {
     setScrollTop(event.currentTarget.scrollTop);
   }, []);
 
+  const retryWithStableFocus = useCallback(
+    (retry: () => void): void => {
+      retry();
+      headingRef.current?.focus();
+    },
+    [headingRef],
+  );
+
   return (
     <div className="flex h-full flex-col gap-5">
       <header className="flex flex-col gap-1">
@@ -196,7 +204,7 @@ export function Timeline(): ReactElement {
         <ErrorBanner
           title="We couldn't open the timeline just now"
           message="Nothing is lost — your memories are safe on this computer. Let's try once more."
-          onRetry={reload}
+          onRetry={() => retryWithStableFocus(reload)}
         />
       );
     }
@@ -241,7 +249,7 @@ export function Timeline(): ReactElement {
           <ErrorBanner
             title="We couldn't load more memories just now"
             message="Nothing is lost — everything already here is safe on this computer. Let's try for more again."
-            onRetry={loadMore}
+            onRetry={() => retryWithStableFocus(loadMore)}
           />
         ) : null}
       </>

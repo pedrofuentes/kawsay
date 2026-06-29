@@ -951,7 +951,7 @@ mirroring how a non-technical user actually operates the UI — and the suite st
 - **No renderer tests** (manual checking only): violates the test-first mandate; rejected.
 
 **Consequences**
-- The renderer is now TDD-able (55 renderer specs landed with U3) and CI runs them in the same `pnpm test`.
+- The renderer is now TDD-able, with renderer specs running in CI through the same `pnpm test` entry point.
 - Three small, well-known test-only packages enter the lockfile; none reach production or the network.
 - U1/U2 inherit the harness and the `tests/renderer/support` helpers (a fake `window.kawsayAPI`, a render
   wrapper) and write their screens test-first with no further setup.
