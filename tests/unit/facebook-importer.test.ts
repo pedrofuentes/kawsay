@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drainImporter } from '../../electron/main/importers/drain';
@@ -18,6 +18,8 @@ import type {
   ImportResult,
   SkippedItem,
 } from '../../electron/main/importers/types';
+import { buildZip } from '../helpers/zip';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
 // The Facebook "Download Your Information" export ships as a zip of JSON files
 // where every non-ASCII string is mojibake — each UTF-8 byte escaped as its own
@@ -26,7 +28,10 @@ import type {
 // tests prove the importer recovers the true text (AC-16) rather than storing
 // garbled names/messages in a memorial archive.
 function fbFixture(rel: string): string {
-  return readFileSync(fileURLToPath(new URL(`../fixtures/facebook/${rel}`, import.meta.url)), 'utf8');
+  return readFileSync(
+    fileURLToPath(new URL(`../fixtures/facebook/${rel}`, import.meta.url)),
+    'utf8',
+  );
 }
 const POSTS_1 = fbFixture('posts/your_posts_1.json');
 const POSTS_2_BAD = fbFixture('posts/your_posts_2.json');
@@ -247,21 +252,24 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
     }
 
     it('accepts a zip whose central directory carries Facebook markers', async () => {
-      expect(
-        await facebookImporter.canHandle('/drop/fb.zip', zipWithBytes('posts/your_posts_1.json')),
-      ).toBe(true);
-      expect(
-        await facebookImporter.canHandle(
-          '/drop/fb.zip',
-          zipWithBytes('messages/inbox/thread/message_1.json'),
-        ),
-      ).toBe(true);
+      const dir = makeTmpDir('fb-can-handle-');
+      const archive = join(dir, 'fb.zip');
+      writeFileSync(archive, buildZip([{ name: 'messages/inbox/thread/message_1.json' }]));
+      const deps = zipWithBytes('unused');
+      deps.fs.readFile = async () => {
+        throw new Error('canHandle must not materialize zip bytes');
+      };
+      try {
+        expect(await facebookImporter.canHandle(archive, deps)).toBe(true);
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
     it('rejects a LinkedIn zip and an unrelated zip', async () => {
-      expect(await facebookImporter.canHandle('/drop/li.zip', zipWithBytes('Connections.csv'))).toBe(
-        false,
-      );
+      expect(
+        await facebookImporter.canHandle('/drop/li.zip', zipWithBytes('Connections.csv')),
+      ).toBe(false);
       expect(
         await facebookImporter.canHandle('/drop/x.zip', zipWithBytes('Takeout/index.html')),
       ).toBe(false);
@@ -276,6 +284,20 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
   });
 
   describe('full import over the export zip', () => {
+    it('yields early records before processing later malformed entries in the same file', async () => {
+      const content = JSON.stringify([{ data: [{ post: 'first' }], timestamp: 1 }, 'BADROW']);
+      const c = makeContext(makeZipDeps([{ entryPath: 'posts/your_posts_1.json', content }]).deps);
+      const iterator = facebookImporter.import(ZIP, c.ctx);
+
+      const first = await iterator.next();
+
+      expect(first.done).toBe(false);
+      if (first.done) throw new Error('expected first Facebook record');
+      expect(first.value.body).toBe('first');
+      expect(c.skips).toEqual([]);
+      await iterator.return?.({ recordCount: 1, skipped: [] });
+    });
+
     it('emits the expected record count and reports both malformed entries (AC-15)', async () => {
       const { records, result, skips } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
 

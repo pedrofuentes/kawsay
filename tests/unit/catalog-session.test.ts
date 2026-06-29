@@ -157,7 +157,10 @@ function seedTranscribedAudio(
 }
 
 /** Seed an audio item and leave it un-transcribed but with a chosen drain status. */
-function seedAudioWithStatus(catalogPath: string, status: 'pending' | 'failed' | 'skipped'): string {
+function seedAudioWithStatus(
+  catalogPath: string,
+  status: 'pending' | 'failed' | 'skipped',
+): string {
   const db = openCatalog(catalogPath);
   const repo = createCatalogRepo(db);
   const transcripts = createTranscriptRepo(db);
@@ -254,6 +257,35 @@ describe('createCatalogSession (the IPC application service)', () => {
     // newest-first: page 1 holds the two most recent, page 2 the oldest
     expect(page2.items[0]?.captureDate).toBe('2020-01-01T00:00:00.000Z');
     expect(dto.root).toBe(root);
+  });
+
+  it('bounds untrusted ItemCard title and description strings', () => {
+    session.createLibrary({ path: root });
+    const db = openCatalog(join(root, 'catalog.sqlite3'));
+    const repo = createCatalogRepo(db);
+    const sourceId = repo.registerSource({
+      sourceKey: 'seed-long',
+      type: 'facebook',
+      label: 'Seed',
+    });
+    repo.addOccurrence({
+      itemId: repo.insertItem({
+        mediaType: 'message',
+        contentHash: 'long-text',
+        title: 'T'.repeat(20_000),
+        description: 'D'.repeat(200_000),
+        searchMeta: 'needle',
+      }),
+      sourceId,
+      sourceRef: 'long/1',
+    });
+    db.close();
+
+    const [item] = session.search({ query: 'needle', limit: 10, offset: 0 }).items;
+
+    expect(itemCardSchema.safeParse(item).success).toBe(true);
+    expect(item?.title).toHaveLength(200);
+    expect(item?.description).toHaveLength(4096);
   });
 
   it('rejects a malformed timeline cursor', () => {
@@ -403,7 +435,10 @@ describe('createCatalogSession (the IPC application service)', () => {
 
   it('getTranscript returns a finished transcript: status done + words + detected language (#136)', async () => {
     session.createLibrary({ path: root });
-    const id = seedTranscribedAudio(join(root, 'catalog.sqlite3'), { language: 'es', text: 'Hola mundo.' });
+    const id = seedTranscribedAudio(join(root, 'catalog.sqlite3'), {
+      language: 'es',
+      text: 'Hola mundo.',
+    });
 
     const view = await session.getTranscript({ id });
 
