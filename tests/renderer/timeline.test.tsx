@@ -90,6 +90,32 @@ describe('Timeline — error state (plain language + retry)', () => {
     expect(await screen.findByText('Recovered memory')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  it('moves focus to the stable timeline heading before a retry button unmounts (#128)', async () => {
+    let resolveRecovered: (value: TimelinePageDTO) => void = () => undefined;
+    const recovered = new Promise<TimelinePageDTO>((resolve) => {
+      resolveRecovered = resolve;
+    });
+    const getTimeline = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'))
+      .mockReturnValueOnce(recovered);
+    const api = makeFakeApi({ getTimeline });
+    renderTimeline(api);
+
+    const alert = await screen.findByRole('alert');
+    const retry = within(alert).getByRole('button', { name: /try again/i });
+    retry.focus();
+    expect(retry).toHaveFocus();
+
+    await userEvent.click(retry);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveFocus();
+    await act(async () => {
+      resolveRecovered(page({ items: [makeItemCard({ title: 'Recovered memory' })] }));
+    });
+  });
 });
 
 describe('Timeline — grouped, reverse-chronological (AC-6)', () => {
@@ -280,8 +306,8 @@ describe('Timeline — opening a memory', () => {
 
 describe('Timeline — tolerates a missing bridge (browser preview)', () => {
   it('shows a calm not-connected message instead of crashing', () => {
-    const original = (window as { kawsayAPI?: unknown }).kawsayAPI;
-    delete (window as { kawsayAPI?: unknown }).kawsayAPI;
+    const original = window.kawsayAPI;
+    delete window.kawsayAPI;
     try {
       render(
         <KawsayApiProvider>
@@ -294,7 +320,7 @@ describe('Timeline — tolerates a missing bridge (browser preview)', () => {
       );
       expect(screen.getByText(/not connected/i)).toBeInTheDocument();
     } finally {
-      if (original !== undefined) (window as { kawsayAPI?: unknown }).kawsayAPI = original;
+      if (original !== undefined) window.kawsayAPI = original;
     }
   });
 });

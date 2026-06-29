@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
@@ -46,6 +46,80 @@ describe('useImport', () => {
     expect(result.current.total).toBe(200);
     expect(result.current.message).toBe('Reading messages…');
     expect(result.current.phase).toBe('parse');
+  });
+
+  it('replays progress that arrives before startImport resolves with the job id (#97)', async () => {
+    const startImport = vi.fn(async () => {
+      api.emitProgress(
+        makeProgressEvent({
+          phase: 'parse',
+          processed: 12,
+          total: 48,
+          message: 'Reading the archive…',
+        }),
+      );
+      return { jobId: FAKE_JOB_ID };
+    });
+    const api = makeFakeApi({ startImport });
+    const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });
+
+    await act(async () => {
+      await result.current.start({ sourceType: 'whatsapp', inputPath: '/c.zip' });
+    });
+
+    expect(result.current.status).toBe('running');
+    expect(result.current.jobId).toBe(FAKE_JOB_ID);
+    expect(result.current.processed).toBe(12);
+    expect(result.current.total).toBe(48);
+    expect(result.current.message).toBe('Reading the archive…');
+  });
+
+  it('replays early progress for each sequential import when both events arrive before their job ids (#97)', async () => {
+    const firstJobId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    const secondJobId = '3f2504e0-4f89-41d3-9a0c-0305e82c3302';
+    const startImport = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        api.emitProgress(
+          makeProgressEvent({
+            jobId: firstJobId,
+            processed: 12,
+            total: 48,
+            message: 'Reading the first archive…',
+          }),
+        );
+        return { jobId: firstJobId };
+      })
+      .mockImplementationOnce(async () => {
+        api.emitProgress(
+          makeProgressEvent({
+            jobId: secondJobId,
+            processed: 22,
+            total: 64,
+            message: 'Reading the second archive…',
+          }),
+        );
+        return { jobId: secondJobId };
+      });
+    const api = makeFakeApi({ startImport });
+    const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });
+
+    await act(async () => {
+      await result.current.start({ sourceType: 'whatsapp', inputPath: '/first.zip' });
+    });
+    expect(result.current.jobId).toBe(firstJobId);
+    expect(result.current.processed).toBe(12);
+    expect(result.current.message).toBe('Reading the first archive…');
+
+    await act(async () => {
+      await result.current.start({ sourceType: 'whatsapp', inputPath: '/second.zip' });
+    });
+
+    expect(result.current.status).toBe('running');
+    expect(result.current.jobId).toBe(secondJobId);
+    expect(result.current.processed).toBe(22);
+    expect(result.current.total).toBe(64);
+    expect(result.current.message).toBe('Reading the second archive…');
   });
 
   it('ignores progress events belonging to a different job', async () => {
@@ -123,6 +197,21 @@ describe('useImport', () => {
     });
 
     expect(api.cancelImport).toHaveBeenCalledWith({ jobId: FAKE_JOB_ID });
+  });
+
+  it('leaves the Stopping state when cancelImport rejects and no terminal event arrives (#96)', async () => {
+    const api = makeFakeApi({ cancelImport: vi.fn(() => Promise.reject(new Error('worker unavailable'))) });
+    const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });
+    await act(async () => {
+      await result.current.start({ sourceType: 'whatsapp', inputPath: '/c.zip' });
+    });
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.error).toMatch(/stop|cancel/i);
   });
 
   it('unsubscribes from the progress stream on unmount', async () => {
