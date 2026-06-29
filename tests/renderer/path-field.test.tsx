@@ -23,7 +23,10 @@ describe('PathField — Browse… native picker (W2, AC-12 usability)', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /browse/i }));
 
-    expect(api.openDirectory).toHaveBeenCalledTimes(1);
+    expect(api.openDirectory).toHaveBeenCalledWith({
+      title: 'Folder for memories',
+      defaultPath: undefined,
+    });
     expect(api.openFile).not.toHaveBeenCalled();
     expect(onChange).toHaveBeenCalledWith('/Users/elena/Memories');
   });
@@ -38,7 +41,10 @@ describe('PathField — Browse… native picker (W2, AC-12 usability)', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /browse/i }));
 
-    expect(api.openFile).toHaveBeenCalledTimes(1);
+    expect(api.openFile).toHaveBeenCalledWith({
+      title: 'WhatsApp file',
+      defaultPath: undefined,
+    });
     expect(api.openDirectory).not.toHaveBeenCalled();
     expect(onChange).toHaveBeenCalledWith('/exports/whatsapp.zip');
   });
@@ -53,8 +59,31 @@ describe('PathField — Browse… native picker (W2, AC-12 usability)', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /browse/i }));
 
-    expect(api.openDirectory).toHaveBeenCalledTimes(1);
+    expect(api.openDirectory).toHaveBeenCalledWith({ title: 'Folder', defaultPath: '/keep/me' });
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('uses browseTitle as the dialog title while defaulting to the current path', async () => {
+    const api = makeFakeApi({ openDirectory: vi.fn(() => Promise.resolve('/new/path')) });
+    const onChange = vi.fn();
+    renderWithApi(
+      <PathField
+        label="Folder"
+        value="/current/path"
+        onChange={onChange}
+        browseFor="directory"
+        browseTitle="Choose the memory folder"
+      />,
+      api,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /browse/i }));
+
+    expect(api.openDirectory).toHaveBeenCalledWith({
+      title: 'Choose the memory folder',
+      defaultPath: '/current/path',
+    });
+    expect(onChange).toHaveBeenCalledWith('/new/path');
   });
 
   it('keeps typing as a fallback — the text input still reports edits', async () => {

@@ -34,6 +34,15 @@ function resOk(channel: keyof typeof ipcContract, payload: unknown): boolean {
   return ipcContract[channel].response.safeParse(payload).success;
 }
 
+describe('ipcContract — adversarial empty payloads', () => {
+  for (const channel of Object.keys(ipcContract) as (keyof typeof ipcContract)[]) {
+    it(`rejects null and undefined requests for ${channel}`, () => {
+      expect(reqOk(channel, null)).toBe(false);
+      expect(reqOk(channel, undefined)).toBe(false);
+    });
+  }
+});
+
 const librarySummary = {
   root: '/Users/mateo/Mum',
   name: 'Mum',
@@ -324,7 +333,16 @@ describe('ipcContract — import:start / import:cancel', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'myspace', inputPath: '/x' })).toBe(false);
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '' })).toBe(false);
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'x'.repeat(4097) })).toBe(false);
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'relative/export' })).toBe(false);
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x', rogue: 1 })).toBe(false);
+  });
+  it('accepts Windows absolute paths as renderer-supplied paths', () => {
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'C:\\Users\\mateo\\Memories' })).toBe(
+      true,
+    );
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '\\\\server\\share\\Memories' })).toBe(
+      true,
+    );
   });
   it('cancel requires a uuid jobId and returns a cancelled flag', () => {
     expect(reqOk(IMPORT_CANCEL, { jobId: UUID })).toBe(true);
