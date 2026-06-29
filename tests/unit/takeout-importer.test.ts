@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Readable } from 'node:stream';
 import { join } from 'node:path';
 import { drainImporter } from '../../electron/main/importers/drain';
+import { ARCHIVE_ERROR_CODES, ArchiveError } from '../../electron/main/importers/safe-extract';
 import {
   findSidecarName,
   sanitizeSegment,
@@ -692,13 +693,16 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
     function zipDeps(entries: Record<string, string>): {
       deps: ImporterDeps;
       extractCalls: string[];
+      extractSignals: (AbortSignal | undefined)[];
       f: FakeFs;
     } {
       const f = buildFs({});
       const extractCalls: string[] = [];
+      const extractSignals: (AbortSignal | undefined)[] = [];
       const deps = makeDeps(f, {
-        extract: async (archivePath, destDir) => {
+        extract: async (archivePath, destDir, options) => {
           extractCalls.push(archivePath);
+          extractSignals.push(options?.signal);
           return Object.entries(entries).map(([entryPath, content]) => {
             const absPath = join(destDir, ...entryPath.split('/'));
             // Register the extracted bytes so the importer can stat/stream/read them.
@@ -709,7 +713,7 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
           });
         },
       });
-      return { deps, extractCalls, f };
+      return { deps, extractCalls, extractSignals, f };
     }
 
     it('streams a zip-extracted mbox via openReadStream — never a whole-file readFile (AC-11 regression)', async () => {
@@ -758,6 +762,32 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(result.recordCount).toBe(0);
       expect(result.skipped.some((s) => s.code === 'E_EXTRACT')).toBe(true);
       expect(skips.some((s) => s.code === 'E_EXTRACT')).toBe(true);
+    });
+
+    it('passes the import AbortSignal into archive extraction so mid-extraction cancellation stops writes', async () => {
+      const controller = new AbortController();
+      const f = buildFs({});
+      let observedSignal: AbortSignal | undefined;
+      const deps = makeDeps(f, {
+        extract: async (_archivePath, _destDir, options) => {
+          observedSignal = options?.signal;
+          controller.abort();
+          if (options?.signal?.aborted) {
+            throw new ArchiveError(ARCHIVE_ERROR_CODES.ABORTED, 'archive extraction aborted');
+          }
+          return [
+            { entryPath: 'Takeout/Google Photos/Large/big.jpg', absPath: join(WORK, 'big.jpg') },
+          ];
+        },
+      });
+
+      const { records, result, skips } = await run('/drop/takeout.zip', deps, controller.signal);
+
+      expect(observedSignal).toBe(controller.signal);
+      expect(records).toEqual([]);
+      expect(skips).toHaveLength(1);
+      expect(skips[0].reason).toContain(ARCHIVE_ERROR_CODES.ABORTED);
+      expect(result.skipped[0].reason).toContain(ARCHIVE_ERROR_CODES.ABORTED);
     });
   });
 

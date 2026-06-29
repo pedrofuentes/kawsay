@@ -90,6 +90,15 @@ describe('library lifecycle (ADR-0008 layout)', () => {
     expect(existsSync(join(realTarget, 'catalog.sqlite3'))).toBe(false);
   });
 
+  it('refuses to open a library through a renderer-supplied symlink root', () => {
+    const realTarget = join(base, 'real-library');
+    const linkRoot = join(base, 'chosen-library-link');
+    createLibrary({ root: realTarget, personName: 'Mum' });
+    symlinkSync(realTarget, linkRoot, 'dir');
+
+    expect(() => openLibrary({ root: linkRoot })).toThrow(/symlink/i);
+  });
+
   it('refuses to clobber an existing library', () => {
     const root = join(base, 'lib-c');
     createLibrary({ root });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deflateRawSync } from 'node:zlib';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -314,6 +314,53 @@ describe('safeExtract', () => {
         ARCHIVE_ERROR_CODES.ABORTED,
       );
       expect(existsSync(neverCreated)).toBe(false);
+    });
+
+    it('maps a mid-extraction pipeline abort to ERR_ARCHIVE_ABORTED and unlinks the partial file', async () => {
+      const archive = writeArchive('abort-mid-stream.zip', [
+        { name: 'partial.bin', data: Buffer.from('complete bytes') },
+      ]);
+      const controller = new AbortController();
+      const partialPath = join(dest, 'partial.bin');
+
+      vi.resetModules();
+      vi.doMock('node:stream/promises', () => ({
+        pipeline: async (
+          _readStream: unknown,
+          writeStream: NodeJS.WritableStream,
+          options: { signal?: AbortSignal } = {},
+        ) => {
+          await new Promise<void>((resolve, reject) => {
+            writeStream.once('open', () => resolve());
+            writeStream.once('error', reject);
+          });
+          writeStream.write(Buffer.from('partial bytes'));
+          await new Promise<void>((resolve) => writeStream.end(resolve));
+          expect(existsSync(partialPath)).toBe(true);
+          expect(options.signal).toBe(controller.signal);
+          controller.abort();
+          const err = new Error('The operation was aborted');
+          err.name = 'AbortError';
+          throw err;
+        },
+      }));
+
+      try {
+        const mocked = await import('../../electron/main/importers/safe-extract');
+        let thrown: unknown;
+        try {
+          await mocked.safeExtract(archive, dest, { signal: controller.signal });
+        } catch (err) {
+          thrown = err;
+        }
+
+        expect(thrown).toBeInstanceOf(mocked.ArchiveError);
+        expect((thrown as ArchiveError).code).toBe(ARCHIVE_ERROR_CODES.ABORTED);
+        expect(existsSync(partialPath)).toBe(false);
+      } finally {
+        vi.doUnmock('node:stream/promises');
+        vi.resetModules();
+      }
     });
   });
 
