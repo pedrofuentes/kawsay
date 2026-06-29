@@ -435,7 +435,7 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   around the single egress AC-4 now permits — ties to AC-17 / AC-22; sequenced after the model-asset **publication**
   pre-step in M2-1, harness edits HUMAN-REQUIRED.)*
 
-### M3 acceptance addendum (AC-25 — iMessage/SMS connector, **post-v1 / proposed**)
+### M3 acceptance addendum (AC-25 … AC-26 — source connectors, **post-v1 / proposed**)
 
 **AC-25 — iMessage/SMS `chat.db` import (content correctness).**
 - **Given** a local macOS Messages source folder containing a readable SQLite `chat.db` and sibling `Attachments/`
@@ -449,6 +449,17 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
   as skips (AC-15), and introduces no network egress (AC-4). Deeper SMS-vs-iMessage semantics remain deferred beyond
   preserving the row `service` value in provenance.
 - **Test kind:** unit + integration. *(No live Apple account/login and no cloud access.)*
+
+**AC-26 — Telegram Desktop export import (content correctness).**
+- **Given** a local Telegram Desktop "Export chat history" folder containing `result.json` (preferred) or a
+  `messages.html` fallback marker,
+- **When** the user imports it through the shared importer interface,
+- **Then** Kawsay uses a cheap folder/header marker check for detection, stream-parses `result.json` message arrays,
+  flattens rich Telegram text into bounded searchable message bodies, preserves sender, UTC message timestamps
+  (ISO or unix), stable source refs and provenance, links local photo/video/voice files through traversal-safe paths
+  for content-addressed originals, honors cancellation, reports malformed/missing media as skips (AC-15), and
+  introduces no network egress (AC-4). Full multi-account `chats/` nesting and service-message semantics are deferred.
+- **Test kind:** unit + integration. *(No live Telegram account/login and no cloud access.)*
 
 ### 4.1 AC traceability table (AC-id → feature → test kind)
 
@@ -479,6 +490,7 @@ local-only promise surfaced in copy ("Your memories never leave this computer") 
 | **AC-23** | M2 · ADR-0027 | NOTICES / attribution for bundled binary + **downloaded** model weights (provenance) | integration / packaging |
 | **AC-24** | M2 · ADR-0027 | Model-download integrity & resilience — SHA-256 verify-before-use **+ re-verify before each spawn**, atomic, resumable, corrupt→refetch, offline-safe; only egress = the **exact pinned-URL `GET`** (method + URL + empty body), origin **+ redirect/CDN host**, asserted at `webRequest` + OS firewall (not the Node spies) | integration + scoped AC-4 harness |
 | **AC-25** | M3 | iMessage/SMS `chat.db` connector — cheap Messages SQLite detection + message text/sender/Apple-epoch timestamps + linked photo/video/audio attachments + provenance; deeper service semantics deferred | unit + integration |
+| **AC-26** | M3 | Telegram Desktop export connector — cheap `result.json` / `messages.html` detection + streamed message text/sender/timestamps + linked photo/video/voice files + provenance; full multi-account `chats/` nesting and service messages deferred | unit + integration |
 
 > **AC-17 … AC-24 are M2 (post-v1), proposed, and HUMAN-REQUIRED** — they activate only on @pedrofuentes sign-off of
 > ADR-0027 and must keep AC-1 … AC-16 green (cumulative regression). AC-4's **user-data** zero-egress is **never

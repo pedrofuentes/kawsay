@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `message_attachment_join` rows to their messages, imports photo/video/audio originals through the
   content-addressed blob store, de-duplicates source references when the same message appears in
   multiple chats, and keeps detection cheap with a folder + SQLite-header marker check.
+- **Telegram import first slice (M3 · AC-26)**: Kawsay can now recognize Telegram Desktop export
+  folders via `result.json` (or `messages.html` fallback), stream messages through the importer
+  interface, flatten rich text, preserve sender/timestamps/provenance, and link photo/video/voice
+  files through traversal-safe local paths for the content-addressed blob store. Full multi-account
+  `chats/` nesting and service-message semantics are deferred follow-ups.
 
 ### Changed
 

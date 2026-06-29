@@ -9,6 +9,7 @@ export const SOURCE_TYPES = [
   'facebook',
   'linkedin',
   'imessage',
+  'telegram',
 ] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 

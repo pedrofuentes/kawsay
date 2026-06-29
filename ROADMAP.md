@@ -127,7 +127,9 @@ Messenger, Instagram, iMessage/SMS, Outlook/PST**, etc. (MISSION §4).
 library (mirrors AC-1/AC-2/AC-11), extracts **safely** (must satisfy AC-3, AC-10), and **preserves
 zero egress (AC-4)** and partial-import resilience (AC-15). One new AC per connector.
 First slice: **AC-25** adds a read-only macOS Messages `chat.db` iMessage/SMS connector for message
-text/sender/date provenance; attachment materialization and deeper SMS-vs-iMessage semantics are follow-ups.
+text/sender/date provenance plus linked attachments. Next slice: **AC-26** adds a Telegram Desktop
+`result.json` connector for messages plus photo/video/voice file refs; full multi-account `chats/`
+nesting and service-message semantics are follow-ups.
 **Authorization:** time-boxed per connector (export/file-based, reversible) — no new egress.
 
 ### M4 — AI categorization & smart search · **P2 · proposed**

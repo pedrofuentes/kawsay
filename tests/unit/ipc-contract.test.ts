@@ -333,6 +333,7 @@ describe('ipcContract — import:start / import:cancel', () => {
   it('accepts a known sourceType + inputPath and returns a jobId', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x' })).toBe(true);
     expect(reqOk(IMPORT_START, { sourceType: 'whatsapp', inputPath: '/x.zip' })).toBe(true);
+    expect(reqOk(IMPORT_START, { sourceType: 'telegram', inputPath: '/Telegram Export' })).toBe(true);
     expect(resOk(IMPORT_START, { jobId: UUID })).toBe(true);
     expect(resOk(IMPORT_START, { jobId: 'not-a-uuid' })).toBe(false);
   });
