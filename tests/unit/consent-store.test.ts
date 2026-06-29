@@ -49,11 +49,15 @@ describe('transcription consent store observability (#170)', () => {
 
   it('logs a path-free diagnostic when persisting consent fails', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const path = '/Users/alice/Library/Application Support/Kawsay/transcription-consent.json';
     const store = createConsentStore({
-      filePath: '/Users/alice/Library/Application Support/Kawsay/transcription-consent.json',
+      filePath: path,
       fs: fsDouble({
         writeFileSync: () => {
-          throw new Error('disk full');
+          const error = new Error(`EACCES: permission denied, open '${path}'`) as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          error.path = path;
+          throw error;
         },
       }),
     });
@@ -61,9 +65,9 @@ describe('transcription consent store observability (#170)', () => {
     expect(() => store.setOptedIn(true)).not.toThrow();
     expect(warn).toHaveBeenCalledWith(
       '[kawsay] could not persist transcription consent; future launches may remain opted-out',
-      expect.any(Error),
+      { code: 'EACCES', name: 'Error' },
     );
-    expect(JSON.stringify(warn.mock.calls)).not.toContain('/Users/alice');
+    expect(warn.mock.calls.flat().map(String).join('\n')).not.toContain('/Users/alice');
     warn.mockRestore();
   });
 });
