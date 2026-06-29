@@ -420,7 +420,7 @@ export interface ImportResult { recordCount: number; skipped: SkippedItem[]; }
 | `google_takeout` | `.zip`(s) | `mbox-parser` (streaming split) → `postal-mime` (per message) + sidecar `.json` + `exifr` | copied once, content-addressed | AC-11, AC-15 |
 | `facebook` | `.zip` | JSON traversal + mojibake fix (`Buffer.from(s,'latin1').toString('utf8')`) | copied once, content-addressed | AC-16, AC-3, AC-10, AC-15 |
 | `linkedin` | `.zip` | `papaparse` (trim headers; multiline cells) | copied once, content-addressed (rarely any media) | AC-16, AC-15 |
-| `imessage` | macOS Messages folder (`chat.db` + `Attachments/`) | `better-sqlite3` opened read-only; iterate `message`/`handle`/`chat` rows; Apple epoch → UTC | pure messages in first slice (`none`); attachment originals deferred | AC-25, AC-4, AC-15 |
+| `imessage` | macOS Messages folder (`chat.db` + `Attachments/`) | cheap SQLite header check, then `better-sqlite3` opened read-only; iterate `message`/`handle`/`chat` plus `attachment`/`message_attachment_join`; Apple epoch → UTC | messages (`none`) plus linked photo/video/audio attachments copied once, content-addressed | AC-25, AC-4, AC-15 |
 
 ### 3.4 Plugging in a new connector
 
