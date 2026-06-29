@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { createLibrary, openLibrary } from '../../electron/main/library/library-service';
 import { openCatalog } from '../../electron/main/db/connection';
@@ -77,6 +77,17 @@ describe('library lifecycle (ADR-0008 layout)', () => {
     expect(isAbsolute('relative/lib')).toBe(false);
     expect(() => createLibrary({ root: 'relative/lib' })).toThrow();
     expect(() => openLibrary({ root: 'relative/lib' })).toThrow();
+  });
+
+  it('refuses to create a library through a renderer-supplied symlink root', () => {
+    const realTarget = join(base, 'outside-target');
+    const linkRoot = join(base, 'chosen-library-link');
+    mkdirSync(realTarget);
+    symlinkSync(realTarget, linkRoot, 'dir');
+
+    expect(() => createLibrary({ root: linkRoot, personName: 'Mum' })).toThrow(/symlink/i);
+    expect(existsSync(join(realTarget, 'library.json'))).toBe(false);
+    expect(existsSync(join(realTarget, 'catalog.sqlite3'))).toBe(false);
   });
 
   it('refuses to clobber an existing library', () => {

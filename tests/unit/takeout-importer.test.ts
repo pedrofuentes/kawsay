@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { Readable } from 'node:stream';
 import { join } from 'node:path';
 import { drainImporter } from '../../electron/main/importers/drain';
-import { findSidecarName, takeoutImporter } from '../../electron/main/importers/takeout-importer';
+import {
+  findSidecarName,
+  sanitizeSegment,
+  takeoutImporter,
+} from '../../electron/main/importers/takeout-importer';
 import type {
   CatalogRecord,
   ExifData,
@@ -40,7 +44,12 @@ interface FsOptions {
 
 function fileStat(spec: FileSpec): FileStat {
   const content = spec.content;
-  const size = content === undefined ? 0 : Buffer.isBuffer(content) ? content.length : Buffer.byteLength(content);
+  const size =
+    content === undefined
+      ? 0
+      : Buffer.isBuffer(content)
+        ? content.length
+        : Buffer.byteLength(content);
   return {
     size,
     mtimeMs: spec.mtimeMs ?? 0,
@@ -412,7 +421,9 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(email?.body).toContain('From the desk of Bob');
       expect(email?.body).not.toContain('>From the desk of Bob');
       // Exactly one email carries this body — the escaped line did not split it.
-      expect(records.filter((r) => (r.body ?? '').includes('From the desk of Bob'))).toHaveLength(1);
+      expect(records.filter((r) => (r.body ?? '').includes('From the desk of Bob'))).toHaveLength(
+        1,
+      );
     });
 
     it('emits an attachment as a media record, materialized into scratch for hashing', async () => {
@@ -514,7 +525,9 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(skips.some((s) => s.code === 'E_READ_MBOX')).toBe(true);
       expect(result.skipped.some((s) => s.code === 'E_READ_MBOX')).toBe(true);
       // Partial preserved: the healthy mailbox's emails AND the photo survived.
-      const subjects = records.filter((r) => r.mediaType === 'message').map((r) => r.sourceMeta.subject);
+      const subjects = records
+        .filter((r) => r.mediaType === 'message')
+        .map((r) => r.sourceMeta.subject);
       expect(subjects).toContain('Hello there');
       expect(subjects).toContain('Quote');
       expect(records.some((r) => r.sourceRef.endsWith('keep.jpg'))).toBe(true);
@@ -599,7 +612,10 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
         'Google Photos/Bad/photo4.jpg.json': { content: '{ not valid json ,,,' },
       });
       const exif: ExifData = { takenAt: new Date(utc(2016, 0, 2, 0, 0, 0)) };
-      const { byRef, skips } = await run(ROOT, makeDeps(f, { exif: { byPath: { [photoPath]: exif } } }));
+      const { byRef, skips } = await run(
+        ROOT,
+        makeDeps(f, { exif: { byPath: { [photoPath]: exif } } }),
+      );
       const photo = byRef.get('Google Photos/Bad/photo4.jpg');
 
       expect(photo).toBeDefined(); // NOT dropped
@@ -629,9 +645,7 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
         },
       });
       const { byRef } = await run(ROOT, makeDeps(f));
-      const photo = byRef.get(
-        'Google Photos/Long/averyveryverylongphotonamethatgetstruncated.jpg',
-      );
+      const photo = byRef.get('Google Photos/Long/averyveryverylongphotonamethatgetstruncated.jpg');
 
       expect(photo?.date?.source).toBe('sidecar');
       expect(photo?.date?.value.getTime()).toBe(1614556800 * 1000);
@@ -647,7 +661,10 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
         },
       });
       const exif: ExifData = { takenAt: new Date(utc(2015, 5, 6, 7, 8, 9)) };
-      const { byRef, skips } = await run(ROOT, makeDeps(f, { exif: { byPath: { [photoPath]: exif } } }));
+      const { byRef, skips } = await run(
+        ROOT,
+        makeDeps(f, { exif: { byPath: { [photoPath]: exif } } }),
+      );
       const photo = byRef.get('Google Photos/None/random.jpg');
 
       expect(photo).toBeDefined();
@@ -685,10 +702,9 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
           return Object.entries(entries).map(([entryPath, content]) => {
             const absPath = join(destDir, ...entryPath.split('/'));
             // Register the extracted bytes so the importer can stat/stream/read them.
-            void (f.fs as unknown as { writeFile: (p: string, d: Buffer) => Promise<void> }).writeFile(
-              absPath,
-              Buffer.from(content, 'utf8'),
-            );
+            void (
+              f.fs as unknown as { writeFile: (p: string, d: Buffer) => Promise<void> }
+            ).writeFile(absPath, Buffer.from(content, 'utf8'));
             return { entryPath, absPath };
           });
         },
@@ -834,6 +850,14 @@ describe('findSidecarName (reuses the per-directory JSON Map — O(n²) sidecar-
     // A direct hit is an O(1) Map.has — it must NOT spread/scan every key per file.
     expect(jsons.hasCalls).toBeGreaterThanOrEqual(1);
     expect(jsons.keysCalls).toBe(0);
+  });
+
+  describe('sanitizeSegment (scratch path hardening)', () => {
+    it('normalizes dot-dot segments so attachment scratch paths cannot climb one level', () => {
+      expect(sanitizeSegment('..')).toBe('unnamed');
+      expect(sanitizeSegment('../..')).not.toContain('..');
+      expect(sanitizeSegment('family photos')).toBe('family_photos');
+    });
   });
 
   it('matches the name(1).jpg ↔ name.jpg(1).json duplicate-counter quirk through Map.has', () => {

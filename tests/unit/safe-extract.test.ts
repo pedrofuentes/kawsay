@@ -43,6 +43,10 @@ interface ZipEntrySpec {
   data?: Buffer;
   /** 0 = store, 8 = deflate. */
   method?: 0 | 8;
+  /** Central-directory uncompressed size override for adversarial fixtures. */
+  declaredUncompressedSize?: number;
+  /** Raw compressed bytes override for corrupt mid-stream fixtures. */
+  compressedOverride?: Buffer;
   /** Full 32-bit external file attributes (high 16 bits carry the Unix mode). */
   externalAttrs?: number;
 }
@@ -56,7 +60,7 @@ function buildZip(entries: readonly ZipEntrySpec[]): Buffer {
     const nameBuf = Buffer.from(spec.name, 'binary');
     const method = spec.method ?? 0;
     const raw = spec.data ?? Buffer.alloc(0);
-    const compressed = method === 8 ? deflateRawSync(raw) : raw;
+    const compressed = spec.compressedOverride ?? (method === 8 ? deflateRawSync(raw) : raw);
     const crc = crc32(raw);
     const flags = 0x800; // UTF-8 filename flag
 
@@ -85,7 +89,7 @@ function buildZip(entries: readonly ZipEntrySpec[]): Buffer {
     central.writeUInt16LE(0x21, 14);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(compressed.length, 20);
-    central.writeUInt32LE(raw.length, 24);
+    central.writeUInt32LE(spec.declaredUncompressedSize ?? raw.length, 24);
     central.writeUInt16LE(nameBuf.length, 28);
     central.writeUInt16LE(0, 30);
     central.writeUInt16LE(0, 32);
@@ -192,6 +196,18 @@ describe('safeExtract', () => {
       expect(readdirSync(dest)).toEqual([]);
     });
 
+    it('rejects a normalized .. segment that would otherwise stay inside the scratch root', async () => {
+      const archive = writeArchive('scratch-slip.zip', [
+        { name: 'Takeout/../escape-inside-workdir.txt', data: Buffer.from('pwned') },
+      ]);
+      const err = await expectArchiveError(
+        safeExtract(archive, dest),
+        ARCHIVE_ERROR_CODES.UNSAFE_PATH,
+      );
+      expect(err.message).toContain('..');
+      expect(existsSync(join(dest, 'escape-inside-workdir.txt'))).toBe(false);
+    });
+
     it('rejects an absolute-path entry', async () => {
       const archive = writeArchive('abs.zip', [
         { name: '/etc/kawsay-evil.txt', data: Buffer.from('x') },
@@ -271,6 +287,34 @@ describe('safeExtract', () => {
       await expectArchiveError(safeExtract(archive, dest), ARCHIVE_ERROR_CODES.BOMB);
       expect(existsSync(join(dest, 'bomb.bin'))).toBe(false);
     });
+
+    it('maps a declared-vs-actual size mismatch to ERR_ARCHIVE_BOMB and unlinks the partial file', async () => {
+      const archive = writeArchive('size-mismatch.zip', [
+        {
+          name: 'partial.bin',
+          data: Buffer.from('short'),
+          declaredUncompressedSize: 100,
+        },
+      ]);
+
+      await expectArchiveError(safeExtract(archive, dest), ARCHIVE_ERROR_CODES.BOMB);
+      expect(existsSync(join(dest, 'partial.bin'))).toBe(false);
+    });
+  });
+
+  describe('AbortSignal support', () => {
+    it('honors a pre-aborted signal before opening or creating the destination', async () => {
+      const archive = writeArchive('aborted.zip', [{ name: 'never.txt', data: Buffer.from('x') }]);
+      const neverCreated = join(base, 'never-created');
+      const controller = new AbortController();
+      controller.abort();
+
+      await expectArchiveError(
+        safeExtract(archive, neverCreated, { signal: controller.signal }),
+        ARCHIVE_ERROR_CODES.ABORTED,
+      );
+      expect(existsSync(neverCreated)).toBe(false);
+    });
   });
 
   // ── Corrupt / non-zip input ───────────────────────────────────────────────
@@ -279,6 +323,23 @@ describe('safeExtract', () => {
       const archive = join(base, 'corrupt.zip');
       writeFileSync(archive, Buffer.from('this is definitely not a zip archive'));
       await expectArchiveError(safeExtract(archive, dest), ARCHIVE_ERROR_CODES.CORRUPT);
+    });
+
+    it('unlinks a partial file when a stream fails after extraction has begun', async () => {
+      const archive = writeArchive('bad-stream.zip', [
+        {
+          name: 'partial.txt',
+          data: Buffer.from('hello world'),
+          method: 8,
+          compressedOverride: Buffer.concat([
+            deflateRawSync(Buffer.from('hello world')).subarray(0, 4),
+            Buffer.from([0xff, 0xff, 0xff, 0xff]),
+          ]),
+        },
+      ]);
+
+      await expectArchiveError(safeExtract(archive, dest), ARCHIVE_ERROR_CODES.CORRUPT);
+      expect(existsSync(join(dest, 'partial.txt'))).toBe(false);
     });
 
     it('rejects a missing archive file', async () => {
@@ -306,7 +367,21 @@ describe('safeExtract', () => {
         BOMB: 'ERR_ARCHIVE_BOMB',
         SYMLINK: 'ERR_ARCHIVE_SYMLINK',
         CORRUPT: 'ERR_ARCHIVE_CORRUPT',
+        ABORTED: 'ERR_ARCHIVE_ABORTED',
       });
+    });
+
+    it('strips C0/C1 control characters from entry names in error details', async () => {
+      const archive = writeArchive('control-detail.zip', [
+        { name: 'bad\u001b\u0085name/../evil.txt', data: Buffer.from('x') },
+      ]);
+
+      const err = await expectArchiveError(
+        safeExtract(archive, dest),
+        ARCHIVE_ERROR_CODES.UNSAFE_PATH,
+      );
+
+      expect(err.message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
     });
   });
 });
