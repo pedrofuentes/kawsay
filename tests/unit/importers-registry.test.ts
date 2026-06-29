@@ -127,7 +127,9 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
       dirs: [dir],
       files: [join(dir, 'result.json')],
       entries: { [dir]: ['result.json', 'photos'] },
-      zipMarkers: { [join(dir, 'result.json')]: '{"name":"Mamá","messages":[]}' },
+      zipMarkers: {
+        [join(dir, 'result.json')]: '{"name":"Mamá","type":"personal_chat","id":42,"messages":[]}',
+      },
     });
     const chosen = await selectImporter(dir, deps);
     expect(chosen).toBe(telegramImporter);
