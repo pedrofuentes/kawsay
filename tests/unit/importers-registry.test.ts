@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { importers, selectImporter } from '../../electron/main/importers/registry';
 import { folderImporter } from '../../electron/main/importers/folder-importer';
@@ -7,6 +8,8 @@ import { takeoutImporter } from '../../electron/main/importers/takeout-importer'
 import { facebookImporter } from '../../electron/main/importers/facebook-importer';
 import { linkedinImporter } from '../../electron/main/importers/linkedin-importer';
 import type { ImporterDeps } from '../../electron/main/importers/types';
+import { buildZip } from '../helpers/zip';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
 interface FakeFsOptions {
   /** Paths whose `stat().isDirectory()` reports a directory. */
@@ -89,8 +92,14 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
   });
 
   it('routes a WhatsApp export .zip carrying _chat.txt to the WhatsApp importer', async () => {
-    const deps = fakeDeps({ zipMarkers: { '/dl/WhatsApp Chat - Mum.zip': 'PK\u0003\u0004_chat.txt' } });
-    expect(await selectImporter('/dl/WhatsApp Chat - Mum.zip', deps)).toBe(whatsappImporter);
+    const dir = makeTmpDir('registry-wa-');
+    const zip = join(dir, 'WhatsApp Chat - Mum.zip');
+    writeFileSync(zip, buildZip([{ name: '_chat.txt' }]));
+    try {
+      expect(await selectImporter(zip, fakeDeps())).toBe(whatsappImporter);
+    } finally {
+      removeTmpDir(dir);
+    }
   });
 
   it('routes a Google Takeout export folder to the Takeout importer (not folder)', async () => {
@@ -105,9 +114,14 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
   });
 
   it('routes a Google Takeout .zip to the Takeout importer', async () => {
-    const zip = '/imp/takeout-20240101.zip';
-    const deps = fakeDeps({ zipMarkers: { [zip]: 'PK\u0003\u0004Takeout/archive_browser.html' } });
-    expect(await selectImporter(zip, deps)).toBe(takeoutImporter);
+    const dir = makeTmpDir('registry-takeout-');
+    const zip = join(dir, 'takeout-20240101.zip');
+    writeFileSync(zip, buildZip([{ name: 'Takeout/archive_browser.html' }]));
+    try {
+      expect(await selectImporter(zip, fakeDeps())).toBe(takeoutImporter);
+    } finally {
+      removeTmpDir(dir);
+    }
   });
 
   it('routes a Facebook DYI export folder to the Facebook importer (not folder)', async () => {
@@ -135,9 +149,14 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
   });
 
   it('routes a LinkedIn export .zip of CSVs to the LinkedIn importer', async () => {
-    const zip = '/imp/Basic_LinkedInDataExport.zip';
-    const deps = fakeDeps({ zipMarkers: { [zip]: 'PK\u0003\u0004Connections.csv messages.csv' } });
-    expect(await selectImporter(zip, deps)).toBe(linkedinImporter);
+    const dir = makeTmpDir('registry-linkedin-');
+    const zip = join(dir, 'Basic_LinkedInDataExport.zip');
+    writeFileSync(zip, buildZip([{ name: 'Connections.csv' }, { name: 'messages.csv' }]));
+    try {
+      expect(await selectImporter(zip, fakeDeps())).toBe(linkedinImporter);
+    } finally {
+      removeTmpDir(dir);
+    }
   });
 
   it('falls back to the folder importer for a plain photo folder (no connector markers)', async () => {

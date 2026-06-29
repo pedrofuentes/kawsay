@@ -47,6 +47,9 @@ import { importers } from '../importers/registry';
 import type { IngestionCoordinator } from '../importers/ingestion/coordinator';
 import type { IngestionJobSpec } from '../importers/ingestion/protocol';
 
+const ITEM_CARD_TITLE_MAX_LENGTH = 200;
+const ITEM_CARD_DESCRIPTION_MAX_LENGTH = 4096;
+
 /** A domain error the IPC layer surfaces to the renderer as a rejected invoke. */
 export class CatalogSessionError extends Error {
   constructor(message: string) {
@@ -150,14 +153,16 @@ function decodeCursor(raw: string): TimelineCursor {
 /** Project an internal catalog row onto the renderer-safe tile — dropping every
  *  filesystem / content-addressing field. */
 function toItemCard(row: ItemRow): ItemCardDTO {
+  const boundString = (value: string | null, max: number): string | null =>
+    value === null ? null : value.slice(0, max);
   return itemCardSchema.parse({
     id: row.id,
     mediaType: row.mediaType,
     mimeType: row.mimeType,
     captureDate: row.captureDate,
     durationSec: row.durationSec,
-    title: row.title,
-    description: row.description,
+    title: boundString(row.title, ITEM_CARD_TITLE_MAX_LENGTH),
+    description: boundString(row.description, ITEM_CARD_DESCRIPTION_MAX_LENGTH),
     isFavourite: row.isFavourite,
     width: row.width,
     height: row.height,
@@ -280,13 +285,23 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
           input.id,
           error,
         );
-        return transcriptViewSchema.parse({ status: 'pending', language: null, text: null, segments: [] });
+        return transcriptViewSchema.parse({
+          status: 'pending',
+          language: null,
+          text: null,
+          segments: [],
+        });
       }
       if (record === null) {
         console.warn(
           `[kawsay] item ${input.id} is marked done but has no transcript row; showing a non-done view`,
         );
-        return transcriptViewSchema.parse({ status: 'pending', language: null, text: null, segments: [] });
+        return transcriptViewSchema.parse({
+          status: 'pending',
+          language: null,
+          text: null,
+          segments: [],
+        });
       }
       return transcriptViewSchema.parse({
         status,

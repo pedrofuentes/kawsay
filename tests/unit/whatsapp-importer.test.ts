@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { drainImporter } from '../../electron/main/importers/drain';
 import { whatsappImporter } from '../../electron/main/importers/whatsapp-importer';
+import { buildZip } from '../helpers/zip';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 import type {
   CatalogRecord,
   FileStat,
@@ -185,20 +188,34 @@ describe('whatsappImporter (card C3 — WhatsApp "Export Chat" importer, AC-1)',
   });
 
   describe('canHandle', () => {
-    it('accepts a .zip whose bytes carry the _chat.txt marker', async () => {
+    it('accepts a .zip by scanning entry names without reading the whole archive', async () => {
+      const dir = makeTmpDir('wa-can-handle-');
+      const archive = join(dir, 'WhatsApp Chat - Family.zip');
+      writeFileSync(archive, buildZip([{ name: '_chat.txt', data: Buffer.from('hi') }]));
       const deps = makeZipDeps([]).deps;
-      // The zip central directory stores entry names verbatim — the marker check
-      // reads the dropped file's bytes (no extraction needed).
-      (deps.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async () =>
-        Buffer.from('PK\u0003\u0004........_chat.txt........IMG_1.jpg');
-      expect(await whatsappImporter.canHandle('/drop/WhatsApp Chat - Family.zip', deps)).toBe(true);
+      (deps.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async () => {
+        throw new Error('canHandle must not materialize zip bytes');
+      };
+      try {
+        expect(await whatsappImporter.canHandle(archive, deps)).toBe(true);
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
-    it('rejects a .zip without the _chat.txt marker', async () => {
+    it('rejects a .zip without the _chat.txt marker without whole-archive reads', async () => {
+      const dir = makeTmpDir('wa-can-handle-');
+      const archive = join(dir, 'Takeout.zip');
+      writeFileSync(archive, buildZip([{ name: 'Takeout/index.html', data: Buffer.from('x') }]));
       const deps = makeZipDeps([]).deps;
-      (deps.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async () =>
-        Buffer.from('PK\u0003\u0004 some other archive Takeout/index.html');
-      expect(await whatsappImporter.canHandle('/drop/Takeout.zip', deps)).toBe(false);
+      (deps.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async () => {
+        throw new Error('canHandle must not materialize zip bytes');
+      };
+      try {
+        expect(await whatsappImporter.canHandle(archive, deps)).toBe(false);
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
     it('accepts a folder that contains _chat.txt and rejects one that does not', async () => {
@@ -245,6 +262,35 @@ describe('whatsappImporter (card C3 — WhatsApp "Export Chat" importer, AC-1)',
       expect(result.skipped[0]?.ref).toBe('MISSING_9999.jpg');
       expect(result.skipped[0]?.code).toBe('E_MISSING_ATTACHMENT');
       expect(skips.map((s) => s.ref)).toEqual(['MISSING_9999.jpg']);
+    });
+
+    it('streams _chat.txt through openReadStream instead of readFile', async () => {
+      const deps = makeZipDeps([{ entryPath: '_chat.txt', content: IOS_CHAT }]).deps;
+      const contentByPath = new Map<string, string>();
+      deps.extractArchive = async (_archivePath, destDir) => {
+        const absPath = join(destDir, '_chat.txt');
+        contentByPath.set(absPath, IOS_CHAT);
+        return [{ entryPath: '_chat.txt', absPath }];
+      };
+      deps.fs.readFile = async () => {
+        throw new Error('chat log must be streamed');
+      };
+      deps.fs.openReadStream = (path) =>
+        Readable.from([Buffer.from(contentByPath.get(path) ?? '')]);
+
+      const { records } = await run(ZIP, deps);
+
+      expect(records.length).toBeGreaterThan(0);
+    });
+
+    it('nulls impossible calendar dates instead of normalizing them', async () => {
+      const chat = '[31/02/2024, 10:00:00] Ana: impossible date\n';
+      const { byRef } = await run(
+        ZIP,
+        makeZipDeps([{ entryPath: '_chat.txt', content: chat }]).deps,
+      );
+
+      expect(byRef.get('msg:0')?.date).toBeNull();
     });
 
     it('maps sender, message timestamp (source: message) and body for a text message', async () => {

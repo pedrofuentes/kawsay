@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { join } from 'node:path';
 import { drainImporter } from '../../electron/main/importers/drain';
@@ -20,6 +21,8 @@ import type {
   MediaInfo,
   SkippedItem,
 } from '../../electron/main/importers/types';
+import { buildZip } from '../helpers/zip';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
 // A fixed, platform-portable root — every fixture path and assertion is built
 // with node:path join against it, so the suite is identical on POSIX and Windows
@@ -341,14 +344,30 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(await takeoutImporter.canHandle(abs('All mail.mbox'), makeDeps(f))).toBe(true);
     });
 
-    it('accepts a .zip whose bytes carry a Takeout marker, rejects one that does not', async () => {
+    it('accepts a .zip whose entry names carry a Takeout marker without whole-archive reads', async () => {
+      const dir = makeTmpDir('takeout-can-handle-');
+      const archive = join(dir, 'takeout.zip');
+      writeFileSync(archive, buildZip([{ name: 'Takeout/Mail/All.mbox' }]));
       const f = buildFs({});
-      (f.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async (p) =>
-        p.endsWith('takeout.zip')
-          ? Buffer.from('PK\u0003\u0004....Takeout/archive_browser.html....Takeout/Mail/All.mbox')
-          : Buffer.from('PK\u0003\u0004....some/other/archive.txt');
-      expect(await takeoutImporter.canHandle('/drop/takeout.zip', makeDeps(f))).toBe(true);
-      expect(await takeoutImporter.canHandle('/drop/other.zip', makeDeps(f))).toBe(false);
+      f.fs.readFile = async () => {
+        throw new Error('canHandle must not materialize zip bytes');
+      };
+      try {
+        expect(await takeoutImporter.canHandle(archive, makeDeps(f))).toBe(true);
+      } finally {
+        removeTmpDir(dir);
+      }
+    });
+
+    it('rejects a present .zip whose entry names carry no Takeout markers', async () => {
+      const dir = makeTmpDir('takeout-negative-can-handle-');
+      const archive = join(dir, 'plain.zip');
+      writeFileSync(archive, buildZip([{ name: 'exports/plain/data.json' }]));
+      try {
+        expect(await takeoutImporter.canHandle(archive, makeDeps(buildFs({})))).toBe(false);
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
     it('accepts a Takeout directory (Mail/ + Google Photos/) and rejects a plain folder', async () => {
@@ -395,6 +414,25 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       expect(f.streamReads).toContain(abs('Mail/All mail.mbox'));
       // The garbage block was skipped, the run continued, nothing else dropped.
       expect(skips.some((s) => s.code === 'E_PARSE_MSG')).toBe(true);
+    });
+
+    it('skips a giant no-separator mbox message instead of accumulating it unbounded', async () => {
+      const f = buildFs({
+        'Mail/All mail.mbox': {
+          content: `Subject: adversarial\r\n\r\n${'x'.repeat(5 * 1024 * 1024)}`,
+        },
+      });
+
+      const { records, result, skips } = await run(ROOT, makeDeps(f));
+
+      expect(records).toHaveLength(0);
+      expect(result.recordCount).toBe(0);
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          ref: 'Mail/All mail.mbox#0',
+          code: 'E_MBOX_MESSAGE_TOO_LARGE',
+        }),
+      );
     });
 
     it('maps sender, header date (source: message) and subject+body text for an email', async () => {

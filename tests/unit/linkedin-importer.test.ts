@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drainImporter } from '../../electron/main/importers/drain';
@@ -14,6 +14,8 @@ import type {
   ImportResult,
   SkippedItem,
 } from '../../electron/main/importers/types';
+import { buildZip } from '../helpers/zip';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
 // LinkedIn exports ship as a zip of CSV files. Real ones are messy: quoted
 // fields with embedded commas and newlines, a UTF-8 BOM, a free-text "Notes:"
@@ -21,7 +23,10 @@ import type {
 // UTF-8 (NOT the Facebook mojibake). These fixtures capture that shape so the
 // importer is proven to recover faithful rows (AC-16) and never drop a memory.
 function liFixture(rel: string): string {
-  return readFileSync(fileURLToPath(new URL(`../fixtures/linkedin/${rel}`, import.meta.url)), 'utf8');
+  return readFileSync(
+    fileURLToPath(new URL(`../fixtures/linkedin/${rel}`, import.meta.url)),
+    'utf8',
+  );
 }
 const MESSAGES = liFixture('messages.csv');
 const CONNECTIONS = liFixture('Connections.csv');
@@ -181,29 +186,35 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
   });
 
   describe('canHandle discriminates LinkedIn from Facebook and unknown', () => {
-    function zipWithBytes(marker: string): ImporterDeps {
-      const deps = makeZipDeps([]).deps;
-      (deps.fs as unknown as { readFile: (p: string) => Promise<Buffer> }).readFile = async () =>
-        Buffer.from(`PK\u0003\u0004........${marker}........`);
-      return deps;
-    }
-
     it('accepts a zip whose central directory carries LinkedIn markers', async () => {
-      expect(await linkedinImporter.canHandle('/drop/li.zip', zipWithBytes('Connections.csv'))).toBe(
-        true,
-      );
-      expect(await linkedinImporter.canHandle('/drop/li.zip', zipWithBytes('Rich_Media.csv'))).toBe(
-        true,
-      );
+      const dir = makeTmpDir('li-can-handle-');
+      const archive = join(dir, 'li.zip');
+      writeFileSync(archive, buildZip([{ name: 'Rich_Media.csv' }]));
+      const deps = makeZipDeps([]).deps;
+      deps.fs.readFile = async () => {
+        throw new Error('canHandle must not materialize zip bytes');
+      };
+      try {
+        expect(await linkedinImporter.canHandle(archive, deps)).toBe(true);
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
     it('rejects a Facebook zip and an unrelated zip', async () => {
-      expect(
-        await linkedinImporter.canHandle('/drop/fb.zip', zipWithBytes('posts/your_posts_1.json')),
-      ).toBe(false);
-      expect(
-        await linkedinImporter.canHandle('/drop/x.zip', zipWithBytes('Takeout/index.html')),
-      ).toBe(false);
+      const dir = makeTmpDir('li-negative-can-handle-');
+      const facebookArchive = join(dir, 'facebook.zip');
+      const unrelatedArchive = join(dir, 'unrelated.zip');
+      writeFileSync(facebookArchive, buildZip([{ name: 'posts/your_posts_1.json' }]));
+      writeFileSync(unrelatedArchive, buildZip([{ name: 'Takeout/index.html' }]));
+      try {
+        expect(await linkedinImporter.canHandle(facebookArchive, makeZipDeps([]).deps)).toBe(false);
+        expect(await linkedinImporter.canHandle(unrelatedArchive, makeZipDeps([]).deps)).toBe(
+          false,
+        );
+      } finally {
+        removeTmpDir(dir);
+      }
     });
 
     it('accepts a folder that contains the LinkedIn layout', async () => {
@@ -215,6 +226,20 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
   });
 
   describe('full import over the export zip', () => {
+    it('yields early CSV records before reporting malformed rows later in the file', async () => {
+      const content = 'Content,From,Date\nhello,Ana,2024-03-15 09:30:00 UTC\n,,\n';
+      const c = makeContext(makeZipDeps([{ entryPath: 'messages.csv', content }]).deps);
+      const iterator = linkedinImporter.import(ZIP, c.ctx);
+
+      const first = await iterator.next();
+
+      expect(first.done).toBe(false);
+      if (first.done) throw new Error('expected first LinkedIn record');
+      expect(first.value.body).toBe('hello');
+      expect(c.skips).toEqual([]);
+      await iterator.return?.({ recordCount: 1, skipped: [] });
+    });
+
     it('emits one record per memory and reports the malformed row (AC-15)', async () => {
       const { records, result, skips } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
 
@@ -240,7 +265,9 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
 
     it('preserves a quoted multi-line message body verbatim (no row smearing)', async () => {
       const { records } = await run(ZIP, makeZipDeps(FULL_ENTRIES).deps);
-      const msg = records.find((r) => r.author === 'Pedro Fuentes' && r.sourceMeta.kind === 'message');
+      const msg = records.find(
+        (r) => r.author === 'Pedro Fuentes' && r.sourceMeta.kind === 'message',
+      );
 
       expect(msg?.body).toBe('Sounds great!\nTuesday at 3pm works.');
       expect(msg?.date?.value.getTime()).toBe(Date.UTC(2024, 2, 15, 10, 0, 0));
@@ -259,7 +286,9 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
       expect(jose?.sourceMeta.company).toBe('Acme, Inc.');
       expect(jose?.sourceMeta.position).toBe('Senior Engineer');
       // The preamble lines are expected scaffolding, not errors.
-      expect(skips.some((s) => s.ref.includes('Connections.csv') && s.code === 'E_PARSE')).toBe(false);
+      expect(skips.some((s) => s.ref.includes('Connections.csv') && s.code === 'E_PARSE')).toBe(
+        false,
+      );
     });
 
     it('parses a second connection with a comma inside the position field', async () => {
@@ -332,8 +361,7 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
     });
 
     it('KEEPS a message with unparseable date (date null) — never silently dropped', async () => {
-      const odd =
-        'FROM,DATE,CONTENT\r\n' + 'Sam,not-a-date,"Hello there, friend"\r\n';
+      const odd = 'FROM,DATE,CONTENT\r\n' + 'Sam,not-a-date,"Hello there, friend"\r\n';
       const entries: ArchiveEntry[] = [{ entryPath: 'messages.csv', content: odd }];
       const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
 

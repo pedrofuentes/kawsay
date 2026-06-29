@@ -1,4 +1,6 @@
 import { basename, extname, join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { Readable } from 'node:stream';
 import type { MediaType } from '@shared/catalog';
 import type {
   CatalogRecord,
@@ -9,6 +11,7 @@ import type {
   MediaInfo,
   SkippedItem,
 } from './types';
+import { zipHasEntryName } from './zip-markers';
 
 /**
  * Card C3 (AC-1): the WhatsApp **"Export Chat"** connector — the flagship
@@ -120,9 +123,16 @@ const EXT_INFO = new Map<string, MediaKind>([
 ]);
 
 const FALLBACK_KIND: MediaKind = { mediaType: 'document', mime: 'application/octet-stream' };
+const CHAT_READ_FALLBACK_MAX_BYTES = 16 * 1024 * 1024;
 
 /** Inferred order of the day/month/year components for a given chat log. */
 type DateOrder = 'dmy' | 'mdy' | 'ymd';
+
+interface DateOrderCounts {
+  dmy: number;
+  mdy: number;
+  ymd: number;
+}
 
 interface PendingMessage {
   index: number;
@@ -228,26 +238,24 @@ function isMediaOmitted(body: string): boolean {
  * a first field > 12 ⇒ day-first; a second field > 12 ⇒ month-first; otherwise
  * default to the globally common day-first (research `formats.md` §1.3, §1.8).
  */
-function inferDateOrder(lines: readonly string[]): DateOrder {
-  let dmy = 0;
-  let mdy = 0;
-  let ymd = 0;
-  for (const line of lines) {
-    const match = HEADER_RE.exec(line.replace(/\r$/, ''));
-    if (!match) continue;
-    const parts = match[1].split(/[-/.]/).map((value) => value.trim());
-    if (parts.length !== 3) continue;
-    if (parts[0].length === 4) {
-      ymd += 1;
-      continue;
-    }
-    const first = Number(parts[0]);
-    const second = Number(parts[1]);
-    if (first > 12 && second <= 12) dmy += 1;
-    else if (second > 12 && first <= 12) mdy += 1;
+function observeDateOrder(line: string, counts: DateOrderCounts): void {
+  const match = HEADER_RE.exec(line.replace(/\r$/, ''));
+  if (!match) return;
+  const parts = match[1].split(/[-/.]/).map((value) => value.trim());
+  if (parts.length !== 3) return;
+  if (parts[0].length === 4) {
+    counts.ymd += 1;
+    return;
   }
-  if (ymd > dmy + mdy) return 'ymd';
-  if (mdy > dmy) return 'mdy';
+  const first = Number(parts[0]);
+  const second = Number(parts[1]);
+  if (first > 12 && second <= 12) counts.dmy += 1;
+  else if (second > 12 && first <= 12) counts.mdy += 1;
+}
+
+function dateOrderFromCounts(counts: DateOrderCounts): DateOrder {
+  if (counts.ymd > counts.dmy + counts.mdy) return 'ymd';
+  if (counts.mdy > counts.dmy) return 'mdy';
   return 'dmy';
 }
 
@@ -287,8 +295,21 @@ function buildDate(
   else [day, month, year] = parts;
   if (year < 100) year += 2000;
   const { h, m, s } = parseTime(timeRaw, ampm);
+  if (month < 1 || month > 12 || day < 1 || h > 23 || m > 59 || s > 59) return null;
   const ms = Date.UTC(year, month - 1, day, h, m, s);
-  return Number.isNaN(ms) ? null : { value: new Date(ms), source: 'message' };
+  if (Number.isNaN(ms)) return null;
+  const value = new Date(ms);
+  if (
+    value.getUTCFullYear() !== year ||
+    value.getUTCMonth() !== month - 1 ||
+    value.getUTCDate() !== day ||
+    value.getUTCHours() !== h ||
+    value.getUTCMinutes() !== m ||
+    value.getUTCSeconds() !== s
+  ) {
+    return null;
+  }
+  return { value, source: 'message' };
 }
 
 async function probeSafe(deps: ImporterDeps, absPath: string): Promise<MediaInfo | null> {
@@ -480,10 +501,7 @@ export const whatsappImporter: Importer = {
   async canHandle(inputPath: string, deps: ImporterDeps): Promise<boolean> {
     try {
       if (isZip(inputPath)) {
-        // The zip's central directory stores entry names verbatim, so a byte
-        // scan for the marker recognizes a chat export without extracting.
-        const buffer = await deps.fs.readFile(inputPath);
-        return buffer.includes(CHAT_FILENAME);
+        return await zipHasEntryName(inputPath, [CHAT_FILENAME]);
       }
       const stat = await deps.fs.stat(inputPath);
       if (stat.isDirectory()) {
@@ -517,9 +535,9 @@ export const whatsappImporter: Importer = {
       return { recordCount, skipped };
     }
 
-    let text: string;
+    let lineSource: AsyncIterable<string>;
     try {
-      text = stripBom((await ctx.deps.fs.readFile(chatAbsPath)).toString('utf8'));
+      lineSource = readChatLines(chatAbsPath, ctx);
     } catch (error) {
       // AC-15: an unreadable _chat.txt is reported, not thrown — the run returns
       // its partial result (any records emitted so far are preserved).
@@ -533,10 +551,8 @@ export const whatsappImporter: Importer = {
       return { recordCount, skipped };
     }
     ctx.onProgress({ phase: 'parse', processed: 0, total: null, message: null });
-
-    const lines = text.split('\n');
-    const order = inferDateOrder(lines);
     const chatName = deriveChatName(inputPath);
+    const dateCounts: DateOrderCounts = { dmy: 0, mdy: 0, ymd: 0 };
 
     let pending: PendingMessage | null = null;
     let msgIndex = -1;
@@ -547,7 +563,7 @@ export const whatsappImporter: Importer = {
       const { record, skip } = await normalizeMessage(
         message,
         attachments,
-        order,
+        dateOrderFromCounts(dateCounts),
         chatName,
         ctx.deps,
       );
@@ -562,40 +578,54 @@ export const whatsappImporter: Importer = {
       }
     }
 
-    for (let i = 0; i < lines.length; i++) {
-      if (ctx.signal.aborted) {
-        pending = null;
-        break;
-      }
-      const raw = lines[i].replace(/\r$/, '');
-      const header = HEADER_RE.exec(raw);
-      if (header) {
-        if (pending) {
-          yield* flush(pending);
+    let i = 0;
+    try {
+      for await (const line of lineSource) {
+        if (ctx.signal.aborted) {
+          pending = null;
+          break;
         }
-        msgIndex += 1;
-        const platform = stripLeadingMarks(raw).startsWith('[') ? 'ios' : 'android';
-        const { author, body } = splitAuthor(stripLeadingMarks(raw.slice(header[0].length)));
-        pending = {
-          index: msgIndex,
-          dateRaw: header[1],
-          timeRaw: header[2],
-          ampm: header[3] ?? null,
-          platform,
-          author,
-          bodyLines: [body],
-        };
-      } else if (pending) {
-        pending.bodyLines.push(raw);
-      } else if (raw.trim() !== '') {
-        recordSkip(
-          ctx,
-          skipped,
-          `line:${i + 1}`,
-          'unparseable line before first message',
-          'E_PARSE',
-        );
+        const raw = line.replace(/\r$/, '');
+        const header = HEADER_RE.exec(raw);
+        if (header) {
+          observeDateOrder(raw, dateCounts);
+          if (pending) {
+            yield* flush(pending);
+          }
+          msgIndex += 1;
+          const platform = stripLeadingMarks(raw).startsWith('[') ? 'ios' : 'android';
+          const { author, body } = splitAuthor(stripLeadingMarks(raw.slice(header[0].length)));
+          pending = {
+            index: msgIndex,
+            dateRaw: header[1],
+            timeRaw: header[2],
+            ampm: header[3] ?? null,
+            platform,
+            author,
+            bodyLines: [body],
+          };
+        } else if (pending) {
+          pending.bodyLines.push(raw);
+        } else if (raw.trim() !== '') {
+          recordSkip(
+            ctx,
+            skipped,
+            `line:${i + 1}`,
+            'unparseable line before first message',
+            'E_PARSE',
+          );
+        }
+        i += 1;
       }
+    } catch (error) {
+      recordSkip(
+        ctx,
+        skipped,
+        chatAbsPath,
+        `could not read ${CHAT_FILENAME}: ${errorMessage(error)}`,
+        'E_READ_CHAT',
+      );
+      pending = null;
     }
     if (pending && !ctx.signal.aborted) {
       yield* flush(pending);
@@ -604,3 +634,27 @@ export const whatsappImporter: Importer = {
     return { recordCount, skipped };
   },
 };
+
+async function* readChatLines(chatAbsPath: string, ctx: ImportContext): AsyncGenerator<string> {
+  const opener = ctx.deps.fs.openReadStream;
+  if (opener) {
+    const stream = opener(chatAbsPath);
+    const rl = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+    let first = true;
+    try {
+      for await (const line of rl) {
+        yield first ? stripBom(line) : line;
+        first = false;
+      }
+    } finally {
+      rl.close();
+      stream.destroy();
+    }
+    return;
+  }
+  const buffer = await ctx.deps.fs.readFile(chatAbsPath);
+  if (buffer.length > CHAT_READ_FALLBACK_MAX_BYTES) {
+    throw new Error('chat log too large for non-streaming fs');
+  }
+  yield* Readable.from(stripBom(buffer.toString('utf8')).split('\n'));
+}

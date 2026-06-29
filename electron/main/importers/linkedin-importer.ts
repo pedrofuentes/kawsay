@@ -8,6 +8,7 @@ import type {
   SkippedItem,
 } from './types';
 import { parseCsv } from './csv';
+import { zipHasEntryName } from './zip-markers';
 
 /**
  * Card C5 (AC-16): the **LinkedIn** connector. LinkedIn's "Download your data"
@@ -216,18 +217,17 @@ async function readRows(
 
 const MESSAGE_HEADERS = ['content', 'from', 'date', 'subject'];
 
-function parseMessagesFile(
+function* parseMessagesFile(
   entry: Entry,
   rows: readonly string[][],
   ctx: ImportContext,
   skipped: SkippedItem[],
-): CatalogRecord[] {
+): Generator<CatalogRecord> {
   const header = locateHeader(rows, MESSAGE_HEADERS);
   if (header === null) {
     recordSkip(ctx, skipped, entry.entryPath, 'no recognizable LinkedIn header row', 'E_PARSE');
-    return [];
+    return;
   }
-  const records: CatalogRecord[] = [];
   for (let r = header.headerRow + 1; r < rows.length; r++) {
     const read = makeRowReader(header.index, rows[r]);
     const author = read('from', 'sender');
@@ -236,43 +236,45 @@ function parseMessagesFile(
     // A row with no sender, no content, and no date is malformed — report it, but
     // a row with any one of those is a memory and must be kept.
     if (author === '' && body === '' && dateRaw === '') {
-      recordSkip(ctx, skipped, `${entry.entryPath}#${r}`, 'row has no sender, content, or date', 'E_PARSE');
+      recordSkip(
+        ctx,
+        skipped,
+        `${entry.entryPath}#${r}`,
+        'row has no sender, content, or date',
+        'E_PARSE',
+      );
       continue;
     }
-    records.push(
-      liRecord({
-        kind: 'message',
-        date: parseLinkedInDate(dateRaw),
-        author: nonEmpty(author),
-        body: nonEmpty(body),
-        sourceRef: `${entry.entryPath}#${r}`,
-        sourceMeta: {
-          subject: nonEmpty(read('subject')),
-          to: nonEmpty(read('to', 'recipient')),
-          conversationId: nonEmpty(read('conversation id')),
-          conversationTitle: nonEmpty(read('conversation title')),
-          folder: nonEmpty(read('folder')),
-        },
-      }),
-    );
+    yield liRecord({
+      kind: 'message',
+      date: parseLinkedInDate(dateRaw),
+      author: nonEmpty(author),
+      body: nonEmpty(body),
+      sourceRef: `${entry.entryPath}#${r}`,
+      sourceMeta: {
+        subject: nonEmpty(read('subject')),
+        to: nonEmpty(read('to', 'recipient')),
+        conversationId: nonEmpty(read('conversation id')),
+        conversationTitle: nonEmpty(read('conversation title')),
+        folder: nonEmpty(read('folder')),
+      },
+    });
   }
-  return records;
 }
 
 const CONNECTION_HEADERS = ['first name', 'last name', 'connected on'];
 
-function parseConnectionsFile(
+function* parseConnectionsFile(
   entry: Entry,
   rows: readonly string[][],
   ctx: ImportContext,
   skipped: SkippedItem[],
-): CatalogRecord[] {
+): Generator<CatalogRecord> {
   const header = locateHeader(rows, CONNECTION_HEADERS);
   if (header === null) {
     recordSkip(ctx, skipped, entry.entryPath, 'no recognizable LinkedIn header row', 'E_PARSE');
-    return [];
+    return;
   }
-  const records: CatalogRecord[] = [];
   for (let r = header.headerRow + 1; r < rows.length; r++) {
     const read = makeRowReader(header.index, rows[r]);
     const first = read('first name');
@@ -289,61 +291,60 @@ function parseConnectionsFile(
     const body =
       position !== '' && company !== ''
         ? `${position} at ${company}`
-        : nonEmpty(position) ?? nonEmpty(company);
-    records.push(
-      liRecord({
-        kind: 'connection',
-        date: parseLinkedInDate(connectedOn),
-        author: nonEmpty(author),
-        body,
-        sourceRef: `${entry.entryPath}#${r}`,
-        sourceMeta: {
-          firstName: nonEmpty(first),
-          lastName: nonEmpty(last),
-          company: nonEmpty(company),
-          position: nonEmpty(position),
-          profileUrl: nonEmpty(read('url', 'profile url')),
-        },
-      }),
-    );
+        : (nonEmpty(position) ?? nonEmpty(company));
+    yield liRecord({
+      kind: 'connection',
+      date: parseLinkedInDate(connectedOn),
+      author: nonEmpty(author),
+      body,
+      sourceRef: `${entry.entryPath}#${r}`,
+      sourceMeta: {
+        firstName: nonEmpty(first),
+        lastName: nonEmpty(last),
+        company: nonEmpty(company),
+        position: nonEmpty(position),
+        profileUrl: nonEmpty(read('url', 'profile url')),
+      },
+    });
   }
-  return records;
 }
 
 const RICH_MEDIA_HEADERS = ['media link', 'link', 'media url'];
 
-function parseRichMediaFile(
+function* parseRichMediaFile(
   entry: Entry,
   rows: readonly string[][],
   ctx: ImportContext,
   skipped: SkippedItem[],
-): CatalogRecord[] {
+): Generator<CatalogRecord> {
   const header = locateHeader(rows, RICH_MEDIA_HEADERS);
   if (header === null) {
     recordSkip(ctx, skipped, entry.entryPath, 'no recognizable LinkedIn header row', 'E_PARSE');
-    return [];
+    return;
   }
-  const records: CatalogRecord[] = [];
   for (let r = header.headerRow + 1; r < rows.length; r++) {
     const read = makeRowReader(header.index, rows[r]);
     const link = read('media link', 'link', 'media url');
     const timeRaw = read('time', 'date');
     if (link === '' && timeRaw === '') {
-      recordSkip(ctx, skipped, `${entry.entryPath}#${r}`, 'rich-media row has no link or time', 'E_PARSE');
+      recordSkip(
+        ctx,
+        skipped,
+        `${entry.entryPath}#${r}`,
+        'rich-media row has no link or time',
+        'E_PARSE',
+      );
       continue;
     }
-    records.push(
-      liRecord({
-        kind: 'rich_media',
-        date: parseLinkedInDate(timeRaw),
-        author: null,
-        body: nonEmpty(link),
-        sourceRef: `${entry.entryPath}#${r}`,
-        sourceMeta: { link: nonEmpty(link) },
-      }),
-    );
+    yield liRecord({
+      kind: 'rich_media',
+      date: parseLinkedInDate(timeRaw),
+      author: null,
+      body: nonEmpty(link),
+      sourceRef: `${entry.entryPath}#${r}`,
+      sourceMeta: { link: nonEmpty(link) },
+    });
   }
-  return records;
 }
 
 type FileParser = (
@@ -351,7 +352,7 @@ type FileParser = (
   rows: readonly string[][],
   ctx: ImportContext,
   skipped: SkippedItem[],
-) => CatalogRecord[];
+) => Iterable<CatalogRecord>;
 
 /** Dispatch a CSV to its parser by file name; unrelated files are ignored. */
 function parserFor(entryPath: string): FileParser | null {
@@ -399,7 +400,9 @@ async function gatherEntries(
 ): Promise<{ entries: Entry[]; discoveryFailed: boolean }> {
   if (isZip(inputPath)) {
     try {
-      const extracted = await ctx.deps.extractArchive(inputPath, ctx.workDir, { signal: ctx.signal });
+      const extracted = await ctx.deps.extractArchive(inputPath, ctx.workDir, {
+        signal: ctx.signal,
+      });
       return {
         entries: extracted.map((e) => ({ entryPath: toPosix(e.entryPath), absPath: e.absPath })),
         discoveryFailed: false,
@@ -429,8 +432,7 @@ export const linkedinImporter: Importer = {
   async canHandle(inputPath: string, deps: ImporterDeps): Promise<boolean> {
     try {
       if (isZip(inputPath)) {
-        const buffer = await deps.fs.readFile(inputPath);
-        return LI_ZIP_MARKERS.some((marker) => buffer.includes(marker));
+        return await zipHasEntryName(inputPath, LI_ZIP_MARKERS);
       }
       const stat = await deps.fs.stat(inputPath);
       if (!stat.isDirectory()) return false;
