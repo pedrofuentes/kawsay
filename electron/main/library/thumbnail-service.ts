@@ -120,8 +120,33 @@ export function createThumbnailService(options: ThumbnailServiceOptions): Thumbn
   const { db, root, image, video } = options;
   const maxBytes = options.maxBytes ?? THUMBNAIL_MAX_BYTES;
   const cache = new LruCache(options.cacheLimit ?? 256);
+  const inFlight = new Map<string, Promise<string | null>>();
 
   const mediaTypeStmt = db.prepare('SELECT media_type AS mediaType FROM items WHERE id = @id');
+
+  async function renderThumbnail(id: string, dimension: number): Promise<string | null> {
+    const row = mediaTypeStmt.get<{ mediaType: MediaType }>({ id });
+    if (row === undefined) return null;
+
+    // Non-visual media is decided from the catalog alone — no original is ever
+    // resolved or read (and an icon is shown in the UI).
+    const render = thumbnailerFor(row.mediaType, image, video);
+    if (render === null) return null;
+
+    // resolveOriginal is the confinement boundary: it THROWS on a hostile
+    // content-addressing field rather than reading outside the store, and that
+    // throw deliberately propagates (no path is built, no thumbnailer runs).
+    const absPath = resolveOriginal(db, root, id);
+    if (absPath === null) return null;
+
+    const rendered = await render(absPath, dimension);
+    if (rendered === null || rendered.data.length === 0) return null;
+    if (rendered.data.length > maxBytes) return null;
+
+    const dataUrl = `data:${rendered.mimeType};base64,${rendered.data.toString('base64')}`;
+    cache.set(`${id}:${String(dimension)}`, dataUrl);
+    return dataUrl;
+  }
 
   return {
     async getThumbnail(id, size) {
@@ -130,27 +155,14 @@ export function createThumbnailService(options: ThumbnailServiceOptions): Thumbn
       const cached = cache.get(cacheKey);
       if (cached !== undefined) return cached;
 
-      const row = mediaTypeStmt.get<{ mediaType: MediaType }>({ id });
-      if (row === undefined) return null;
+      const pending = inFlight.get(cacheKey);
+      if (pending !== undefined) return pending;
 
-      // Non-visual media is decided from the catalog alone — no original is ever
-      // resolved or read (and an icon is shown in the UI).
-      const render = thumbnailerFor(row.mediaType, image, video);
-      if (render === null) return null;
-
-      // resolveOriginal is the confinement boundary: it THROWS on a hostile
-      // content-addressing field rather than reading outside the store, and that
-      // throw deliberately propagates (no path is built, no thumbnailer runs).
-      const absPath = resolveOriginal(db, root, id);
-      if (absPath === null) return null;
-
-      const rendered = await render(absPath, dimension);
-      if (rendered === null || rendered.data.length === 0) return null;
-      if (rendered.data.length > maxBytes) return null;
-
-      const dataUrl = `data:${rendered.mimeType};base64,${rendered.data.toString('base64')}`;
-      cache.set(cacheKey, dataUrl);
-      return dataUrl;
+      const promise = renderThumbnail(id, dimension).finally(() => {
+        inFlight.delete(cacheKey);
+      });
+      inFlight.set(cacheKey, promise);
+      return promise;
     },
   };
 }
