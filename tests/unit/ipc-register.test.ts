@@ -16,6 +16,7 @@ import {
   TRANSCRIPTION_MODEL_STATUS,
   TRANSCRIPTION_START,
   TRANSCRIPTION_STATUS,
+  ipcContract,
 } from '@shared/ipc/contract';
 import {
   registerIpcHandlers,
@@ -84,7 +85,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
   it('registers a handle() listener for every channel in the contract', () => {
     const ipcMain = fakeIpcMain();
     registerIpcHandlers(ipcMain, handlers);
-    expect(ipcMain.listeners.has(APP_GET_VERSION)).toBe(true);
+    expect([...ipcMain.listeners.keys()].sort()).toEqual(Object.keys(ipcContract).sort());
   });
 
   it('registers a handle() listener for the gated model-download channels', () => {

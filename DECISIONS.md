@@ -648,9 +648,7 @@ pin (no caret) is preserved — native-module ABI builds must stay deterministic
   the Node-ABI prebuilt hides Electron-ABI compile breaks from the ordinary test run — a downgrade would
   otherwise only fail at package time.
 - ⚠️ 12.11.1 (like all ≥ 12.10.1) ships **no Node-20 prebuilt** (only `node-v127`/`v137`/`v141`/`v147` =
-  Node 22/24/25/…). The `ci.yml` Verify job pins **Node 20**, so Windows CI — which can't compile native code
-  from source on the current runner (node-gyp 10.2.0 vs the image's VS 2026) — needs **Node ≥ 22** to pick up
-  the `node-v127` prebuilt. That CI Node bump is a coordinator-owned `.github` change (raised on the P1 PR);
+  Node 22/24/25/…). The `ci.yml` Verify job now pins **Node 22**, so Windows CI picks up the `node-v127` prebuilt rather than compiling native code from source on the runner;
   see LEARNINGS 2026-06-24.
 - Called out for review per the card's "only electron-builder" constraint: this is a required compatibility
   bump of an existing runtime dependency, not a new package.
@@ -840,7 +838,7 @@ the *existing* posture rather than chasing it.
 **Consequences**
 - `pnpm coverage` now produces a text table, a browsable `coverage/` HTML report, and `coverage-summary.json`;
   the run **fails** if any of the four metrics drops below 80, turning the long-documented bar into an enforced
-  gate that runs inside the normal `pnpm test` inner loop.
+  gate that runs when `pnpm coverage` is invoked; the normal `pnpm test` inner loop remains the fast non-coverage Vitest run.
 - Only true bootstrap glue is excluded; all testable logic (importers, catalog repo, ingest, IPC validation,
   hooks, security helpers, the worker job driver) remains measured, so the number reflects real behaviour.
 - One small, well-known, dev-only package enters the lockfile; it never reaches production or the network,

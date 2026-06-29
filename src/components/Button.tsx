@@ -2,14 +2,18 @@
 // obvious next action on a screen (USER_FLOWS rubric R3). Always a real <button>
 // with an explicit type, generous hit area (≥44px), and a visible focus ring
 // inherited from the global :focus-visible style.
-import type { ButtonHTMLAttributes, ReactElement } from 'react';
+import type { MouseEventHandler, ReactElement, ReactNode } from 'react';
 import { cx } from '@renderer/lib/cx';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost';
 
-export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'className'> {
+export interface ButtonProps {
   variant?: ButtonVariant;
   fullWidth?: boolean;
+  type?: 'button' | 'submit' | 'reset';
+  disabled?: boolean;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
+  children: ReactNode;
 }
 
 const BASE =
@@ -27,15 +31,17 @@ export function Button({
   variant = 'secondary',
   type = 'button',
   fullWidth = false,
+  disabled = false,
+  onClick,
   children,
-  ...rest
 }: ButtonProps): ReactElement {
   return (
     <button
       type={type}
       data-variant={variant}
       className={cx(BASE, VARIANTS[variant], fullWidth && 'w-full')}
-      {...rest}
+      disabled={disabled}
+      onClick={onClick}
     >
       {children}
     </button>

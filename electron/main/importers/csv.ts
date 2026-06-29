@@ -9,7 +9,7 @@
  * failure the WhatsApp importer was hardened against.
  *
  * The parser is a single forward pass over the text (no backtracking), so it is
- * linear and streaming-friendly. It is intentionally lenient where LinkedIn is
+ * linear and single-pass. It is intentionally lenient where LinkedIn is
  * (a bare `"` only opens a quoted run at a field boundary), and faithful where
  * it matters (every byte inside a quoted run is preserved verbatim). Header
  * interpretation — trimming, case-folding, locating the real header row past a

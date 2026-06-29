@@ -1,0 +1,19 @@
+rules:
+  - id: kawsay-node-child-process-shell-true
+    message: Do not spawn subprocesses through a shell; use an argv array with shell disabled.
+    languages: [typescript, javascript]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: 'spawn($CMD, $ARGS, { ..., shell: true, ... })'
+          - pattern: 'spawnSync($CMD, $ARGS, { ..., shell: true, ... })'
+          - pattern: 'execFile($CMD, $ARGS, { ..., shell: true, ... })'
+          - pattern: 'execFileSync($CMD, $ARGS, { ..., shell: true, ... })'
+
+  - id: kawsay-node-child-process-exec-string
+    message: Do not execute shell strings; use spawn/execFile with an argv array.
+    languages: [typescript, javascript]
+    severity: ERROR
+    pattern-either:
+      - pattern: 'exec($CMD, ...)'
+      - pattern: 'execSync($CMD, ...)'

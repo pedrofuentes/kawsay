@@ -23,7 +23,7 @@ import {
   TRANSCRIPTION_PROGRESS,
   ipcEventContract,
 } from '@shared/ipc/events';
-import { itemCardSchema } from '@shared/ipc/schemas';
+import { itemCardSchema, pathSchema } from '@shared/ipc/schemas';
 
 const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
@@ -33,6 +33,15 @@ function reqOk(channel: keyof typeof ipcContract, payload: unknown): boolean {
 function resOk(channel: keyof typeof ipcContract, payload: unknown): boolean {
   return ipcContract[channel].response.safeParse(payload).success;
 }
+
+describe('ipcContract — adversarial empty payloads', () => {
+  for (const channel of Object.keys(ipcContract) as (keyof typeof ipcContract)[]) {
+    it(`rejects null and undefined requests for ${channel}`, () => {
+      expect(reqOk(channel, null)).toBe(false);
+      expect(reqOk(channel, undefined)).toBe(false);
+    });
+  }
+});
 
 const librarySummary = {
   root: '/Users/mateo/Mum',
@@ -87,6 +96,13 @@ describe('ipcContract — library:open', () => {
     expect(reqOk(LIBRARY_OPEN, { path: '/Users/mateo/Mum' })).toBe(true);
     expect(reqOk(LIBRARY_OPEN, { path: '' })).toBe(false);
     expect(reqOk(LIBRARY_OPEN, { path: '/x', personName: 'Mum' })).toBe(false);
+  });
+});
+
+describe('pathSchema — local-only absolute paths', () => {
+  it('rejects UNC network shares', () => {
+    expect(pathSchema.safeParse('\\\\server\\share\\Mum').success).toBe(false);
+    expect(pathSchema.safeParse('\\\\server\\share').success).toBe(false);
   });
 });
 
@@ -324,7 +340,13 @@ describe('ipcContract — import:start / import:cancel', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'myspace', inputPath: '/x' })).toBe(false);
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '' })).toBe(false);
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'x'.repeat(4097) })).toBe(false);
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'relative/export' })).toBe(false);
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x', rogue: 1 })).toBe(false);
+  });
+  it('accepts Windows drive-letter absolute paths as renderer-supplied paths', () => {
+    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'C:\\Users\\mateo\\Memories' })).toBe(
+      true,
+    );
   });
   it('cancel requires a uuid jobId and returns a cancelled flag', () => {
     expect(reqOk(IMPORT_CANCEL, { jobId: UUID })).toBe(true);

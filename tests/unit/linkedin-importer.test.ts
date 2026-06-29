@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drainImporter } from '../../electron/main/importers/drain';
-import { linkedinImporter } from '../../electron/main/importers/linkedin-importer';
+import { linkedinImporter, parseLinkedInDate } from '../../electron/main/importers/linkedin-importer';
 import type {
   CatalogRecord,
   FileStat,
@@ -370,6 +370,14 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
       expect(msg?.body).toBe('Hello there, friend');
       expect(msg?.date).toBeNull();
       expect(skips.filter((s) => s.code === 'E_PARSE')).toHaveLength(0);
+    });
+
+    it('treats impossible date components as unparseable instead of normalising them', () => {
+      expect(parseLinkedInDate('2024-13-01')).toBeNull();
+      expect(parseLinkedInDate('2024-02-30')).toBeNull();
+      expect(parseLinkedInDate('32 Jan 2024')).toBeNull();
+      expect(parseLinkedInDate('Jan 32, 2024')).toBeNull();
+      expect(parseLinkedInDate('13/32/2024')).toBeNull();
     });
   });
 

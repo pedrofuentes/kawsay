@@ -72,6 +72,8 @@ export function ImportStep({
   if (face === 'complete' || face === 'cancelled') {
     const found = state.summary?.occurrencesAdded ?? 0;
     const skipped = state.summary?.skipped ?? [];
+    const unreadable = skipped.filter((item) => item.code !== 'E_EXIF' && item.code !== 'E_PROBE');
+    const partialMetadata = skipped.length - unreadable.length;
     return (
       <StepContainer>
         <span
@@ -86,10 +88,17 @@ export function ImportStep({
         <p className="font-body text-lg leading-relaxed text-text-secondary">
           {found} {found === 1 ? 'memory is' : 'memories are'} now in {personName}&apos;s library.
         </p>
-        {skipped.length > 0 ? (
+        {unreadable.length > 0 ? (
           <ReassuranceNote>
-            We couldn&apos;t read {skipped.length} {skipped.length === 1 ? 'item' : 'items'} — every
+            We couldn&apos;t read {unreadable.length} {unreadable.length === 1 ? 'item' : 'items'} — every
             other memory came through, and nothing was lost.
+          </ReassuranceNote>
+        ) : null}
+        {partialMetadata > 0 ? (
+          <ReassuranceNote>
+            We couldn&apos;t read every detail for {partialMetadata}{' '}
+            {partialMetadata === 1 ? 'memory' : 'memories'}, but the{' '}
+            {partialMetadata === 1 ? 'memory was' : 'memories were'} still brought in.
           </ReassuranceNote>
         ) : null}
         <div>

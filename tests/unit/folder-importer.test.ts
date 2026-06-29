@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { drainImporter } from '../../electron/main/importers/drain';
+import {
+  createImporterDeps,
+  unavailableExtractArchive,
+} from '../../electron/main/importers/deps/index';
 import { folderImporter } from '../../electron/main/importers/folder-importer';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 import type {
   CatalogRecord,
   ExifData,
@@ -32,6 +38,17 @@ interface FsOptions {
 
 function abs(rel: string): string {
   return rel === '.' ? ROOT : join(ROOT, ...rel.split('/'));
+}
+
+function normalizePathSeparators(value: string): string {
+  return value.replaceAll('\\', '/');
+}
+
+function normalizeSkipReasons(skips: readonly SkippedItem[]): SkippedItem[] {
+  return skips.map((skip) => ({
+    ...skip,
+    reason: normalizePathSeparators(skip.reason),
+  }));
 }
 
 function fileStat(spec: FileSpec): FileStat {
@@ -190,6 +207,24 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(await folderImporter.canHandle(abs('missing.jpg'), deps)).toBe(false);
   });
 
+  it('canHandle accepts a symlinked directory when it is the selected import root', async () => {
+    const root = makeTmpDir('folder-root-link');
+    const realDir = join(root, 'real-dir');
+    mkdirSync(realDir);
+    const link = join(root, 'picked-root');
+    symlinkSync(realDir, link, 'dir');
+    try {
+      const deps = createImporterDeps({
+        extractArchive: unavailableExtractArchive,
+        ffprobePath: '/bin/ffprobe',
+      });
+
+      await expect(folderImporter.canHandle(link, deps)).resolves.toBe(true);
+    } finally {
+      removeTmpDir(root);
+    }
+  });
+
   it('classifies media by extension, recurses, and references originals in place', async () => {
     const fs = buildFs({
       'photo.JPG': {},
@@ -248,6 +283,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
         },
       },
     });
+
     const { records } = await collect(makeContext(deps).ctx);
     const rec = records[0];
 
@@ -264,6 +300,55 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
       orientation: 6,
     });
     expect(exifCalls).toEqual([abs('trip/beach.jpg')]);
+  });
+
+  it('reports a partial-metadata skip when EXIF fails but still catalogs the photo', async () => {
+    const fs = buildFs({ 'broken-exif.jpg': { mtimeMs: Date.UTC(2024, 0, 2) } });
+    const { deps } = makeDeps(fs, { throwsFor: ['broken-exif.jpg'] });
+    const c = makeContext(deps);
+
+    const { records, result } = await collect(c.ctx);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.sourceRef).toBe('broken-exif.jpg');
+    expect(records[0]?.date?.source).toBe('mtime');
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
+      ref: 'broken-exif.jpg',
+      reason: 'partial metadata unavailable: exif fail /import-root/broken-exif.jpg',
+      code: 'E_EXIF',
+    });
+    expect(c.skips).toEqual(result.skipped);
+  });
+
+  it('reports a partial-metadata skip when probing fails but still catalogs the video', async () => {
+    const fs = buildFs({ 'broken-probe.mp4': { mtimeMs: Date.UTC(2024, 0, 2) } });
+    const { deps } = makeDeps(fs, {}, { throwsFor: ['broken-probe.mp4'] });
+    const c = makeContext(deps);
+
+    const { records, result } = await collect(c.ctx);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.sourceRef).toBe('broken-probe.mp4');
+    expect(records[0]?.durationSec).toBeNull();
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
+      ref: 'broken-probe.mp4',
+      reason: 'partial metadata unavailable: probe fail /import-root/broken-probe.mp4',
+      code: 'E_PROBE',
+    });
+    expect(c.skips).toEqual(result.skipped);
+  });
+
+  it('honors a pre-aborted signal without emitting a discover progress tick', async () => {
+    const fs = buildFs({ 'photo.jpg': {} });
+    const controller = new AbortController();
+    controller.abort();
+    const c = makeContext(makeDeps(fs).deps, controller.signal);
+
+    const { records, result } = await collect(c.ctx);
+
+    expect(records).toEqual([]);
+    expect(result.recordCount).toBe(0);
+    expect(c.progress).toEqual([]);
   });
 
   it('falls back to file mtime (mtime provenance) when EXIF carries no date', async () => {
@@ -289,7 +374,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records[0]?.gps).toBeNull();
   });
 
-  it('treats an EXIF read failure as no-EXIF (mtime fallback) and never drops the photo', async () => {
+  it('treats an EXIF read failure as no-EXIF (mtime fallback), reports it, and never drops the photo', async () => {
     const mtimeMs = Date.UTC(2020, 10, 5);
     const fs = buildFs({ 'corrupt.heic': { mtimeMs } });
     const { deps } = makeDeps(fs, { throwsFor: ['corrupt.heic'] });
@@ -299,8 +384,12 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.mediaType).toBe('photo');
     expect(records[0]?.date).toEqual({ value: new Date(mtimeMs), source: 'mtime' });
-    expect(result.skipped).toEqual([]);
-    expect(c.skips).toEqual([]);
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
+      ref: 'corrupt.heic',
+      reason: 'partial metadata unavailable: exif fail /import-root/corrupt.heic',
+      code: 'E_EXIF',
+    });
+    expect(c.skips).toEqual(result.skipped);
   });
 
   it('reads duration via probeMedia for audio/video and prefers the probed mime', async () => {
@@ -328,7 +417,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(exifCalls).toEqual([]);
   });
 
-  it('keeps a video record with null duration and reports a diagnostic when probeMedia fails', async () => {
+  it('keeps a video record with null duration and reports the partial metadata when probeMedia fails', async () => {
     const fs = buildFs({ 'broken.mp4': { mtimeMs: 7 } });
     const { deps } = makeDeps(fs, {}, { throwsFor: ['broken.mp4'] });
     const c = makeContext(deps);
@@ -337,9 +426,11 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.durationSec).toBeNull();
     expect(records[0]?.mimeType).toBe('video/mp4'); // falls back to the extension mime
-    expect(result.skipped.map((item) => ({ ...item, reason: item.reason.replace(/\\/g, '/') }))).toEqual([
-      { ref: 'broken.mp4', reason: 'could not probe media: probe fail /import-root/broken.mp4', code: 'E_PROBE' },
-    ]);
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
+      ref: 'broken.mp4',
+      reason: 'partial metadata unavailable: probe fail /import-root/broken.mp4',
+      code: 'E_PROBE',
+    });
   });
 
   it('honors a pre-aborted signal — emits nothing and returns a zero-count result', async () => {

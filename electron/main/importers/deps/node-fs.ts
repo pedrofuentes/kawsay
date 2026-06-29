@@ -26,6 +26,7 @@ export const nodeFs: FsLike = {
       isDirectory: () => stats.isDirectory(),
     };
   },
+  realpath: (path) => fsp.realpath(path),
   async exists(path): Promise<boolean> {
     try {
       await fsp.access(path);

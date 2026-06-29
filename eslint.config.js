@@ -4,7 +4,14 @@ import jsxA11y from 'eslint-plugin-jsx-a11y';
 
 export default tseslint.config(
   {
-    ignores: ['out/**', 'dist/**', 'coverage/**', 'node_modules/**', '.worktrees/**'],
+    ignores: [
+      'out/**',
+      'dist/**',
+      'coverage/**',
+      'node_modules/**',
+      '.worktrees/**',
+      '.semgrep/semgrep-rules/**',
+    ],
   },
   // typescript-eslint STRICT for every TypeScript file (main, preload, renderer,
   // shared, tests, config). Non-type-checked strict keeps lint fast and needs no

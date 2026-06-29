@@ -108,16 +108,12 @@ the macOS dmg/zip + Windows nsis and *launches*. Most of the work was diagnosing
   ≈ 199 MB (Apple Silicon), and the x64 cross-build `Kawsay-0.1.0.dmg` ≈ 205 MB (its `better_sqlite3.node`
   is `Mach-O x86_64`). The Windows `.exe` cannot be cross-built on macOS (native module + NSIS) → produced on
   the `windows-latest` runner; the config is verified correct.
-- **The 12.11.x bump has a CI cost: it dropped the Node-20 prebuilt.** `better-sqlite3` 12.9.0 shipped a
+- **The 12.11.x bump required a CI Node bump because it dropped the Node-20 prebuilt.** `better-sqlite3` 12.9.0 shipped a
   `node-v115` (Node 20, the `engines` floor) prebuilt for every platform; **≥ 12.10.1 ships only `node-v127`
-  / `v137` / `v141` / `v147` (Node 22/24/25/…)**. The `ci.yml` Verify job pins **Node 20**, so after the bump
-  it finds no prebuilt and tries to compile: macOS/Linux compile from source and pass, but **Windows fails** —
-  the runner's bundled node-gyp 10.2.0 mis-detects the image's "Visual Studio 18" (VS 2026) and its PowerShell
-  finder crashes (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`). The clean fix is a one-line `.github` change —
-  `node-version: 20` → `22` in `ci.yml` (Node 22's `node-v127` prebuilt exists for 12.11.1, and
-  `ac4-egress.yml` already uses Node 22) — which is coordinator-owned, so P1 escalates it rather than touching
-  the harness. Takeaway: when bumping a native dep, check its **prebuilt ABI matrix against the CI Node
-  version**, not just the local one.
+  / `v137` / `v141` / `v147` (Node 22/24/25/…)**. The `ci.yml` Verify job now pins **Node 22**, so CI gets
+  the `node-v127` prebuilt for 12.11.1 instead of compiling from source on Windows. Takeaway: when bumping a
+  native dep, check its **prebuilt ABI matrix against the CI Node version**, not just the local one; any future
+  runtime bump belongs in a deliberate harness-integrity PR.
 **Impact**: Keep `better-sqlite3 ≥ 12.11.1` for Electron 42 (floor-tested), and pair it with **CI Node ≥ 22**
 so Windows Verify gets a prebuilt instead of compiling. Leave
 `enableEmbeddedAsarIntegrityValidation` **off** in `electron-builder.yml` until Developer ID signing +

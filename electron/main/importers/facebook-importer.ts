@@ -25,7 +25,7 @@ import { zipHasEntryName } from './zip-markers';
  *     "JosÃ©" and an emoji as four garbled chars. {@link decodeFacebookText}
  *     re-reads the latin1 bytes as UTF-8 so names and messages are faithful — a
  *     non-negotiable for a memorial archive.
- *  2. **Timestamps.** Posts and media `creation_timestamp` are Unix **seconds**;
+ *  2. **Timestamps.** Posts `timestamp` and media `creation_timestamp` are Unix **seconds**;
  *     message `timestamp_ms` is Unix **milliseconds**. Both are canonicalized to
  *     a UTC instant with `message` provenance.
  *
