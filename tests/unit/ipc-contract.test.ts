@@ -23,7 +23,7 @@ import {
   TRANSCRIPTION_PROGRESS,
   ipcEventContract,
 } from '@shared/ipc/events';
-import { itemCardSchema } from '@shared/ipc/schemas';
+import { itemCardSchema, pathSchema } from '@shared/ipc/schemas';
 
 const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
@@ -96,6 +96,13 @@ describe('ipcContract — library:open', () => {
     expect(reqOk(LIBRARY_OPEN, { path: '/Users/mateo/Mum' })).toBe(true);
     expect(reqOk(LIBRARY_OPEN, { path: '' })).toBe(false);
     expect(reqOk(LIBRARY_OPEN, { path: '/x', personName: 'Mum' })).toBe(false);
+  });
+});
+
+describe('pathSchema — local-only absolute paths', () => {
+  it('rejects UNC network shares', () => {
+    expect(pathSchema.safeParse('\\\\server\\share\\Mum').success).toBe(false);
+    expect(pathSchema.safeParse('\\\\server\\share').success).toBe(false);
   });
 });
 
@@ -336,11 +343,8 @@ describe('ipcContract — import:start / import:cancel', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'relative/export' })).toBe(false);
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x', rogue: 1 })).toBe(false);
   });
-  it('accepts Windows absolute paths as renderer-supplied paths', () => {
+  it('accepts Windows drive-letter absolute paths as renderer-supplied paths', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'C:\\Users\\mateo\\Memories' })).toBe(
-      true,
-    );
-    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '\\\\server\\share\\Memories' })).toBe(
       true,
     );
   });
