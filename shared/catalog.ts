@@ -2,7 +2,14 @@
 // IPC boundary and by the importer contract. No Node or DOM dependencies.
 
 /** The connector sources Kawsay can import from (ARCHITECTURE §3.1). */
-export const SOURCE_TYPES = ['folder', 'whatsapp', 'google_takeout', 'facebook', 'linkedin'] as const;
+export const SOURCE_TYPES = [
+  'folder',
+  'whatsapp',
+  'google_takeout',
+  'facebook',
+  'linkedin',
+  'imessage',
+] as const;
 export type SourceType = (typeof SOURCE_TYPES)[number];
 
 /** The kind of memory an item represents. */
