@@ -44,11 +44,11 @@ export const THUMBNAIL_MAX_BYTES = 512 * 1024;
 export const THUMBNAIL_DATA_URL_MAX_LENGTH = 1024 * 1024;
 
 function isAbsoluteLocalPath(value: string): boolean {
-  return (
-    value.startsWith('/') ||
-    /^[A-Za-z]:[\\/]/u.test(value) ||
-    /^\\\\[^\\]+\\[^\\]+/u.test(value)
-  );
+  if (value.startsWith('\\\\')) {
+    return false;
+  }
+
+  return value.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(value);
 }
 
 /** A non-empty, bounded absolute path supplied by the renderer. */
