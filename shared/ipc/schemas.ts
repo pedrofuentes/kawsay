@@ -16,6 +16,8 @@ export const NAME_MAX_LENGTH = 200;
 export const QUERY_MAX_LENGTH = 512;
 export const CURSOR_MAX_LENGTH = 4096;
 export const PAGE_LIMIT_MAX = 200;
+export const ITEM_CARD_TITLE_MAX_LENGTH = 200;
+export const ITEM_CARD_DESCRIPTION_MAX_LENGTH = 4096;
 
 /**
  * Transcript bounds (#164, defence-in-depth — NOT a UX limit). A real recording's
@@ -85,8 +87,8 @@ export const itemCardSchema = z.strictObject({
   mimeType: z.string().max(NAME_MAX_LENGTH).nullable(),
   captureDate: z.string().max(NAME_MAX_LENGTH).nullable(),
   durationSec: z.number().nonnegative().nullable(),
-  title: z.string().nullable(),
-  description: z.string().nullable(),
+  title: z.string().max(ITEM_CARD_TITLE_MAX_LENGTH).nullable(),
+  description: z.string().max(ITEM_CARD_DESCRIPTION_MAX_LENGTH).nullable(),
   isFavourite: z.boolean(),
   width: z.number().int().nonnegative().nullable(),
   height: z.number().int().nonnegative().nullable(),

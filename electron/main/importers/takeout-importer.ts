@@ -16,6 +16,7 @@ import type {
   RecordDateSource,
   SkippedItem,
 } from './types';
+import { zipHasEntryName } from './zip-markers';
 
 /**
  * Card C4 (AC-11): the Google Takeout importer — it brings a Takeout export's
@@ -112,6 +113,7 @@ const MBOX_FROM_RE = /^From /;
 /** mboxrd body-escape: a leading run of `>` before `From ` (`>From `, `>>From `)
  *  loses exactly ONE `>` on read, restoring the literal body line. */
 const MBOXRD_ESCAPE_RE = /^>(>*From )/;
+const MAX_MBOX_MESSAGE_BYTES = 4 * 1024 * 1024;
 
 // Takeout's per-image metadata sidecar, as Google writes it. Every field is
 // optional and treated as untrusted: types are checked before use.
@@ -750,7 +752,25 @@ async function* streamMboxRecords(
 
   let rl: ReturnType<typeof createInterface> | undefined;
   let current: string[] = [];
+  let currentBytes = 0;
+  let currentTooLarge = false;
   let messageIndex = 0;
+  const resetCurrent = (): void => {
+    current = [];
+    currentBytes = 0;
+    currentTooLarge = false;
+  };
+  const skipOversize = (): void => {
+    recordSkip(
+      ctx,
+      skipped,
+      `${file.sourceRef}#${messageIndex}`,
+      `mbox message exceeds ${MAX_MBOX_MESSAGE_BYTES} bytes`,
+      'E_MBOX_MESSAGE_TOO_LARGE',
+    );
+    messageIndex += 1;
+    resetCurrent();
+  };
   try {
     // Constructed INSIDE the try so a throw here (defensive — a corrupt stream
     // the readline interface rejects) is reported via onSkip, never escaping the
@@ -760,16 +780,29 @@ async function* streamMboxRecords(
     for await (const line of rl) {
       if (ctx.signal.aborted) break;
       if (MBOX_FROM_RE.test(line)) {
-        if (hasContent(current)) {
+        if (currentTooLarge) {
+          skipOversize();
+        } else if (hasContent(current)) {
           yield* emitMessage(current, messageIndex, file, ctx, skipped);
           messageIndex += 1;
         }
-        current = [];
+        resetCurrent();
       } else {
-        current.push(unescapeMboxrd(line));
+        if (!currentTooLarge) {
+          const restored = unescapeMboxrd(line);
+          currentBytes += Buffer.byteLength(restored) + 1;
+          if (currentBytes > MAX_MBOX_MESSAGE_BYTES) {
+            current = [];
+            currentTooLarge = true;
+          } else {
+            current.push(restored);
+          }
+        }
       }
     }
-    if (!ctx.signal.aborted && hasContent(current)) {
+    if (!ctx.signal.aborted && currentTooLarge) {
+      skipOversize();
+    } else if (!ctx.signal.aborted && hasContent(current)) {
       yield* emitMessage(current, messageIndex, file, ctx, skipped);
     }
   } catch (error) {
@@ -799,14 +832,7 @@ export const takeoutImporter: Importer = {
         return await deps.fs.exists(inputPath);
       }
       if (isZip(inputPath)) {
-        // The zip's central directory stores entry names verbatim, so a byte
-        // scan recognizes a Takeout export without extracting it.
-        const buffer = await deps.fs.readFile(inputPath);
-        return (
-          buffer.includes('Takeout/') ||
-          buffer.includes('archive_browser.html') ||
-          buffer.includes('.mbox')
-        );
+        return await zipHasEntryName(inputPath, ['Takeout/', 'archive_browser.html', '.mbox']);
       }
       const stat = await deps.fs.stat(inputPath);
       if (!stat.isDirectory()) return false;

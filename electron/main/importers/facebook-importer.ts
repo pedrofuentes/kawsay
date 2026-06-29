@@ -9,6 +9,7 @@ import type {
   MediaInfo,
   SkippedItem,
 } from './types';
+import { zipHasEntryName } from './zip-markers';
 
 /**
  * Card C5 (AC-16): the Facebook **"Download Your Information"** connector. The
@@ -215,19 +216,24 @@ async function probeSafe(deps: ImporterDeps, absPath: string): Promise<MediaInfo
 function buildResolver(entries: readonly Entry[]): (uri: string) => string | null {
   const byEntry = new Map<string, string>();
   const byBase = new Map<string, string>();
+  const bySuffix = new Map<string, string | null>();
   for (const entry of entries) {
     byEntry.set(entry.entryPath, entry.absPath);
     byBase.set(basename(entry.entryPath), entry.absPath);
+    const parts = entry.entryPath.split('/').filter((part) => part.length > 0);
+    for (let i = 0; i < parts.length; i++) {
+      const suffix = parts.slice(i).join('/');
+      const existing = bySuffix.get(suffix);
+      if (existing === undefined) bySuffix.set(suffix, entry.absPath);
+      else if (existing !== entry.absPath) bySuffix.set(suffix, null);
+    }
   }
   return (uri: string): string | null => {
     const norm = toPosix(uri).replace(/^\.?\//, '');
     const direct = byEntry.get(norm);
     if (direct !== undefined) return direct;
-    // An archive that nests everything under a top-level folder: match the entry
-    // whose path ends with the uri (only reached when the direct lookup misses).
-    for (const [path, abs] of byEntry) {
-      if (path === norm || path.endsWith(`/${norm}`)) return abs;
-    }
+    const suffix = bySuffix.get(norm);
+    if (suffix !== undefined) return suffix;
     return byBase.get(basename(norm)) ?? null;
   };
 }
@@ -269,7 +275,9 @@ async function gatherEntries(
 ): Promise<{ entries: Entry[]; discoveryFailed: boolean }> {
   if (isZip(inputPath)) {
     try {
-      const extracted = await ctx.deps.extractArchive(inputPath, ctx.workDir, { signal: ctx.signal });
+      const extracted = await ctx.deps.extractArchive(inputPath, ctx.workDir, {
+        signal: ctx.signal,
+      });
       return {
         entries: extracted.map((e) => ({ entryPath: toPosix(e.entryPath), absPath: e.absPath })),
         discoveryFailed: false,
@@ -440,17 +448,16 @@ function collectPostMedia(post: Record<string, unknown>): Record<string, unknown
   return media;
 }
 
-async function parsePostsFile(
+async function* parsePostsFile(
   entry: Entry,
   resolve: (uri: string) => string | null,
   deps: ImporterDeps,
   ctx: ImportContext,
   skipped: SkippedItem[],
-): Promise<CatalogRecord[]> {
+): AsyncGenerator<CatalogRecord> {
   const parsed = await readJson(entry, ctx, skipped);
-  if (parsed === undefined) return [];
+  if (parsed === undefined) return;
 
-  const records: CatalogRecord[] = [];
   const posts = asPostArray(parsed);
   for (let i = 0; i < posts.length; i++) {
     const post = posts[i];
@@ -484,37 +491,36 @@ async function parsePostsFile(
         skipped,
       );
       if (record !== null) {
-        records.push(record);
+        yield record;
         emitted += 1;
       }
     }
     if (body !== null) {
-      records.push(postTextRecord(body, postDate, `${entry.entryPath}#${i}:text`));
+      yield postTextRecord(body, postDate, `${entry.entryPath}#${i}:text`);
       emitted += 1;
     }
     // A post with neither text nor a resolvable attachment is still a dated
     // occurrence — keep it so nothing the person posted is silently dropped.
     if (emitted === 0) {
-      records.push(postTextRecord(null, postDate, `${entry.entryPath}#${i}:text`));
+      yield postTextRecord(null, postDate, `${entry.entryPath}#${i}:text`);
     }
   }
-  return records;
 }
 
 const MESSAGE_MEDIA_FIELDS = ['photos', 'videos', 'audio_files', 'gifs', 'files'] as const;
 
-async function parseMessageFile(
+async function* parseMessageFile(
   entry: Entry,
   resolve: (uri: string) => string | null,
   deps: ImporterDeps,
   ctx: ImportContext,
   skipped: SkippedItem[],
-): Promise<CatalogRecord[]> {
+): AsyncGenerator<CatalogRecord> {
   const parsed = await readJson(entry, ctx, skipped);
-  if (parsed === undefined) return [];
+  if (parsed === undefined) return;
   if (!isObject(parsed)) {
     recordSkip(ctx, skipped, entry.entryPath, 'message thread is not an object', 'E_PARSE');
-    return [];
+    return;
   }
 
   const threadTitle = fbText(parsed.title);
@@ -524,7 +530,6 @@ async function parseMessageFile(
     .filter((name): name is string => name !== null);
   const baseMeta: Record<string, unknown> = { threadTitle, threadPath, participants };
 
-  const records: CatalogRecord[] = [];
   const messages = asArray(parsed.messages);
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
@@ -556,7 +561,7 @@ async function parseMessageFile(
           skipped,
         );
         if (record !== null) {
-          records.push(record);
+          yield record;
           emitted += 1;
         }
       }
@@ -576,43 +581,45 @@ async function parseMessageFile(
         skipped,
       );
       if (record !== null) {
-        records.push(record);
+        yield record;
         emitted += 1;
       }
     }
     if (content !== null) {
-      records.push(
-        messageTextRecord(content, date, author, `${entry.entryPath}#${i}:text`, baseMeta),
-      );
+      yield messageTextRecord(content, date, author, `${entry.entryPath}#${i}:text`, baseMeta);
       emitted += 1;
     }
     // A contentless message (e.g. a call note, an unsupported attachment) still
     // carries a sender and a time — keep it rather than silently drop it.
     if (emitted === 0) {
-      records.push(messageTextRecord(null, date, author, `${entry.entryPath}#${i}:text`, baseMeta));
+      yield messageTextRecord(null, date, author, `${entry.entryPath}#${i}:text`, baseMeta);
     }
   }
-  return records;
 }
 
-async function parseAlbumFile(
+async function* parseAlbumFile(
   entry: Entry,
   resolve: (uri: string) => string | null,
   deps: ImporterDeps,
   ctx: ImportContext,
   skipped: SkippedItem[],
-): Promise<CatalogRecord[]> {
+): AsyncGenerator<CatalogRecord> {
   const parsed = await readJson(entry, ctx, skipped);
-  if (parsed === undefined) return [];
+  if (parsed === undefined) return;
 
   const album = isObject(parsed) ? fbText(parsed.name) : null;
   const photos = Array.isArray(parsed) ? parsed : asArray(isObject(parsed) ? parsed.photos : []);
 
-  const records: CatalogRecord[] = [];
   for (let i = 0; i < photos.length; i++) {
     const photo = photos[i];
     if (!isObject(photo)) {
-      recordSkip(ctx, skipped, `${entry.entryPath}#${i}`, 'album entry is not an object', 'E_PARSE');
+      recordSkip(
+        ctx,
+        skipped,
+        `${entry.entryPath}#${i}`,
+        'album entry is not an object',
+        'E_PARSE',
+      );
       continue;
     }
     const record = await buildMediaRecord(
@@ -628,9 +635,8 @@ async function parseAlbumFile(
       ctx,
       skipped,
     );
-    if (record !== null) records.push(record);
+    if (record !== null) yield record;
   }
-  return records;
 }
 
 export const facebookImporter: Importer = {
@@ -640,10 +646,7 @@ export const facebookImporter: Importer = {
   async canHandle(inputPath: string, deps: ImporterDeps): Promise<boolean> {
     try {
       if (isZip(inputPath)) {
-        // The zip central directory stores entry names verbatim, so a byte scan
-        // recognises a Facebook export without extracting it.
-        const buffer = await deps.fs.readFile(inputPath);
-        return FB_ZIP_MARKERS.some((marker) => buffer.includes(marker));
+        return await zipHasEntryName(inputPath, FB_ZIP_MARKERS);
       }
       const stat = await deps.fs.stat(inputPath);
       if (!stat.isDirectory()) return false;
@@ -676,17 +679,25 @@ export const facebookImporter: Importer = {
     const resolve = buildResolver(entries);
     ctx.onProgress({ phase: 'parse', processed: 0, total: null, message: null });
 
-    const stages: [Entry[], (entry: Entry) => Promise<CatalogRecord[]>][] = [
-      [entries.filter((e) => isPostsFile(e.entryPath)), (e) => parsePostsFile(e, resolve, ctx.deps, ctx, skipped)],
-      [entries.filter((e) => isMessageFile(e.entryPath)), (e) => parseMessageFile(e, resolve, ctx.deps, ctx, skipped)],
-      [entries.filter((e) => isAlbumFile(e.entryPath)), (e) => parseAlbumFile(e, resolve, ctx.deps, ctx, skipped)],
+    const stages: [Entry[], (entry: Entry) => AsyncGenerator<CatalogRecord>][] = [
+      [
+        entries.filter((e) => isPostsFile(e.entryPath)),
+        (e) => parsePostsFile(e, resolve, ctx.deps, ctx, skipped),
+      ],
+      [
+        entries.filter((e) => isMessageFile(e.entryPath)),
+        (e) => parseMessageFile(e, resolve, ctx.deps, ctx, skipped),
+      ],
+      [
+        entries.filter((e) => isAlbumFile(e.entryPath)),
+        (e) => parseAlbumFile(e, resolve, ctx.deps, ctx, skipped),
+      ],
     ];
 
     for (const [files, parse] of stages) {
       for (const file of files) {
         if (ctx.signal.aborted) return { recordCount, skipped };
-        const records = await parse(file);
-        for (const record of records) {
+        for await (const record of parse(file)) {
           if (ctx.signal.aborted) return { recordCount, skipped };
           recordCount += 1;
           ctx.onProgress({ phase: 'emit', processed: recordCount, total: null });
