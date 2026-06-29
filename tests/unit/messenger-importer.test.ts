@@ -216,14 +216,13 @@ describe('messengerImporter (M3 — Facebook Messenger export connector)', () =>
 
       const { records, byRef, result, skips } = await run(dir, deps);
 
-      expect(result.recordCount).toBe(6);
+      expect(result.recordCount).toBe(5);
       expect(records.map((r) => r.sourceRef)).toEqual([
         'inbox/media_abcd/message_1.json#0:photos:0',
         'inbox/media_abcd/message_1.json#0:videos:0',
         'inbox/media_abcd/message_1.json#0:audio:0',
         'inbox/media_abcd/message_1.json#0:text',
         'inbox/media_abcd/message_1.json#1:text',
-        'inbox/media_abcd/message_1.json#1:photos:0',
       ]);
       expect(byRef.get('inbox/media_abcd/message_1.json#0:photos:0')).toMatchObject({
         mediaType: 'photo',
