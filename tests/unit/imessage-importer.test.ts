@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
@@ -118,6 +118,100 @@ function createMessagesDb(
   }
 }
 
+function createMessagesDbWithMaliciousAttachment(root: string, filename: string): void {
+  mkdirSync(join(root, 'Attachments'), { recursive: true });
+  const db = new Database(join(root, 'chat.db'));
+  try {
+    db.exec(`
+      CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+      CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, display_name TEXT);
+      CREATE TABLE message (
+        ROWID INTEGER PRIMARY KEY,
+        guid TEXT,
+        text TEXT,
+        date INTEGER,
+        is_from_me INTEGER,
+        handle_id INTEGER,
+        service TEXT
+      );
+      CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+      CREATE TABLE attachment (
+        ROWID INTEGER PRIMARY KEY,
+        guid TEXT,
+        filename TEXT,
+        mime_type TEXT,
+        total_bytes INTEGER,
+        transfer_name TEXT
+      );
+      CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+      INSERT INTO handle (ROWID, id) VALUES (1, '+15551234567');
+      INSERT INTO chat (ROWID, guid, display_name) VALUES (7, 'iMessage;-;+15551234567', 'Mamá');
+      INSERT INTO message (ROWID, guid, text, date, is_from_me, handle_id, service)
+        VALUES (1, 'msg-1', 'look', ${appleNs('2024-02-03T04:05:06.000Z')}, 0, 1, 'iMessage');
+      INSERT INTO chat_message_join (chat_id, message_id) VALUES (7, 1);
+      INSERT INTO attachment (ROWID, guid, filename, mime_type, total_bytes, transfer_name) VALUES
+        (10, 'att-evil', '${filename}', 'image/jpeg', 11, 'escape.jpg');
+      INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (1, 10);
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+function normalizePath(path: string): string {
+  return path.split(/[\\/]/).join('/');
+}
+
+function createMessagesDbWithAttachments(root: string): void {
+  mkdirSync(join(root, 'Attachments', 'aa'), { recursive: true });
+  mkdirSync(join(root, 'Attachments', 'bb'), { recursive: true });
+  mkdirSync(join(root, 'Attachments', 'cc'), { recursive: true });
+  writeFileSync(join(root, 'Attachments', 'aa', 'IMG_0001.JPG'), 'photo-bytes');
+  writeFileSync(join(root, 'Attachments', 'bb', 'clip.MOV'), 'video-bytes');
+  writeFileSync(join(root, 'Attachments', 'cc', 'voice.m4a'), 'audio-bytes');
+
+  const db = new Database(join(root, 'chat.db'));
+  try {
+    db.exec(`
+      CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+      CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, display_name TEXT);
+      CREATE TABLE message (
+        ROWID INTEGER PRIMARY KEY,
+        guid TEXT,
+        text TEXT,
+        date INTEGER,
+        is_from_me INTEGER,
+        handle_id INTEGER,
+        service TEXT
+      );
+      CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+      CREATE TABLE attachment (
+        ROWID INTEGER PRIMARY KEY,
+        guid TEXT,
+        filename TEXT,
+        mime_type TEXT,
+        total_bytes INTEGER,
+        transfer_name TEXT
+      );
+      CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+      INSERT INTO handle (ROWID, id) VALUES (1, '+15551234567');
+      INSERT INTO chat (ROWID, guid, display_name) VALUES
+        (7, 'iMessage;-;+15551234567', 'Mamá'),
+        (8, 'iMessage;-;family', 'Familia');
+      INSERT INTO message (ROWID, guid, text, date, is_from_me, handle_id, service)
+        VALUES (1, 'msg-1', 'look at these', ${appleNs('2024-02-03T04:05:06.000Z')}, 0, 1, 'iMessage');
+      INSERT INTO chat_message_join (chat_id, message_id) VALUES (7, 1), (8, 1);
+      INSERT INTO attachment (ROWID, guid, filename, mime_type, total_bytes, transfer_name) VALUES
+        (10, 'att-photo', '~/Library/Messages/Attachments/aa/IMG_0001.JPG', 'image/jpeg', 11, 'IMG_0001.JPG'),
+        (11, 'att-video', 'Attachments/bb/clip.MOV', 'video/quicktime', 11, 'clip.MOV'),
+        (12, 'att-audio', 'cc/voice.m4a', 'audio/mp4', 11, 'voice.m4a');
+      INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (1, 10), (1, 11), (1, 12);
+    `);
+  } finally {
+    db.close();
+  }
+}
+
 async function run(inputPath: string, deps: ImporterDeps, signal?: AbortSignal) {
   const c = makeContext(deps, signal);
   const records: CatalogRecord[] = [];
@@ -131,19 +225,67 @@ describe('imessageImporter (M3 — macOS Messages chat.db connector)', () => {
     expect(imessageImporter.displayName).toBe('iMessage/SMS');
   });
 
-  it('canHandle accepts only a macOS Messages folder with chat.db and Attachments', async () => {
+  it('canHandle accepts only a Messages-shaped folder using the SQLite header marker', async () => {
     const dir = makeTmpDir('imessage-can-');
     const plain = makeTmpDir('imessage-plain-');
     try {
-      createMessagesDb(dir, [{ text: 'hola', date: appleNs('2024-02-03T04:05:06.000Z') }]);
+      mkdirSync(join(dir, 'Attachments'), { recursive: true });
+      writeFileSync(join(dir, 'chat.db'), Buffer.from('SQLite format 3\0rest of file'));
       mkdirSync(join(plain, 'Attachments'), { recursive: true });
-      new Database(join(plain, 'chat.db')).close();
+      writeFileSync(join(plain, 'chat.db'), 'not sqlite');
 
       expect(await imessageImporter.canHandle(dir, depsForRealDir())).toBe(true);
       expect(await imessageImporter.canHandle(plain, depsForRealDir())).toBe(false);
     } finally {
       removeTmpDir(dir);
       removeTmpDir(plain);
+    }
+  });
+
+  it('emits linked photo, video, and audio attachments once when a message appears in multiple chats', async () => {
+    const dir = makeTmpDir('imessage-attachments-');
+    try {
+      createMessagesDbWithAttachments(dir);
+
+      const { records, result, byRef, skips } = await run(dir, depsForRealDir());
+
+      expect(result.recordCount).toBe(4);
+      expect(skips).toEqual([]);
+      expect(records.map((r) => r.sourceRef)).toEqual([
+        'message:1',
+        'message:1:attachment:10',
+        'message:1:attachment:11',
+        'message:1:attachment:12',
+      ]);
+      expect(byRef.get('message:1')?.sourceMeta).toMatchObject({
+        chatGuid: 'iMessage;-;+15551234567',
+        chatName: 'Mamá',
+        chatGuids: ['iMessage;-;+15551234567', 'iMessage;-;family'],
+      });
+
+      const photo = byRef.get('message:1:attachment:10');
+      const video = byRef.get('message:1:attachment:11');
+      const audio = byRef.get('message:1:attachment:12');
+      expect(photo).toMatchObject({
+        mediaType: 'photo',
+        mimeType: 'image/jpeg',
+        body: 'look at these',
+        author: '+15551234567',
+        sourceMeta: {
+          parentMessageRef: 'message:1',
+          attachmentGuid: 'att-photo',
+          attachmentFileName: 'IMG_0001.JPG',
+          attachmentRelativePath: 'aa/IMG_0001.JPG',
+        },
+      });
+      expect(normalizePath(photo?.originalPath ?? '')).toContain('/Attachments/aa/IMG_0001.JPG');
+      expect(video).toMatchObject({ mediaType: 'video', mimeType: 'video/quicktime' });
+      expect(normalizePath(video?.originalPath ?? '')).toContain('/Attachments/bb/clip.MOV');
+      expect(audio).toMatchObject({ mediaType: 'audio', mimeType: 'audio/mp4' });
+      expect(normalizePath(audio?.originalPath ?? '')).toContain('/Attachments/cc/voice.m4a');
+      expect(photo?.date?.value.toISOString()).toBe('2024-02-03T04:05:06.000Z');
+    } finally {
+      removeTmpDir(dir);
     }
   });
 
@@ -178,6 +320,53 @@ describe('imessageImporter (M3 — macOS Messages chat.db connector)', () => {
       expect(byRef.get('message:2')?.body).toHaveLength(20_000);
     } finally {
       removeTmpDir(dir);
+    }
+  });
+
+  it('skips a traversal attachment filename and never stats or copies outside the Attachments root', async () => {
+    const dir = makeTmpDir('imessage-traversal-');
+    const escapeFile = join(dir, '..', 'escape.jpg');
+    try {
+      createMessagesDbWithMaliciousAttachment(dir, '../../escape.jpg');
+      writeFileSync(escapeFile, 'escaped-bytes');
+
+      const realDeps = depsForRealDir();
+      const statPaths: string[] = [];
+      const deps: ImporterDeps = {
+        ...realDeps,
+        fs: {
+          ...realDeps.fs,
+          async stat(path: string): Promise<FileStat> {
+            statPaths.push(path);
+            return await realDeps.fs.stat(path);
+          },
+        },
+      };
+
+      const { records, result, skips } = await run(dir, deps);
+
+      expect(records.some((r) => r.sourceRef === 'message:1:attachment:10')).toBe(false);
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          ref: 'message:1:attachment:10',
+          code: 'E_ATTACHMENT_PATH',
+        }),
+      );
+      expect(records.some((r) => (r.originalPath ?? '').includes('escape.jpg'))).toBe(false);
+
+      const safeRoot = normalizePath(join(dir, 'Attachments'));
+      for (const statted of statPaths.map(normalizePath)) {
+        expect(statted.startsWith(safeRoot) || statted.startsWith(normalizePath(dir))).toBe(true);
+        expect(statted).not.toContain('/escape.jpg');
+      }
+      expect(result.recordCount).toBe(1);
+    } finally {
+      removeTmpDir(dir);
+      try {
+        rmSync(escapeFile, { force: true });
+      } catch {
+        /* ignore */
+      }
     }
   });
 

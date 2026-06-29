@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   The connector reads SQLite read-only, honors cancellation, reports partial failures as skips, and
   adds no network egress. Attachment materialization/linkage and deeper SMS-vs-iMessage behavior are
   deferred follow-ups; the raw `service` value is retained in provenance.
+- **iMessage/SMS attachment import (M3 · AC-25)**: the Messages connector now links `attachment` /
+  `message_attachment_join` rows to their messages, imports photo/video/audio originals through the
+  content-addressed blob store, de-duplicates source references when the same message appears in
+  multiple chats, and keeps detection cheap with a folder + SQLite-header marker check.
 
 ### Changed
 
