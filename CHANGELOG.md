@@ -13,18 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+### Security
+
+### Removed
+
+## [0.2.1] - 2026-06-28
+
+### Changed
+
+- **macOS media binaries are now built from pinned FFmpeg source** (#181): Kawsay builds `ffmpeg` +
+  `ffprobe` for both macOS arm64 and x64 from FFmpeg `n7.1`
+  (`b08d7969c550a804a59511c7b83f2dd8cc0499b8`) with LGPL-only flags (`--disable-gpl`,
+  `--disable-nonfree`) instead of redistributing the nonfree macOS arm64 prebuilt.
+
+### Fixed
+
 - **Audio transcription and video thumbnails work in the shipped app again** (#175): v0.2.0 packaged
   with **no `ffmpeg` binary at all** (pnpm blocks `ffmpeg-static`'s download-on-install postinstall, so
   it was never fetched) and a **wrong-architecture `ffprobe`** (`ffprobe-static@3.1.0` ships a Mach-O
   **x86_64** binary mislabelled as `darwin/arm64`), so every transcription job (audio extraction) and
   every video poster frame failed on the installed app. Kawsay now bundles **correct-arch `ffmpeg` +
-  `ffprobe` for all three targets** (macOS arm64, macOS x64, Windows x64), staged from the prebuilt
-  `@ffmpeg-installer`/`@ffprobe-installer` packages into `Resources/media/<os>-<arch>/` as out-of-asar
-  resources (the same pattern as `whisper-cli`), resolved at runtime by `media-binaries.ts`. A CI **build
-  guard** (`scripts/verify-media-binaries.mjs`, in `ci.yml` + `release.yml`) now **fails the build** if
-  any staged binary is missing or the wrong arch, so this can never silently ship again.
-
-### Security
+  `ffprobe` for all three targets** (macOS arm64, macOS x64, Windows x64): macOS binaries are built
+  from pinned LGPL FFmpeg source, while Windows keeps the clean installer prebuilts. They are staged into
+  `Resources/media/<os>-<arch>/` as out-of-asar resources (the same pattern as `whisper-cli`) and
+  resolved at runtime by `media-binaries.ts`. A CI **build guard** (`scripts/verify-media-binaries.mjs`,
+  in `ci.yml` + `release.yml`) now **fails the build** if any staged binary is missing, wrong-arch, or
+  reports nonfree / not legally redistributable licensing, so this can never silently ship again.
 
 ### Removed
 

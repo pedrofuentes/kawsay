@@ -8,9 +8,10 @@
 // Self-contained plain ESM (no transpile): it carries its own copy of the Mach-O
 // /PE arch reader from tests/helpers/binary-arch.ts — keep the two in lock-step.
 
-import { closeSync, openSync, readSync, statSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   MEDIA_TOOLS,
   hostMediaTargets,
@@ -93,39 +94,81 @@ function detectBinaryArch(file) {
 
 // --- Guard ----------------------------------------------------------------------
 
-const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const targets = hostMediaTargets();
-const failures = [];
-
-for (const target of targets) {
-  const expectedArch = targetArch(target);
-  for (const tool of MEDIA_TOOLS) {
-    const path = stagedBinaryPath(tool, target, projectRoot);
-    const label = `${target}/${mediaBinaryName(tool, target)}`;
-    let size = 0;
-    try {
-      size = statSync(path).size;
-    } catch {
-      failures.push(`MISSING ${label} (${path}) — run \`pnpm stage:media\``);
-      continue;
-    }
-    if (size === 0) {
-      failures.push(`EMPTY ${label} (${path})`);
-      continue;
-    }
-    const arch = detectBinaryArch(path);
-    if (arch !== expectedArch) {
-      failures.push(`WRONG-ARCH ${label}: expected ${expectedArch}, got ${arch} (${path})`);
-      continue;
-    }
-    console.log(`ok: ${label} — ${arch}, ${size} bytes`);
+function defaultFfmpegLicenseText(path) {
+  try {
+    return execFileSync(path, ['-L'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    });
+  } catch {
+    return readFileSync(path, 'latin1');
   }
 }
 
-if (failures.length > 0) {
-  console.error(`\nmedia-binary guard FAILED for ${process.platform} (${targets.join(', ')}):`);
-  for (const f of failures) console.error(`  ✗ ${f}`);
-  process.exit(1);
+export function ffmpegLicenseFailures(label, path, readLicenseText = defaultFfmpegLicenseText) {
+  const text = String(readLicenseText(path));
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes('--enable-nonfree') ||
+    normalized.includes('has nonfree parts') ||
+    normalized.includes('not legally redistributable')
+  ) {
+    return [
+      `NONFREE ${label}: ffmpeg -L/build configuration contains nonfree/not legally redistributable (${path})`,
+    ];
+  }
+  return [];
 }
 
-console.log(`\nmedia-binary guard PASSED: ${targets.length * MEDIA_TOOLS.length} binaries verified for ${targets.join(', ')}`);
+export function verifyMediaBinaries({
+  projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
+  targets = hostMediaTargets(),
+  log = console.log,
+} = {}) {
+  const failures = [];
+
+  for (const target of targets) {
+    const expectedArch = targetArch(target);
+    for (const tool of MEDIA_TOOLS) {
+      const path = stagedBinaryPath(tool, target, projectRoot);
+      const label = `${target}/${mediaBinaryName(tool, target)}`;
+      let size = 0;
+      try {
+        size = statSync(path).size;
+      } catch {
+        failures.push(`MISSING ${label} (${path}) — run \`pnpm stage:media\``);
+        continue;
+      }
+      if (size === 0) {
+        failures.push(`EMPTY ${label} (${path})`);
+        continue;
+      }
+      const arch = detectBinaryArch(path);
+      if (arch !== expectedArch) {
+        failures.push(`WRONG-ARCH ${label}: expected ${expectedArch}, got ${arch} (${path})`);
+        continue;
+      }
+      if (tool === 'ffmpeg') {
+        failures.push(...ffmpegLicenseFailures(label, path));
+      }
+      log(`ok: ${label} — ${arch}, ${size} bytes`);
+    }
+  }
+
+  return failures;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const targets = hostMediaTargets();
+  const failures = verifyMediaBinaries({ targets });
+
+  if (failures.length > 0) {
+    console.error(`\nmedia-binary guard FAILED for ${process.platform} (${targets.join(', ')}):`);
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    process.exit(1);
+  }
+
+  console.log(`\nmedia-binary guard PASSED: ${targets.length * MEDIA_TOOLS.length} binaries verified for ${targets.join(', ')}`);
+}

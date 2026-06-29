@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   MEDIA_RESOURCE_SUBDIR,
   MediaBinaryNotFoundError,
@@ -15,12 +15,21 @@ import {
 import {
   SUPPORTED_MEDIA_TARGETS,
   hostMediaTargets,
+  mediaBinarySourceKind,
   sourceBinaryPath,
   stageMediaBinaries,
-  targetArch,
 } from '../../scripts/stage-media-binaries.mjs';
 import { detectBinaryArch } from '../helpers/binary-arch';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
+
+function writeFakeMachO64(path: string, arch: 'arm64' | 'x64'): void {
+  const header = Buffer.alloc(64);
+  header.writeUInt32LE(0xfeedfacf, 0);
+  header.writeUInt32LE(arch === 'arm64' ? 0x0100000c : 0x01000007, 4);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, header);
+  chmodSync(path, 0o755);
+}
 
 // #175 — the packaged v0.2.0 app shipped NO ffmpeg binary at all (pnpm blocked
 // ffmpeg-static's download postinstall) and a WRONG-ARCH ffprobe (ffprobe-static
@@ -99,7 +108,7 @@ describe('media binary resolver — pure platform/arch mapping (#175)', () => {
   });
 });
 
-describe('installed source binaries are correct-arch for ALL shipped targets (#175)', () => {
+describe('media binary staging sources are correct for shipped targets (#175/#181)', () => {
   // The cross-arch guard: pnpm `supportedArchitectures` installs the
   // @ffmpeg-installer / @ffprobe-installer per-platform packages for every
   // target, so a single arm64 macOS runner can stage the x64 dmg's binaries
@@ -109,18 +118,28 @@ describe('installed source binaries are correct-arch for ALL shipped targets (#1
     expect([...SUPPORTED_MEDIA_TARGETS].sort()).toEqual(['mac-arm64', 'mac-x64', 'win-x64']);
   });
 
-  for (const target of SUPPORTED_MEDIA_TARGETS) {
-    for (const tool of ['ffmpeg', 'ffprobe'] as const) {
-      it(`provides a ${targetArch(target)} ${tool} for ${target}`, () => {
-        const src = sourceBinaryPath(tool, target);
-        expect(existsSync(src), `${tool} source binary missing for ${target} at ${src}`).toBe(true);
-        expect(statSync(src).size).toBeGreaterThan(0);
-        expect(detectBinaryArch(src), `${tool} for ${target} is the wrong arch`).toBe(
-          targetArch(target),
+  it('uses from-source binaries already staged under resources/media for macOS', () => {
+    for (const target of ['mac-arm64', 'mac-x64'] as const) {
+      for (const tool of ['ffmpeg', 'ffprobe'] as const) {
+        expect(mediaBinarySourceKind(tool, target)).toBe('from-source');
+        expect(sourceBinaryPath(tool, target, '/repo')).toBe(
+          join('/repo', 'resources', 'media', target, tool),
         );
-      });
+      }
     }
-  }
+  });
+
+  it('keeps Windows on installer-provided prebuilt binaries', () => {
+    for (const tool of ['ffmpeg', 'ffprobe'] as const) {
+      expect(mediaBinarySourceKind(tool, 'win-x64')).toBe('installer');
+      const src = sourceBinaryPath(tool, 'win-x64');
+      expect(src).toContain(`@${tool}-installer`);
+      expect(src.endsWith(`${tool}.exe`)).toBe(true);
+      expect(existsSync(src), `${tool} source binary missing for win-x64 at ${src}`).toBe(true);
+      expect(statSync(src).size).toBeGreaterThan(0);
+      expect(detectBinaryArch(src), `${tool} for win-x64 is the wrong arch`).toBe('x64');
+    }
+  });
 });
 
 describe('the app resolver returns an on-disk, host-arch binary in dev (#175)', () => {
@@ -132,6 +151,16 @@ describe('the app resolver returns an on-disk, host-arch binary in dev (#175)', 
 
   beforeAll(() => {
     projectRoot = makeTmpDir('media-resolve-');
+    if (process.platform === 'darwin') {
+      for (const [target, arch] of [
+        ['mac-arm64', 'arm64'],
+        ['mac-x64', 'x64'],
+      ] as const) {
+        for (const tool of ['ffmpeg', 'ffprobe'] as const) {
+          writeFakeMachO64(join(projectRoot, 'resources', 'media', target, tool), arch);
+        }
+      }
+    }
     stageMediaBinaries({ targets: hostMediaTargets(), projectRoot });
   });
 

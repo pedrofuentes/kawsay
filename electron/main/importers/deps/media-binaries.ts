@@ -5,8 +5,9 @@ import { join } from 'node:path';
 // ffmpeg (pnpm blocked ffmpeg-static's download postinstall) and a wrong-arch
 // ffprobe (ffprobe-static@3.1.0's darwin/arm64 file is Mach-O x86_64), breaking
 // every transcription job + every video thumbnail. The fix bundles the correct
-// per-arch binaries (from @ffmpeg-installer / @ffprobe-installer) as plain files
-// under resources/media/<os>-<arch>/, staged by scripts/stage-media-binaries.mjs
+// per-arch binaries (macOS built from pinned LGPL FFmpeg source; Windows from
+// @ffmpeg-installer / @ffprobe-installer) as plain files under
+// resources/media/<os>-<arch>/, staged by scripts/stage-media-binaries.mjs
 // and copied by electron-builder as an extraResource — exactly how whisper-cli
 // is bundled (see electron/main/transcription/whisper-cli.ts, the sibling this
 // module deliberately mirrors).

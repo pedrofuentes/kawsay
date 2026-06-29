@@ -4,12 +4,11 @@
 // as an extraResource (electron-builder.yml), and the app resolves it at runtime
 // through electron/main/importers/deps/media-binaries.ts.
 //
-// Source binaries come from the @ffmpeg-installer / @ffprobe-installer
-// per-platform packages, which ship prebuilt binaries as plain files (NO
-// download-on-install — that is the trap that left v0.2.0 with no ffmpeg). pnpm
-// `supportedArchitectures` (package.json) installs all three target packages on
-// every runner, so a single arm64 macOS runner can stage the x64 dmg's binaries
-// too — closing the cross-arch gap.
+// macOS binaries are built from pinned FFmpeg source by scripts/build-ffmpeg.sh
+// and are already staged in resources/media/mac-{arm64,x64}/. Windows keeps the
+// clean @ffmpeg-installer / @ffprobe-installer prebuilts, which ship binaries as
+// plain files (NO download-on-install — that is the trap that left v0.2.0 with
+// no ffmpeg).
 //
 // Plain ESM run under bare `node` (predev / predist / CI before packaging); its
 // exports are also exercised by tests/unit/media-binaries.test.ts (typed via the
@@ -50,23 +49,33 @@ export function mediaBinaryName(tool, target) {
 const INSTALLER_SCOPE = { ffmpeg: '@ffmpeg-installer', ffprobe: '@ffprobe-installer' };
 
 /**
- * Absolute path of the installer-provided source binary for a tool/target. The
- * installer's main package (e.g. `@ffmpeg-installer/ffmpeg`) sits beside the
- * per-platform packages (`@ffmpeg-installer/darwin-x64`, `win32-x64`, …) that
- * actually carry the binaries; resolve the scope dir from the main package, then
- * the `<platform>-<arch>` sibling. No version is hard-coded.
+ * Where a tool/target binary is staged under a project/app root.
  */
-export function sourceBinaryPath(tool, target) {
+export function stagedBinaryPath(tool, target, projectRoot) {
+  return join(projectRoot, 'resources', 'media', target, mediaBinaryName(tool, target));
+}
+
+/** macOS is built locally from source; Windows remains on clean installer prebuilts. */
+export function mediaBinarySourceKind(_tool, target) {
+  return targetPlatform(target) === 'win32' ? 'installer' : 'from-source';
+}
+
+/**
+ * Absolute path of the source binary for a tool/target. macOS source builds are
+ * already staged in resources/media by build-ffmpeg.sh. Windows source binaries
+ * come from the installer packages; the main package sits beside the per-platform
+ * packages (`@ffmpeg-installer/win32-x64`, …), so resolve the scope dir from the
+ * main package, then the `<platform>-<arch>` sibling. No version is hard-coded.
+ */
+export function sourceBinaryPath(tool, target, projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')) {
+  if (mediaBinarySourceKind(tool, target) === 'from-source') {
+    return stagedBinaryPath(tool, target, projectRoot);
+  }
   const scope = INSTALLER_SCOPE[tool];
   if (scope === undefined) throw new Error(`unknown media tool: ${tool}`);
   const mainPkgJson = require.resolve(`${scope}/${tool}/package.json`);
   const scopeDir = dirname(dirname(mainPkgJson));
   return join(scopeDir, `${targetPlatform(target)}-${targetArch(target)}`, mediaBinaryName(tool, target));
-}
-
-/** Where a tool/target binary is staged under a project/app root. */
-export function stagedBinaryPath(tool, target, projectRoot) {
-  return join(projectRoot, 'resources', 'media', target, mediaBinaryName(tool, target));
 }
 
 /**
@@ -86,10 +95,11 @@ export function hostMediaTargets(platform = process.platform) {
 }
 
 /**
- * Copy the correct-arch ffmpeg + ffprobe for each target into
- * `<projectRoot>/resources/media/<target>/`, making them executable. copyFileSync
- * does NOT preserve the source mode, so chmod +x is required for every non-Windows
- * target (the installer ffprobe also ships without +x). Returns the staged paths.
+ * Ensure the correct-arch ffmpeg + ffprobe for each target are present under
+ * `<projectRoot>/resources/media/<target>/`, making them executable. macOS
+ * binaries must already be there from build-ffmpeg.sh; Windows binaries are
+ * copied from installer packages. copyFileSync does NOT preserve source mode, so
+ * chmod +x is required for every non-Windows target. Returns the staged paths.
  */
 export function stageMediaBinaries({ targets = hostMediaTargets(), projectRoot } = {}) {
   if (typeof projectRoot !== 'string' || projectRoot.length === 0) {
@@ -98,12 +108,14 @@ export function stageMediaBinaries({ targets = hostMediaTargets(), projectRoot }
   const staged = [];
   for (const target of targets) {
     for (const tool of MEDIA_TOOLS) {
-      const src = sourceBinaryPath(tool, target);
+      const dest = stagedBinaryPath(tool, target, projectRoot);
+      const src = sourceBinaryPath(tool, target, projectRoot);
       const { size } = statSync(src); // throws if the per-arch installer package is absent
       if (size === 0) throw new Error(`source ${tool} for ${target} is empty: ${src}`);
-      const dest = stagedBinaryPath(tool, target, projectRoot);
-      mkdirSync(dirname(dest), { recursive: true });
-      copyFileSync(src, dest);
+      if (src !== dest) {
+        mkdirSync(dirname(dest), { recursive: true });
+        copyFileSync(src, dest);
+      }
       if (targetPlatform(target) !== 'win32') chmodSync(dest, 0o755);
       staged.push(dest);
     }

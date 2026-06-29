@@ -56,14 +56,15 @@ extraResources:
     filter:
       - '**/*'
   # ffmpeg + ffprobe for audio extraction (transcription) and video posters /
-  # media probing (ingestion) — #175. Staged per-arch from the
-  # @ffmpeg-installer / @ffprobe-installer packages by
-  # scripts/stage-media-binaries.mjs into resources/media/<os>-<arch>/ (run via
-  # `pnpm stage:media` in predist / CI before packaging), then bundled here so
+  # media probing (ingestion) — #175/#181. macOS binaries are built from pinned
+  # LGPL FFmpeg source by scripts/build-ffmpeg.sh; Windows is copied from clean
+  # @ffmpeg-installer / @ffprobe-installer packages by scripts/stage-media-binaries.mjs
+  # into resources/media/<os>-<arch>/ (run via `pnpm stage:media` in predist / CI
+  # before packaging), then bundled here so
   # each installer carries ONLY its own-arch binary, resolved at runtime by
   # electron/main/importers/deps/media-binaries.ts. v0.2.0 shipped NO ffmpeg and a
   # wrong-arch ffprobe; the CI build guard (scripts/verify-media-binaries.mjs)
-  # now fails the build if a staged binary is missing or the wrong arch.
+  # now fails the build if a staged binary is missing, wrong-arch, or nonfree.
   - from: 'resources/media/${os}-${arch}/'
     to: 'media/${os}-${arch}/'
     filter:
