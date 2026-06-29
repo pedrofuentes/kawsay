@@ -257,7 +257,9 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
     const deps = fakeDeps({
       dirs: [dir],
       files: [join(dir, 'your_activity_across_facebook')],
-      entries: { [dir]: ['profile_information.json', 'avatar.jpg', 'your_activity_across_facebook'] },
+      entries: {
+        [dir]: ['profile_information.json', 'avatar.jpg', 'your_activity_across_facebook'],
+      },
     });
     // Takeout's predicate really would accept this folder…
     expect(await takeoutImporter.canHandle(dir, deps)).toBe(true);

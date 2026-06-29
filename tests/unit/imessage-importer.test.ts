@@ -71,7 +71,10 @@ function depsForRealDir(): ImporterDeps {
   };
 }
 
-function createMessagesDb(root: string, rows: { text: string; date: number; fromMe?: boolean }[]): void {
+function createMessagesDb(
+  root: string,
+  rows: { text: string; date: number; fromMe?: boolean }[],
+): void {
   mkdirSync(join(root, 'Attachments'), { recursive: true });
   const db = new Database(join(root, 'chat.db'));
   try {

@@ -1,6 +1,13 @@
 import { join } from 'node:path';
 import Database, { type Database as SqliteDatabase } from 'better-sqlite3';
-import type { CatalogRecord, ImportContext, Importer, ImporterDeps, ImportResult, SkippedItem } from './types';
+import type {
+  CatalogRecord,
+  ImportContext,
+  Importer,
+  ImporterDeps,
+  ImportResult,
+  SkippedItem,
+} from './types';
 
 const CHAT_DB = 'chat.db';
 const ATTACHMENTS_DIR = 'Attachments';
@@ -37,7 +44,10 @@ function boundString(value: string, maxChars: number): string {
   return chars.length <= maxChars ? value : chars.slice(0, maxChars).join('');
 }
 
-function nullableBound(value: string | null | undefined, maxChars = MAX_DTO_STRING_CHARS): string | null {
+function nullableBound(
+  value: string | null | undefined,
+  maxChars = MAX_DTO_STRING_CHARS,
+): string | null {
   if (value === null || value === undefined) return null;
   return boundString(value, maxChars);
 }
@@ -130,7 +140,10 @@ export const imessageImporter: Importer = {
     }
   },
 
-  async *import(inputPath: string, ctx: ImportContext): AsyncGenerator<CatalogRecord, ImportResult> {
+  async *import(
+    inputPath: string,
+    ctx: ImportContext,
+  ): AsyncGenerator<CatalogRecord, ImportResult> {
     const skipped: SkippedItem[] = [];
     let recordCount = 0;
 
@@ -142,7 +155,13 @@ export const imessageImporter: Importer = {
     try {
       db = openMessagesDb(chatDbPath);
     } catch (error) {
-      recordSkip(ctx, skipped, CHAT_DB, `could not open Messages chat.db: ${String(error)}`, 'E_OPEN_DB');
+      recordSkip(
+        ctx,
+        skipped,
+        CHAT_DB,
+        `could not open Messages chat.db: ${String(error)}`,
+        'E_OPEN_DB',
+      );
       return { recordCount, skipped };
     }
 
@@ -189,7 +208,13 @@ export const imessageImporter: Importer = {
         }
       }
     } catch (error) {
-      recordSkip(ctx, skipped, CHAT_DB, `could not read Messages chat.db: ${String(error)}`, 'E_READ_DB');
+      recordSkip(
+        ctx,
+        skipped,
+        CHAT_DB,
+        `could not read Messages chat.db: ${String(error)}`,
+        'E_READ_DB',
+      );
     } finally {
       db.close();
     }

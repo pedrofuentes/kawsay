@@ -351,7 +351,9 @@ describe('createCatalogSession (the IPC application service)', () => {
     try {
       s.createLibrary({ path: root });
 
-      expect(() => s.beginImport({ sourceType: 'folder', inputPath: root })).toThrow('ffmpeg missing');
+      expect(() => s.beginImport({ sourceType: 'folder', inputPath: root })).toThrow(
+        'ffmpeg missing',
+      );
 
       expect(coordinator.started).toHaveLength(0);
       const db = openCatalog(join(root, 'catalog.sqlite3'));
