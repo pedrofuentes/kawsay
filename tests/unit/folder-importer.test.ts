@@ -40,6 +40,17 @@ function abs(rel: string): string {
   return rel === '.' ? ROOT : join(ROOT, ...rel.split('/'));
 }
 
+function normalizePathSeparators(value: string): string {
+  return value.replaceAll('\\', '/');
+}
+
+function normalizeSkipReasons(skips: readonly SkippedItem[]): SkippedItem[] {
+  return skips.map((skip) => ({
+    ...skip,
+    reason: normalizePathSeparators(skip.reason),
+  }));
+}
+
 function fileStat(spec: FileSpec): FileStat {
   return {
     size: spec.size ?? 0,
@@ -301,7 +312,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.sourceRef).toBe('broken-exif.jpg');
     expect(records[0]?.date?.source).toBe('mtime');
-    expect(result.skipped).toContainEqual({
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
       ref: 'broken-exif.jpg',
       reason: 'partial metadata unavailable: exif fail /import-root/broken-exif.jpg',
       code: 'E_EXIF',
@@ -319,7 +330,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.sourceRef).toBe('broken-probe.mp4');
     expect(records[0]?.durationSec).toBeNull();
-    expect(result.skipped).toContainEqual({
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
       ref: 'broken-probe.mp4',
       reason: 'partial metadata unavailable: probe fail /import-root/broken-probe.mp4',
       code: 'E_PROBE',
@@ -360,7 +371,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.mediaType).toBe('photo');
     expect(records[0]?.date).toEqual({ value: new Date(mtimeMs), source: 'mtime' });
-    expect(result.skipped).toContainEqual({
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
       ref: 'corrupt.heic',
       reason: 'partial metadata unavailable: exif fail /import-root/corrupt.heic',
       code: 'E_EXIF',
@@ -402,7 +413,7 @@ describe('folderImporter (card C1 — generic folder / cloud-download importer, 
     expect(records).toHaveLength(1);
     expect(records[0]?.durationSec).toBeNull();
     expect(records[0]?.mimeType).toBe('video/mp4'); // falls back to the extension mime
-    expect(result.skipped).toContainEqual({
+    expect(normalizeSkipReasons(result.skipped)).toContainEqual({
       ref: 'broken.mp4',
       reason: 'partial metadata unavailable: probe fail /import-root/broken.mp4',
       code: 'E_PROBE',
