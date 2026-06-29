@@ -11,6 +11,7 @@ import { facebookImporter } from '../../electron/main/importers/facebook-importe
 import { linkedinImporter } from '../../electron/main/importers/linkedin-importer';
 import { imessageImporter } from '../../electron/main/importers/imessage-importer';
 import { telegramImporter } from '../../electron/main/importers/telegram-importer';
+import { messengerImporter } from '../../electron/main/importers/messenger-importer';
 import type { ImporterDeps } from '../../electron/main/importers/types';
 import { buildZip } from '../helpers/zip';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
@@ -99,6 +100,7 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
   it('wires every concrete connector in, specific-first with folder as the catch-all', () => {
     expect(importers).toEqual([
       whatsappImporter,
+      messengerImporter,
       facebookImporter,
       linkedinImporter,
       imessageImporter,
@@ -111,6 +113,7 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
   it('lists the generic folder importer LAST so it never shadows a specific connector', () => {
     expect(importers.map((importer) => importer.id)).toEqual([
       'whatsapp',
+      'messenger',
       'facebook',
       'linkedin',
       'imessage',
@@ -243,19 +246,22 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
     // out-resolve folder, which is only true while folder is registered last.
     const whatsappDir = '/d/whatsapp';
     const takeoutDir = '/d/Takeout';
+    const messengerDir = '/d/messenger';
     const facebookDir = '/d/facebook';
     const linkedinDir = '/d/linkedin';
     const telegramDir = '/d/telegram';
     const deps = fakeDeps({
-      dirs: [whatsappDir, takeoutDir, facebookDir, linkedinDir, telegramDir],
+      dirs: [whatsappDir, takeoutDir, messengerDir, facebookDir, linkedinDir, telegramDir],
       files: [
         join(whatsappDir, '_chat.txt'),
+        join(messengerDir, 'your_activity_across_facebook'),
         join(facebookDir, 'your_activity_across_facebook'),
         join(linkedinDir, 'Connections.csv'),
         join(telegramDir, 'result.json'),
       ],
       entries: {
         [takeoutDir]: ['archive_browser.html'],
+        [messengerDir]: ['your_activity_across_facebook'],
         [facebookDir]: ['your_activity_across_facebook'],
         [linkedinDir]: ['Connections.csv'],
         [telegramDir]: ['result.json'],
@@ -264,10 +270,18 @@ describe('importer registry — composition & resolution order (ARCHITECTURE §3
     });
     expect(await selectImporter(whatsappDir, deps)).toBe(whatsappImporter);
     expect(await selectImporter(takeoutDir, deps)).toBe(takeoutImporter);
+    expect(await selectImporter(messengerDir, deps)).toBe(messengerImporter);
     expect(await selectImporter(facebookDir, deps)).toBe(facebookImporter);
     expect(await selectImporter(linkedinDir, deps)).toBe(linkedinImporter);
     expect(await selectImporter(telegramDir, deps)).toBe(telegramImporter);
-    for (const dir of [whatsappDir, takeoutDir, facebookDir, linkedinDir, telegramDir]) {
+    for (const dir of [
+      whatsappDir,
+      takeoutDir,
+      messengerDir,
+      facebookDir,
+      linkedinDir,
+      telegramDir,
+    ]) {
       expect(await selectImporter(dir, deps)).not.toBe(folderImporter);
     }
   });
