@@ -7,6 +7,7 @@ export const SOURCE_TYPES = [
   'whatsapp',
   'google_takeout',
   'messenger',
+  'instagram',
   'facebook',
   'linkedin',
   'imessage',
