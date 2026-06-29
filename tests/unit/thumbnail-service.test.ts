@@ -29,6 +29,17 @@ function fakeVideo(image: ThumbnailImage | null = { data: Buffer.from('WEBP'), m
   );
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 describe('createThumbnailService (on-demand, id-keyed, path-confined — U4 / AC-14)', () => {
   let root: string;
   let db: CatalogDatabase;
@@ -106,6 +117,26 @@ describe('createThumbnailService (on-demand, id-keyed, path-confined — U4 / AC
     const second = await service.getThumbnail(id);
 
     expect(first).toBe(second);
+    expect(image).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates concurrent renders for the same id and size in main before caching', async () => {
+    const pending = deferred<ThumbnailImage | null>();
+    const image = vi.fn<(absPath: string, maxDimension: number) => Promise<ThumbnailImage | null>>(
+      () => pending.promise,
+    );
+    const service = createThumbnailService({ db, root, image, video: fakeVideo(null) });
+    const id = seedItem('photo', { contentHash: hash('9'), kind: 'content_addressed' });
+
+    const first = service.getThumbnail(id);
+    const second = service.getThumbnail(id);
+
+    expect(image).toHaveBeenCalledTimes(1);
+    pending.resolve({ data: Buffer.from('DEDUP'), mimeType: 'image/jpeg' });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      `data:image/jpeg;base64,${Buffer.from('DEDUP').toString('base64')}`,
+      `data:image/jpeg;base64,${Buffer.from('DEDUP').toString('base64')}`,
+    ]);
     expect(image).toHaveBeenCalledTimes(1);
   });
 

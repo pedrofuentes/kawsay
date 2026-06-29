@@ -114,4 +114,33 @@ describe('MediaThumbnail (real photo/video thumbnails with icon fallback — U4)
     const img = await screen.findByRole('img');
     expect(img.className).toContain('thumb-fade-in');
   });
+
+  it('bounds the renderer thumbnail memo so long scrolling cannot grow it forever', async () => {
+    const getThumbnail = vi.fn(({ id }: { id: string }) =>
+      Promise.resolve<string | null>(`data:image/jpeg;base64,${btoa(id)}`),
+    );
+    const api = makeFakeApi({ getThumbnail });
+    const oldest = makeItemCard({ id: 'cache-bound-000', hasThumbnail: true });
+    const items = [
+      oldest,
+      ...Array.from({ length: 256 }, (_unused, i) =>
+        makeItemCard({ id: `cache-bound-${String(i + 1).padStart(3, '0')}`, hasThumbnail: true }),
+      ),
+    ];
+
+    const mounted = render(
+      <KawsayApiProvider api={api}>
+        {items.map((item) => (
+          <MediaThumbnail key={item.id} item={item} icon="photos" />
+        ))}
+      </KawsayApiProvider>,
+    );
+    await waitFor(() => expect(getThumbnail).toHaveBeenCalledTimes(257));
+
+    mounted.unmount();
+    renderThumb(oldest, api);
+
+    await waitFor(() => expect(getThumbnail).toHaveBeenCalledTimes(258));
+    expect(getThumbnail).toHaveBeenLastCalledWith({ id: oldest.id });
+  });
 });

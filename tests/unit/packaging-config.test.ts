@@ -78,6 +78,14 @@ function releaseJobBlock(jobId: string): string {
 /** Every `uses:` line in the workflow (for the SHA-pin assertions). */
 const releaseUsesLines = releaseYml.split(/\r?\n/).filter((l) => /^\s*uses:/.test(l));
 
+function escapedRegexLiteral(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function assetPathRegex(...parts: string[]): RegExp {
+  return new RegExp(parts.map(escapedRegexLiteral).join(String.raw`[\\/]`));
+}
+
 /** Return the indented body lines that belong to a top-level YAML key. */
 function topLevelBlock(name: string): string {
   const lines = builderYml.split(/\r?\n/);
@@ -201,8 +209,11 @@ describe('whisper-cli engine bundling contract (#129, ADR-0027)', () => {
     // A native executable cannot be spawned from inside an asar (same constraint
     // as ffmpeg/ffprobe), so it travels in Resources, copied from the per-arch
     // build output into <resources>/whisper/<os>-<arch>/.
-    expect(extra).toMatch(/from:\s*'?resources\/whisper\/\$\{os\}-\$\{arch\}/);
-    expect(extra).toMatch(/to:\s*'?whisper\/\$\{os\}-\$\{arch\}/);
+    expect(extra).toMatch(assetPathRegex('resources', 'whisper', '${os}-${arch}'));
+    expect(extra).toMatch(assetPathRegex('whisper', '${os}-${arch}'));
+    expect('from: resources\\whisper\\${os}-${arch}').toMatch(
+      assetPathRegex('resources', 'whisper', '${os}-${arch}'),
+    );
   });
 
   it('parameterizes the bundle per build leg via the ${os}-${arch} macros (each shipped arch)', () => {
@@ -220,7 +231,7 @@ describe('whisper-cli engine bundling contract (#129, ADR-0027)', () => {
     // <resourcesPath>/<subdir>/<os>-<arch>/whisper-cli[.exe]; the `to:` sub-dir
     // here MUST equal that constant or the packaged app can't find the binary.
     expect(WHISPER_CLI_RESOURCE_SUBDIR).toBe('whisper');
-    expect(extra).toMatch(new RegExp(`to:\\s*'?${WHISPER_CLI_RESOURCE_SUBDIR}/`));
+    expect(extra).toMatch(new RegExp(`to:\\s*'?${escapedRegexLiteral(WHISPER_CLI_RESOURCE_SUBDIR)}[\\\\/]`));
   });
 
   it('ships NO model alongside the binary (the ggml model is a separate opt-in download)', () => {
@@ -244,8 +255,11 @@ describe('ffmpeg + ffprobe media-binary bundling contract (#175)', () => {
     // A native executable cannot be spawned from inside an asar (same constraint as
     // whisper-cli), so the binaries travel in Resources, copied per-arch into
     // <resources>/media/<os>-<arch>/.
-    expect(extra).toMatch(/from:\s*'?resources\/media\/\$\{os\}-\$\{arch\}/);
-    expect(extra).toMatch(/to:\s*'?media\/\$\{os\}-\$\{arch\}/);
+    expect(extra).toMatch(assetPathRegex('resources', 'media', '${os}-${arch}'));
+    expect(extra).toMatch(assetPathRegex('media', '${os}-${arch}'));
+    expect('from: resources\\media\\${os}-${arch}').toMatch(
+      assetPathRegex('resources', 'media', '${os}-${arch}'),
+    );
   });
 
   it('parameterizes the bundle per build leg via the ${os}-${arch} macros (each shipped arch)', () => {
@@ -262,7 +276,7 @@ describe('ffmpeg + ffprobe media-binary bundling contract (#175)', () => {
     // <resourcesPath>/<subdir>/<os>-<arch>/<ffmpeg|ffprobe>[.exe]; the `to:` sub-dir
     // here MUST equal that constant or the packaged app can't find the binaries.
     expect(MEDIA_RESOURCE_SUBDIR).toBe('media');
-    expect(extra).toMatch(new RegExp(`to:\\s*'?${MEDIA_RESOURCE_SUBDIR}/`));
+    expect(extra).toMatch(new RegExp(`to:\\s*'?${escapedRegexLiteral(MEDIA_RESOURCE_SUBDIR)}[\\\\/]`));
   });
 });
 
@@ -346,6 +360,19 @@ describe('release workflow publishes ONE consolidated GitHub Release — no publ
   it('hands platform installers from the build legs to the publish job via artifacts', () => {
     expect(build).toMatch(/uses:\s*actions\/upload-artifact@[0-9a-f]{40}/);
     expect(publish).toMatch(/uses:\s*actions\/download-artifact@[0-9a-f]{40}/);
+  });
+
+  it('uploads and verifies update metadata by release channel instead of hard-coding latest (#172)', () => {
+    // Stable releases use latest.yml/latest-mac.yml, but prerelease tags such as
+    // v1.2.3-beta.1 produce beta.yml/beta-mac.yml. The release guard must derive
+    // and validate the channel from the tag, otherwise prereleases fail closed only
+    // after the human-gated publish job starts.
+    expect(build).toMatch(/dist\/\*\.yml/);
+    expect(publish).toMatch(/channel="\$\{tag#\*-\}"/);
+    expect(publish).toMatch(/"\$\{channel\}-mac\.yml"/);
+    expect(publish).toMatch(/"\$\{channel\}\.yml"/);
+    expect(publish).not.toMatch(/\[ -f latest-mac\.yml \]/);
+    expect(publish).not.toMatch(/\[ -f latest\.yml \]/);
   });
 
   it('keeps the protected `release` environment human gate on the single publish job only', () => {
