@@ -58,4 +58,27 @@ describe('importer registry — zip auto-detect cache (#94)', () => {
       removeTmpDir(dir);
     }
   });
+
+  it('bounds the shared zip-entry cache by evicting the oldest opened archives', async () => {
+    const yauzl = await import('yauzl');
+    const { selectImporter } = await import('../../electron/main/importers/registry');
+    const { takeoutImporter } = await import('../../electron/main/importers/takeout-importer');
+    const openPromise = vi.mocked(yauzl.openPromise);
+    openPromise.mockClear();
+    const dir = makeTmpDir('registry-zip-cache-bound-');
+    const zips = Array.from({ length: 33 }, (_, index) => join(dir, `takeout-${index}.zip`));
+
+    try {
+      for (const zip of zips) {
+        writeFileSync(zip, buildZip([{ name: 'Takeout/archive_browser.html' }]));
+        expect(await selectImporter(zip, deps())).toBe(takeoutImporter);
+      }
+      expect(openPromise).toHaveBeenCalledTimes(33);
+
+      expect(await selectImporter(zips[0], deps())).toBe(takeoutImporter);
+      expect(openPromise).toHaveBeenCalledTimes(34);
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
 });

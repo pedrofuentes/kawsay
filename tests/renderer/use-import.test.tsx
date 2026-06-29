@@ -74,6 +74,54 @@ describe('useImport', () => {
     expect(result.current.message).toBe('Reading the archive…');
   });
 
+  it('replays early progress for each sequential import when both events arrive before their job ids (#97)', async () => {
+    const firstJobId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+    const secondJobId = '3f2504e0-4f89-41d3-9a0c-0305e82c3302';
+    const startImport = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        api.emitProgress(
+          makeProgressEvent({
+            jobId: firstJobId,
+            processed: 12,
+            total: 48,
+            message: 'Reading the first archive…',
+          }),
+        );
+        return { jobId: firstJobId };
+      })
+      .mockImplementationOnce(async () => {
+        api.emitProgress(
+          makeProgressEvent({
+            jobId: secondJobId,
+            processed: 22,
+            total: 64,
+            message: 'Reading the second archive…',
+          }),
+        );
+        return { jobId: secondJobId };
+      });
+    const api = makeFakeApi({ startImport });
+    const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });
+
+    await act(async () => {
+      await result.current.start({ sourceType: 'whatsapp', inputPath: '/first.zip' });
+    });
+    expect(result.current.jobId).toBe(firstJobId);
+    expect(result.current.processed).toBe(12);
+    expect(result.current.message).toBe('Reading the first archive…');
+
+    await act(async () => {
+      await result.current.start({ sourceType: 'whatsapp', inputPath: '/second.zip' });
+    });
+
+    expect(result.current.status).toBe('running');
+    expect(result.current.jobId).toBe(secondJobId);
+    expect(result.current.processed).toBe(22);
+    expect(result.current.total).toBe(64);
+    expect(result.current.message).toBe('Reading the second archive…');
+  });
+
   it('ignores progress events belonging to a different job', async () => {
     const api = makeFakeApi();
     const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });
