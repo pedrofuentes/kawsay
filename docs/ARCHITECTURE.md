@@ -93,7 +93,6 @@ kawsay/
 │   │   ├── ingestion/
 │   │   │   ├── coordinator.ts       # orchestrates workers, relays progress, tallies skips (AC-9/15)
 │   │   │   ├── safe-extract.ts      # yauzl guarded extractor (AC-3/AC-10)
-│   │   │   ├── errors.ts            # ERR_ARCHIVE_* error codes + user message keys
 │   │   │   ├── metadata.ts          # exifr capture-date + EXIF/GPS
 │   │   │   ├── thumbnail.ts         # rendition generation (sharp images / ffmpeg video)
 │   │   │   ├── media-binaries.ts     # resolve staged per-arch ffmpeg/ffprobe path (#175)
@@ -141,13 +140,13 @@ kawsay/
 |----|-----------------------|-------|
 | **AC-1** WhatsApp E2E | `importers/whatsapp/` + `features/import/whatsapp/` | integration + e2e |
 | **AC-2** Folder photos/videos + dates + thumbs | `importers/folder/` + `ingestion/metadata.ts` + `ingestion/thumbnail.ts` | integration |
-| **AC-3** Safe extraction (zip-slip) | `ingestion/safe-extract.ts` + `ingestion/errors.ts` | unit + integration |
+| **AC-3** Safe extraction (zip-slip) | `importers/safe-extract.ts` | unit + integration |
 | **AC-4** Zero egress | `security/network-guard.ts` + `security/csp.ts` | `tests/ac4/*` (Node spies, Playwright, **mandatory** CI firewall + positive controls) |
 | **AC-5** Build/publish | `electron-builder.yml` + `.github/workflows/release.yml` + `main/index.ts` smoke | CI + e2e smoke |
 | **AC-6/7** Browse + search | `db/search.ts` + `features/timeline/` + `features/search/` | e2e + integration |
 | **AC-8** Virtualized timeline | `features/timeline/TimelineGrid.tsx` | e2e / perf |
 | **AC-9** Off-thread ingestion | `workers/ingestion-worker.ts` + `ingestion/coordinator.ts` | integration / perf |
-| **AC-10** Bomb/symlink rejection | `ingestion/safe-extract.ts` + `ingestion/errors.ts` | unit + integration |
+| **AC-10** Bomb/symlink rejection | `importers/safe-extract.ts` | unit + integration |
 | **AC-11** Takeout content | `importers/takeout/` | integration |
 | **AC-12** Walkthrough + Browse-first | `features/import/walkthrough/` | e2e |
 | **AC-13** Accessibility | `src/ui/*` + `styles/tokens.css` | e2e (axe) |
@@ -975,7 +974,7 @@ any byte is written:
 | Abort | `AbortSignal` checked before open and during streaming | `ERR_ARCHIVE_ABORTED` | AC-9 |
 
 ```ts
-// electron/main/ingestion/errors.ts
+// electron/main/importers/safe-extract.ts
 export type ArchiveErrorCode =
   | 'ERR_ARCHIVE_UNSAFE_PATH'   // AC-3: zip-slip / absolute / backslash traversal
   | 'ERR_ARCHIVE_BOMB'          // AC-10: ratio / total / per-entry / entry-count
@@ -1098,7 +1097,7 @@ publish: { provider: github, owner: pedrofuentes, repo: kawsay, releaseType: rel
 | `electron/preload/index.ts` | The entire renderer capability surface (zod-validated) |
 | `electron/main/ipc/schemas.ts` | zod schemas shared by preload + main |
 | `electron/main/importers/types.ts` | `Importer` / `CatalogRecord` / `ImporterDeps` — the extensibility boundary |
-| `electron/main/ingestion/safe-extract.ts` | Guarded archive extraction + `ERR_ARCHIVE_*` |
+| `electron/main/importers/safe-extract.ts` | Guarded archive extraction + `ERR_ARCHIVE_*` |
 | `electron/main/ingestion/coordinator.ts` | Off-thread ingestion + progress + skips (AC-9/AC-15) |
 | `electron/main/db/migrations/001_initial.sql` | The catalog schema (dedup-with-provenance) |
 | `electron/main/db/catalog-repo.ts` | Items / occurrences / sources; dedup write path |

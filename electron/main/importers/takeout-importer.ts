@@ -395,7 +395,7 @@ async function discover(
   if (isZip(inputPath)) {
     let entries: readonly { entryPath: string; absPath: string }[];
     try {
-      entries = await ctx.deps.extractArchive(inputPath, ctx.workDir);
+      entries = await ctx.deps.extractArchive(inputPath, ctx.workDir, { signal: ctx.signal });
     } catch (error) {
       // AC-15: a corrupt / locked / unreadable archive is reported and the run
       // returns its partial result — it never throws out to abort the import.

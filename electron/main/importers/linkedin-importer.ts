@@ -399,7 +399,7 @@ async function gatherEntries(
 ): Promise<{ entries: Entry[]; discoveryFailed: boolean }> {
   if (isZip(inputPath)) {
     try {
-      const extracted = await ctx.deps.extractArchive(inputPath, ctx.workDir);
+      const extracted = await ctx.deps.extractArchive(inputPath, ctx.workDir, { signal: ctx.signal });
       return {
         entries: extracted.map((e) => ({ entryPath: toPosix(e.entryPath), absPath: e.absPath })),
         discoveryFailed: false,
