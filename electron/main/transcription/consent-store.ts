@@ -51,6 +51,14 @@ const DEFAULT_FS: ConsentStoreFs = {
   mkdirSync: (path, options) => mkdirSync(path, options),
 };
 
+function diagnosticError(error: unknown): { code?: string; name: string } {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === undefined ? { name: error.name } : { name: error.name, code };
+  }
+  return { name: typeof error };
+}
+
 /**
  * Build the durable consent store over `filePath`. Reads are defensive: a missing
  * file, unreadable file, or malformed JSON all resolve to OPTED-OUT (never a
@@ -97,7 +105,7 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
         // leave a diagnostic rather than throwing out of the seam.
         console.warn(
           '[kawsay] could not persist transcription consent; future launches may remain opted-out',
-          error,
+          diagnosticError(error),
         );
       }
     },
