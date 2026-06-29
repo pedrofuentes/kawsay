@@ -4,19 +4,32 @@ import {
   installContentSecurityPolicy,
 } from '../../electron/main/security/csp';
 
+function parsePolicy(csp: string): Map<string, string[]> {
+  return new Map(
+    csp.split('; ').map((directive) => {
+      const [name, ...values] = directive.split(' ');
+      return [name, values];
+    }),
+  );
+}
+
+function expectDirective(csp: string, name: string, values: readonly string[]): void {
+  expect(parsePolicy(csp).get(name)).toEqual(values);
+}
+
 describe('buildContentSecurityPolicy (zero-egress CSP, ARCHITECTURE §2.2 / AC-4)', () => {
   it('locks the production policy down to local-only, no-network defaults', () => {
     const csp = buildContentSecurityPolicy();
-    expect(csp).toContain("default-src 'none'");
+    expectDirective(csp, 'default-src', ["'none'"]);
     // The renderer-side egress kill-switch: no fetch/XHR/WebSocket/EventSource.
-    expect(csp).toContain("connect-src 'none'");
-    expect(csp).toContain("script-src 'self'");
-    expect(csp).toContain("style-src 'self'");
-    expect(csp).toContain("font-src 'self'");
-    expect(csp).toContain("img-src 'self' data:");
-    expect(csp).toContain("object-src 'none'");
-    expect(csp).toContain("base-uri 'none'");
-    expect(csp).toContain("form-action 'none'");
+    expectDirective(csp, 'connect-src', ["'none'"]);
+    expectDirective(csp, 'script-src', ["'self'"]);
+    expectDirective(csp, 'style-src', ["'self'"]);
+    expectDirective(csp, 'font-src', ["'self'"]);
+    expectDirective(csp, 'img-src', ["'self'", 'data:']);
+    expectDirective(csp, 'object-src', ["'none'"]);
+    expectDirective(csp, 'base-uri', ["'none'"]);
+    expectDirective(csp, 'form-action', ["'none'"]);
   });
 
   it('never weakens production script execution with unsafe-inline or unsafe-eval', () => {
@@ -27,10 +40,16 @@ describe('buildContentSecurityPolicy (zero-egress CSP, ARCHITECTURE §2.2 / AC-4
 
   it('relaxes ONLY for the dev server (HMR needs the dev origin + websocket)', () => {
     const csp = buildContentSecurityPolicy({ devServerUrl: 'http://localhost:5173' });
-    expect(csp).toContain('http://localhost:5173');
-    expect(csp).toContain('ws://localhost:5173');
+    expectDirective(csp, 'script-src', [
+      "'self'",
+      "'unsafe-inline'",
+      "'unsafe-eval'",
+      'http://localhost:5173',
+    ]);
+    expectDirective(csp, 'style-src', ["'self'", "'unsafe-inline'", 'http://localhost:5173']);
+    expectDirective(csp, 'connect-src', ["'self'", 'http://localhost:5173', 'ws://localhost:5173']);
     // Even relaxed, the dev policy keeps a default-src floor.
-    expect(csp).toContain("default-src 'none'");
+    expectDirective(csp, 'default-src', ["'none'"]);
   });
 });
 

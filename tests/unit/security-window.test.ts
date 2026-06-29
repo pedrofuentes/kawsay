@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   applyNavigationHardening,
   buildSecureWebPreferences,
@@ -72,6 +72,12 @@ describe('applyNavigationHardening (navigation + window.open lockdown, ARCHITECT
     expect(wc.fireWillNavigate('file:///etc/passwd')).toBe(true);
   });
 
+  it('blocks an adversarial cross-file navigation that only shares the opaque file:// origin (#27)', () => {
+    const wc = fakeWebContents(appEntryUrl);
+    applyNavigationHardening(wc, { appEntryUrl, platform });
+    expect(wc.fireWillNavigate('file:///app/out/renderer/index.html/../evil.html')).toBe(true);
+  });
+
   it('blocks a sibling file in the app directory that is not the entry', () => {
     const wc = fakeWebContents(appEntryUrl);
     applyNavigationHardening(wc, { appEntryUrl, platform });
@@ -109,6 +115,17 @@ describe('applyNavigationHardening — Windows app entry (case-insensitive FS, i
   // this POSIX host and on CI.
   const appEntryUrl = 'file:///C:/app/out/renderer/index.html';
   const platform = 'win32' as const;
+
+  it('falls back to lexical normalization when Windows realpath reports ENOENT or ENOTDIR (#29)', () => {
+    const spy = vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+    try {
+      const wc = fakeWebContents(appEntryUrl);
+      applyNavigationHardening(wc, { appEntryUrl });
+      expect(wc.fireWillNavigate('file:///C:/app/out/renderer/../renderer/index.html')).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 
   it('allows navigation to the exact app entry (file:///C:/…)', () => {
     const wc = fakeWebContents(appEntryUrl);

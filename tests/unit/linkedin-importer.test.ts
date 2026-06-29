@@ -3,7 +3,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drainImporter } from '../../electron/main/importers/drain';
-import { linkedinImporter, parseLinkedInDate } from '../../electron/main/importers/linkedin-importer';
+import {
+  linkedinImporter,
+  parseLinkedInDate,
+} from '../../electron/main/importers/linkedin-importer';
 import type {
   CatalogRecord,
   FileStat,
@@ -346,6 +349,19 @@ describe('linkedinImporter (card C5 — LinkedIn CSV export, AC-16)', () => {
       // The 2 message records are gone; 2 connections + 1 rich-media remain.
       expect(records).toHaveLength(3);
       expect(skips.some((s) => s.code === 'E_READ')).toBe(true);
+    });
+
+    it('reports E_PARSE for an unreadable malformed CSV and keeps going', async () => {
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages.csv', content: 'Content,From\n"unterminated,Ana\n' },
+        { entryPath: 'Connections.csv', content: CONNECTIONS },
+      ];
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toContainEqual(
+        expect.objectContaining({ ref: 'messages.csv', code: 'E_PARSE' }),
+      );
+      expect(records.find((r) => r.author === 'José García')).toBeDefined();
     });
 
     it('reports E_PARSE for a CSV with no recognizable header and keeps going', async () => {
