@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createConsentStore } from '../../electron/main/transcription/consent-store';
@@ -34,14 +34,79 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
   });
 
   it('treats a corrupt consent file as opted-out (calm default, never throws)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const flat = join(dir, 'flat.json');
     writeFileSync(flat, '{ not valid json');
     const store = createConsentStore({ filePath: flat });
     expect(() => store.isOptedIn()).not.toThrow();
     expect(store.isOptedIn()).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('treats real not-a-directory consent paths as opted-out across platform-specific errors', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const blocker = join(dir, 'not-a-directory');
+    writeFileSync(blocker, 'file blocks child path');
+    const blockedPath = join(blocker, 'transcription-consent.json');
+
+    expect(createConsentStore({ filePath: blockedPath }).isOptedIn()).toBe(false);
+
+    const serializedLogs = JSON.stringify(warn.mock.calls);
+    const diagnosticCodes = warn.mock.calls.flatMap((call) =>
+      call
+        .filter((entry): entry is { code: string } => typeof entry === 'object' && entry !== null && 'code' in entry)
+        .map((entry) => entry.code),
+    );
+    expect(diagnosticCodes.filter((code) => !['ENOTDIR', 'ENOENT'].includes(code))).toEqual([]);
+    expect(serializedLogs).not.toContain(blockedPath);
+    expect(serializedLogs).not.toContain(dir);
+    warn.mockRestore();
+  });
+
+  it('logs unreadable filesystem errors without leaking the absolute consent path', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const unreadablePath = join(dir, 'nested', 'transcription-consent.json');
+    const error = new Error(`EACCES: permission denied, open '${unreadablePath}'`) as NodeJS.ErrnoException;
+    error.code = 'EACCES';
+
+    expect(
+      createConsentStore({
+        filePath: unreadablePath,
+        fs: {
+          readFileSync: () => {
+            throw error;
+          },
+          writeFileSync: () => undefined,
+          mkdirSync: () => undefined,
+        },
+      }).isOptedIn(),
+    ).toBe(false);
+
+    const serializedLogs = JSON.stringify(warn.mock.calls);
+    expect(warn.mock.calls.length).toBeGreaterThan(0);
+    expect(serializedLogs).toContain('EACCES');
+    expect(serializedLogs).not.toContain(unreadablePath);
+    expect(serializedLogs).not.toContain(dir);
+    warn.mockRestore();
+  });
+
+  it('logs malformed JSON diagnostics without passing a raw Error object', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const malformed = join(dir, 'malformed.json');
+    writeFileSync(malformed, '{ not valid json');
+
+    expect(createConsentStore({ filePath: malformed }).isOptedIn()).toBe(false);
+
+    expect(warn).toHaveBeenCalledWith(
+      '[kawsay] transcription consent was malformed; treating as opted-out',
+      expect.not.objectContaining({ stack: expect.any(String) }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(malformed);
+    warn.mockRestore();
   });
 
   it('does not throw when persisting fails — writes are best-effort (#160)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // The header contract promises a write failure "must not crash the calm main
     // process". A read-only / unwritable location surfaces as a throwing
     // mkdirSync or writeFileSync; setOptedIn must swallow it (fail-closed: the
@@ -73,5 +138,6 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
       },
     });
     expect(() => failingWrite.setOptedIn(true)).not.toThrow();
+    warn.mockRestore();
   });
 });

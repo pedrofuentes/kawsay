@@ -107,9 +107,24 @@ function defaultFfmpegLicenseText(path) {
   }
 }
 
-export function ffmpegLicenseFailures(label, path, readLicenseText = defaultFfmpegLicenseText) {
+function defaultNoticesText() {
+  return readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'NOTICES.md'), 'utf8');
+}
+
+export function ffmpegLicenseFailures(
+  label,
+  path,
+  readLicenseText = defaultFfmpegLicenseText,
+  readNoticesText = defaultNoticesText,
+) {
   const text = String(readLicenseText(path));
   const normalized = text.toLowerCase();
+  const notices = String(readNoticesText());
+  const noticesClaimLgplOnly = /configure policy:\s*lgpl-only/i.test(notices);
+  const isMacSourceBuild = label.startsWith('mac-');
+  const gplMismatchMessage = noticesClaimLgplOnly
+    ? `GPL-MISMATCH ${label}: ffmpeg build configuration enables GPL while NOTICES declares LGPL-only (${path})`
+    : `GPL-MISMATCH ${label}: ffmpeg build configuration enables GPL while macOS ffmpeg must be LGPL-only (${path})`;
   if (
     normalized.includes('--enable-nonfree') ||
     normalized.includes('has nonfree parts') ||
@@ -118,6 +133,9 @@ export function ffmpegLicenseFailures(label, path, readLicenseText = defaultFfmp
     return [
       `NONFREE ${label}: ffmpeg -L/build configuration contains nonfree/not legally redistributable (${path})`,
     ];
+  }
+  if (isMacSourceBuild && normalized.includes('--enable-gpl')) {
+    return [gplMismatchMessage];
   }
   return [];
 }

@@ -308,6 +308,32 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(job.workDir).toBe(join(root, 'extract', job.sourceId));
   });
 
+  it('beginImport resolves media binaries before registering a source (no orphan row on throw)', () => {
+    const s = createCatalogSession({
+      coordinator: coordinator.coordinator,
+      newId: () => JOB_ID,
+      resolveMediaBinaries: () => {
+        throw new Error('ffmpeg missing');
+      },
+    });
+    try {
+      s.createLibrary({ path: root });
+
+      expect(() => s.beginImport({ sourceType: 'folder', inputPath: root })).toThrow('ffmpeg missing');
+
+      expect(coordinator.started).toHaveLength(0);
+      const db = openCatalog(join(root, 'catalog.sqlite3'));
+      try {
+        const row = db.prepare('SELECT COUNT(*) AS n FROM sources').get() as { n: number };
+        expect(row.n).toBe(0);
+      } finally {
+        db.close();
+      }
+    } finally {
+      s.dispose();
+    }
+  });
+
   it('beginImport reaches every newly wired connector (Takeout, Facebook, LinkedIn)', () => {
     session.createLibrary({ path: root });
     for (const sourceType of ['google_takeout', 'facebook', 'linkedin'] as const) {

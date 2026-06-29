@@ -119,6 +119,14 @@ function zeroCounts(): TranscriptionCountsDTO {
   return { total: 0, transcribed: 0, failed: 0, skipped: 0, inFlight: 0 };
 }
 
+function diagnosticError(error: unknown): { code?: string; name: string } {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === undefined ? { name: error.name } : { name: error.name, code };
+  }
+  return { name: typeof error };
+}
+
 /** Map a worker item status onto the host action: persist a transcript, record a
  *  failed/skipped status, or ignore (cancelled stays pending; an idempotent
  *  skipped-existing was already done and must not be overwritten). */
@@ -268,7 +276,20 @@ export function createTranscriptionOrchestrator(
       };
 
       activeJobId = jobId;
-      worker.start(jobSpec);
+      try {
+        worker.start(jobSpec);
+      } catch (error) {
+        activeJobId = null;
+        counts = zeroCounts();
+        lastItem = null;
+        library = null;
+        emit();
+        console.warn(
+          '[kawsay] transcription worker failed to start; run left idle for retry',
+          diagnosticError(error),
+        );
+        throw error;
+      }
       emit();
       return { outcome: 'started', reason: null, counts: { ...startCounts } };
     },

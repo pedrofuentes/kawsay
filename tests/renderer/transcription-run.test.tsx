@@ -148,6 +148,20 @@ describe('TranscriptionRun — a gated refusal guides kindly, never errors (AC-2
     expect(await screen.findByText(/no recordings to transcribe/i)).toBeInTheDocument();
   });
 
+  it('logs a diagnostic when start is rejected instead of swallowing it silently (#179)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const start = vi.fn(() => Promise.reject(new Error('ipc unavailable')));
+    const { user } = setup(makeFakeApi({ startTranscription: start }));
+
+    await user.click(await screen.findByRole('button', { name: /start transcrib/i }));
+
+    expect(warn).toHaveBeenCalledWith(
+      '[kawsay] transcription start request failed; leaving controls at rest',
+      expect.any(Error),
+    );
+    warn.mockRestore();
+  });
+
   it('reassures when every recording already has words you can read', async () => {
     const start = vi.fn(() =>
       Promise.resolve(startResult({ outcome: 'idle', counts: counts({ total: 12, transcribed: 12 }) })),
