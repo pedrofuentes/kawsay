@@ -3,6 +3,7 @@ import { access, readdir, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { instagramImporter } from '../../electron/main/importers/instagram-importer';
+import { buildZip } from '../helpers/zip';
 import { messengerImporter } from '../../electron/main/importers/messenger-importer';
 import { drainImporter } from '../../electron/main/importers/drain';
 import type {
@@ -132,6 +133,73 @@ describe('instagramImporter (M3 — Instagram Meta DYI direct messages connector
       removeTmpDir(instagramDir);
       removeTmpDir(messengerDir);
       removeTmpDir(plainDir);
+    }
+  });
+
+  it('accepts an Instagram .zip by scanning entry names and rejects unrelated zips', async () => {
+    const dir = makeTmpDir('instagram-zip-can-');
+    try {
+      const instagramZip = join(dir, 'instagram.zip');
+      const unrelatedZip = join(dir, 'plain.zip');
+      writeFileSync(
+        instagramZip,
+        buildZip([
+          {
+            name: 'your_instagram_activity/messages/inbox/family_abcd/message_1.json',
+            data: Buffer.from('{}'),
+          },
+        ]),
+      );
+      writeFileSync(unrelatedZip, buildZip([{ name: 'photos/pic.jpg', data: Buffer.from('x') }]));
+
+      expect(await instagramImporter.canHandle(instagramZip, depsForRealDir())).toBe(true);
+      expect(await instagramImporter.canHandle(unrelatedZip, depsForRealDir())).toBe(false);
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('rejects absolute drive UNC and traversal media URIs before normalization', async () => {
+    const dir = makeTmpDir('instagram-unsafe-media-');
+    try {
+      const threadDir = join(dir, IG_MESSAGES_ROOT, 'inbox', 'unsafe_abcd');
+      mkdirSync(join(threadDir, 'photos'), { recursive: true });
+      writeFileSync(join(threadDir, 'photos', 'pic.jpg'), 'photo-bytes');
+      writeInstagramMessageFile(dir, 'unsafe_abcd', 'message_1.json', {
+        participants: [{ name: 'Me' }],
+        messages: [
+          {
+            sender_name: 'Me',
+            timestamp_ms: 1_706_933_106_000,
+            content: 'bad refs',
+            photos: [
+              { uri: '/your_instagram_activity/messages/inbox/unsafe_abcd/photos/pic.jpg' },
+              { uri: '/etc/passwd' },
+              { uri: 'C:\\Users\\me\\pic.jpg' },
+              { uri: '\\\\srv\\share\\pic.jpg' },
+              { uri: '../../pic.jpg' },
+            ],
+          },
+        ],
+      });
+      const deps = depsForRealDir();
+      const statPaths: string[] = [];
+      const realStat = deps.fs.stat;
+      deps.fs.stat = async (path: string): Promise<FileStat> => {
+        statPaths.push(path);
+        return await realStat(path);
+      };
+
+      const { records, skips } = await run(dir, deps);
+
+      expect(records.map((r) => r.sourceRef)).toEqual(['inbox/unsafe_abcd/message_1.json#0:text']);
+      expect(skips.filter((skip) => skip.code === 'E_MEDIA_PATH')).toHaveLength(5);
+      const safeRoot = ps(dir);
+      for (const statted of statPaths.map(ps)) {
+        expect(statted.startsWith(safeRoot)).toBe(true);
+      }
+    } finally {
+      removeTmpDir(dir);
     }
   });
 
@@ -287,7 +355,7 @@ describe('instagramImporter (M3 — Instagram Meta DYI direct messages connector
       expect(records.map((r) => r.body)).toEqual(['after huge']);
       expect(skips).toContainEqual(
         expect.objectContaining({
-          ref: ps(path).split('/your_instagram_activity/messages/')[1],
+          ref: `${ps(path).split('/your_instagram_activity/messages/')[1]}#0`,
           code: 'E_MESSAGE_TOO_LARGE',
         }),
       );
