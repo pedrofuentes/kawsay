@@ -1,5 +1,6 @@
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, writeFileSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { access, readdir, stat } from 'node:fs/promises';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
@@ -39,6 +40,7 @@ function realDirDeps(): ImporterDeps {
           () => true,
           () => false,
         ),
+      openReadStream: (path: string) => createReadStream(path),
     },
     extractArchive: async () => [],
     readExif: async () => null,
@@ -89,6 +91,7 @@ function fakeDeps(options: FakeFsOptions = {}): ImporterDeps {
         isDirectory: () => dirs.has(path),
       }),
       exists: async (path: string) => files.has(path) || dirs.has(path),
+      openReadStream: (path: string) => Readable.from([zipMarkers[path] ?? '']),
     },
     extractArchive: async () => [],
     readExif: async () => null,

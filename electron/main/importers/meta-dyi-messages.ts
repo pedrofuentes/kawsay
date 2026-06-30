@@ -12,12 +12,17 @@ import type {
 } from './types';
 import { zipHasEntryName } from './zip-markers';
 
-const CAN_HANDLE_MAX_BYTES = 64 * 1024;
+const CAN_HANDLE_MAX_BYTES = 1_024 * 1_024;
 const MAX_DTO_STRING_CHARS = 20_000;
 const MAX_META_STRING_CHARS = 1_000;
 const MAX_MESSAGE_JSON_CHARS = 1_000_000;
 const MAX_THREAD_META_CHARS = 64 * 1024;
 const MAX_TEXT_DEPTH = 20;
+const MAX_TEXT_ARRAY_ITEMS = 20_000;
+const MAX_JSON_NESTING_DEPTH = 100;
+const MAX_DIR_WALK_DEPTH = 32;
+const MAX_MEDIA_INDEX_ENTRIES = 20_000;
+const MAX_DISCOVERED_ENTRIES = 50_000;
 
 interface Entry {
   entryPath: string;
@@ -138,7 +143,11 @@ function fbText(value: unknown, depth = 0): string | null {
   if (depth > MAX_TEXT_DEPTH) return null;
   if (typeof value === 'string') return nullableBound(decodeFacebookText(value));
   if (Array.isArray(value)) {
-    const text = value.map((item) => fbText(item, depth + 1) ?? '').join('');
+    let text = '';
+    for (const item of value.slice(0, MAX_TEXT_ARRAY_ITEMS)) {
+      text = boundString(`${text}${fbText(item, depth + 1) ?? ''}`, MAX_DTO_STRING_CHARS);
+      if (text.length >= MAX_DTO_STRING_CHARS) break;
+    }
     return nullableBound(text.trim() || null);
   }
   const record = asRecord(value);
@@ -173,8 +182,8 @@ function classify(pathOrName: string): MediaKind | null {
 }
 
 async function openTextStream(path: string, deps: ImporterDeps): Promise<Readable> {
-  if (deps.fs.openReadStream) return deps.fs.openReadStream(path);
-  return Readable.from(await deps.fs.readFile(path));
+  if (!deps.fs.openReadStream) throw new Error('streaming file reads are unavailable');
+  return deps.fs.openReadStream(path);
 }
 
 async function readMarkerPrefix(path: string, deps: ImporterDeps): Promise<string> {
@@ -235,8 +244,19 @@ async function* walkFolder(
   dir: string,
   ctx: ImportContext,
   skipped: SkippedItem[],
+  depth = 0,
 ): AsyncGenerator<string> {
   if (ctx.signal.aborted) return;
+  if (depth > MAX_DIR_WALK_DEPTH) {
+    recordSkip(
+      ctx,
+      skipped,
+      dir,
+      'directory walk exceeded the Meta export depth cap',
+      'E_DIR_TOO_DEEP',
+    );
+    return;
+  }
   let names: readonly string[];
   try {
     names = await ctx.deps.fs.readDir(dir);
@@ -250,7 +270,7 @@ async function* walkFolder(
     try {
       const stat = await ctx.deps.fs.stat(child);
       if (stat.isDirectory()) {
-        yield* walkFolder(child, ctx, skipped);
+        yield* walkFolder(child, ctx, skipped, depth + 1);
       } else if (stat.isFile()) {
         yield child;
       }
@@ -275,13 +295,20 @@ async function gatherEntries(
       const extracted = await ctx.deps.extractArchive(inputPath, ctx.workDir, {
         signal: ctx.signal,
       });
-      return {
-        entries: extracted.map((entry) => ({
-          entryPath: toPosix(entry.entryPath),
-          absPath: entry.absPath,
-        })),
-        failed: false,
-      };
+      const entries = extracted.slice(0, MAX_DISCOVERED_ENTRIES).map((entry) => ({
+        entryPath: toPosix(entry.entryPath),
+        absPath: entry.absPath,
+      }));
+      if (extracted.length > MAX_DISCOVERED_ENTRIES) {
+        recordSkip(
+          ctx,
+          skipped,
+          inputPath,
+          'archive entry discovery exceeded the Meta export cap',
+          'E_ENTRY_LIMIT',
+        );
+      }
+      return { entries, failed: false };
     } catch (error) {
       recordSkip(
         ctx,
@@ -295,6 +322,16 @@ async function gatherEntries(
   }
   const entries: Entry[] = [];
   for await (const absPath of walkFolder(inputPath, ctx, skipped)) {
+    if (entries.length >= MAX_DISCOVERED_ENTRIES) {
+      recordSkip(
+        ctx,
+        skipped,
+        inputPath,
+        'folder discovery exceeded the Meta export entry cap',
+        'E_ENTRY_LIMIT',
+      );
+      break;
+    }
     entries.push({ entryPath: toPosix(relative(inputPath, absPath)), absPath });
   }
   return { entries, failed: false };
@@ -349,6 +386,7 @@ async function* streamMessages(
   let objectInString = false;
   let objectEscaped = false;
   let objectTooLarge = false;
+  let objectTooDeep = false;
   let index = 0;
 
   try {
@@ -369,12 +407,13 @@ async function* streamMessages(
             objectDepth = 1;
             objectText = '{';
             objectTooLarge = false;
+            objectTooDeep = false;
             objectInString = false;
             objectEscaped = false;
             continue;
           }
 
-          if (!objectTooLarge) {
+          if (!objectTooLarge && !objectTooDeep) {
             objectText += ch;
             if (objectText.length > MAX_MESSAGE_JSON_CHARS) {
               objectTooLarge = true;
@@ -382,7 +421,7 @@ async function* streamMessages(
               recordSkip(
                 ctx,
                 skipped,
-                rel,
+                `${rel}#${index}`,
                 `message JSON object exceeded the ${config.archiveLabel} size cap`,
                 'E_MESSAGE_TOO_LARGE',
               );
@@ -395,11 +434,23 @@ async function* streamMessages(
             continue;
           }
           if (ch === '"') objectInString = true;
-          else if (ch === '{') objectDepth += 1;
-          else if (ch === '}') {
+          else if (ch === '{') {
+            objectDepth += 1;
+            if (objectDepth > MAX_JSON_NESTING_DEPTH && !objectTooDeep) {
+              objectTooDeep = true;
+              objectText = '';
+              recordSkip(
+                ctx,
+                skipped,
+                `${rel}#${index}`,
+                `message JSON nesting exceeded the ${config.archiveLabel} depth cap`,
+                'E_MESSAGE_TOO_DEEP',
+              );
+            }
+          } else if (ch === '}') {
             objectDepth -= 1;
             if (objectDepth === 0) {
-              if (!objectTooLarge) {
+              if (!objectTooLarge && !objectTooDeep) {
                 try {
                   const parsed = asRecord(JSON.parse(objectText));
                   if (parsed)
@@ -464,6 +515,16 @@ async function* streamMessages(
   }
 }
 
+function hasUnsafeRawPath(path: string): boolean {
+  return (
+    path.includes('\0') ||
+    isAbsolute(path) ||
+    /^[A-Za-z]:[\\/]/.test(path) ||
+    path.startsWith('\\\\') ||
+    path.startsWith('//')
+  );
+}
+
 function buildMediaResolver(
   entries: readonly Entry[],
   config: MetaMessagesRuntime,
@@ -471,11 +532,13 @@ function buildMediaResolver(
   const byMediaPath = new Map<string, string>();
   for (const entry of entries) {
     const stripped = stripRoot(entry.entryPath, config);
-    if (stripped.startsWith(`${MESSAGES_DIR}/`)) {
+    if (byMediaPath.size >= MAX_MEDIA_INDEX_ENTRIES) break;
+    if (stripped.startsWith(`${MESSAGES_DIR}/`) && classify(stripped) !== null) {
       byMediaPath.set(stripped, entry.absPath);
     }
   }
   return (uri: string) => {
+    if (hasUnsafeRawPath(uri)) return null;
     const normalized = uri.replace(/\\/g, '/').replace(/^\.?\//, '');
     if (normalized.length === 0 || normalized.includes('\0') || isAbsolute(normalized)) return null;
     const stripped = stripRoot(normalized, config);

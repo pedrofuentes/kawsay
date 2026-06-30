@@ -14,7 +14,11 @@ const RESULT_JSON = 'result.json';
 const MESSAGES_HTML = 'messages.html';
 const MAX_DTO_STRING_CHARS = 20_000;
 const MAX_META_STRING_CHARS = 1_000;
-const CAN_HANDLE_MAX_BYTES = 64 * 1024;
+const CAN_HANDLE_MAX_BYTES = 1_024 * 1_024;
+const MAX_MESSAGE_JSON_CHARS = 1_000_000;
+const MAX_TEXT_DEPTH = 20;
+const MAX_TEXT_ARRAY_ITEMS = 20_000;
+const MAX_JSON_NESTING_DEPTH = 100;
 
 interface TelegramChatContext {
   chatId: number | string | null;
@@ -104,11 +108,19 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function flattenText(value: unknown): string {
+function flattenText(value: unknown, depth = 0): string {
+  if (depth > MAX_TEXT_DEPTH) return '';
   if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(flattenText).join('');
+  if (Array.isArray(value)) {
+    let text = '';
+    for (const item of value.slice(0, MAX_TEXT_ARRAY_ITEMS)) {
+      text = boundString(`${text}${flattenText(item, depth + 1)}`, MAX_DTO_STRING_CHARS);
+      if (text.length >= MAX_DTO_STRING_CHARS) break;
+    }
+    return text;
+  }
   const record = asRecord(value);
-  if (record) return flattenText(record.text);
+  if (record) return flattenText(record.text, depth + 1);
   return '';
 }
 
@@ -199,19 +211,28 @@ function classify(pathOrName: string, mediaType: string | null): MediaKind | nul
   return byExt;
 }
 
+function hasUnsafeRawPath(path: string): boolean {
+  return (
+    path.includes('\0') ||
+    isAbsolute(path) ||
+    /^[A-Za-z]:[\\/]/.test(path) ||
+    path.startsWith('\\\\') ||
+    path.startsWith('//')
+  );
+}
+
 function normalizeMediaPath(rawPath: string): string | null {
+  if (hasUnsafeRawPath(rawPath)) return null;
   const normalized = rawPath.replace(/\\/g, '/');
   if (normalized.length === 0 || normalized.includes('\0') || isAbsolute(normalized)) return null;
   const parts = normalized.split('/').filter((part) => part.length > 0);
   if (parts.length === 0 || parts.some((part) => part === '.' || part === '..')) return null;
   const safe = parts.join('/');
-  if (
-    !(
-      safe.startsWith('photos/') ||
-      safe.startsWith('video_files/') ||
-      safe.startsWith('voice_messages/')
-    )
-  ) {
+  if (!(
+    safe.startsWith('photos/') ||
+    safe.startsWith('video_files/') ||
+    safe.startsWith('voice_messages/')
+  )) {
     return null;
   }
   return safe;
@@ -286,8 +307,8 @@ async function normalizeMediaRecord(
 }
 
 async function openTextStream(path: string, deps: ImporterDeps): Promise<Readable> {
-  if (deps.fs.openReadStream) return deps.fs.openReadStream(path);
-  return Readable.from(await deps.fs.readFile(path));
+  if (!deps.fs.openReadStream) throw new Error('streaming file reads are unavailable');
+  return deps.fs.openReadStream(path);
 }
 
 function findMessagesArrayPrefix(
@@ -372,6 +393,7 @@ function chatFromPrefix(prefix: string): TelegramChatContext {
 async function* streamTelegramMessages(
   path: string,
   ctx: ImportContext,
+  skipped: SkippedItem[],
 ): AsyncGenerator<StreamedMessage> {
   const stream = await openTextStream(path, ctx.deps);
   let mode: 'seek-key' | 'seek-colon' | 'seek-array' | 'in-array' = 'seek-key';
@@ -384,6 +406,9 @@ async function* streamTelegramMessages(
   let objectText = '';
   let objectInString = false;
   let objectEscaped = false;
+  let objectTooLarge = false;
+  let objectTooDeep = false;
+  let messageIndex = 0;
 
   try {
     for await (const chunk of stream) {
@@ -402,12 +427,27 @@ async function* streamTelegramMessages(
             if (ch !== '{') continue;
             objectDepth = 1;
             objectText = '{';
+            objectTooLarge = false;
+            objectTooDeep = false;
             objectInString = false;
             objectEscaped = false;
             continue;
           }
 
-          objectText += ch;
+          if (!objectTooLarge && !objectTooDeep) {
+            objectText += ch;
+            if (objectText.length > MAX_MESSAGE_JSON_CHARS) {
+              objectTooLarge = true;
+              objectText = '';
+              recordSkip(
+                ctx,
+                skipped,
+                `message:${messageIndex}`,
+                'Telegram message JSON object exceeded the size cap',
+                'E_MESSAGE_TOO_LARGE',
+              );
+            }
+          }
           if (objectInString) {
             if (objectEscaped) objectEscaped = false;
             else if (ch === '\\') objectEscaped = true;
@@ -415,19 +455,34 @@ async function* streamTelegramMessages(
             continue;
           }
           if (ch === '"') objectInString = true;
-          else if (ch === '{') objectDepth += 1;
-          else if (ch === '}') {
+          else if (ch === '{') {
+            objectDepth += 1;
+            if (objectDepth > MAX_JSON_NESTING_DEPTH && !objectTooDeep) {
+              objectTooDeep = true;
+              objectText = '';
+              recordSkip(
+                ctx,
+                skipped,
+                `message:${messageIndex}`,
+                'Telegram message JSON nesting exceeded the depth cap',
+                'E_MESSAGE_TOO_DEEP',
+              );
+            }
+          } else if (ch === '}') {
             objectDepth -= 1;
             if (objectDepth === 0) {
-              try {
-                const parsed = JSON.parse(objectText) as unknown;
-                const message = asRecord(parsed);
-                if (message) yield { message: message as TelegramMessage, chat: currentChat };
-              } catch {
-                // Malformed objects are reported by the caller when JSON.parse fails
-                // within an object boundary; the stream then continues with later objects.
+              if (!objectTooLarge && !objectTooDeep) {
+                try {
+                  const parsed = JSON.parse(objectText) as unknown;
+                  const message = asRecord(parsed);
+                  if (message) yield { message: message as TelegramMessage, chat: currentChat };
+                } catch {
+                  // Malformed objects are reported by the caller when JSON.parse fails
+                  // within an object boundary; the stream then continues with later objects.
+                }
               }
               objectText = '';
+              messageIndex += 1;
             }
           }
           continue;
@@ -529,7 +584,7 @@ export const telegramImporter: Importer = {
         try {
           return looksLikeTelegramHtml(await readMarkerPrefix(htmlPath, deps));
         } catch {
-          return true;
+          return false;
         }
       }
       return false;
@@ -552,7 +607,7 @@ export const telegramImporter: Importer = {
     try {
       ctx.onProgress({ phase: 'parse', processed: 0, total: null, message: null });
       const seenSourceRefs = new Set<string>();
-      for await (const { message, chat } of streamTelegramMessages(resultPath, ctx)) {
+      for await (const { message, chat } of streamTelegramMessages(resultPath, ctx, skipped)) {
         if (ctx.signal.aborted) break;
         const normalized = normalizeMessage(message, chat);
         if ('reason' in normalized) {

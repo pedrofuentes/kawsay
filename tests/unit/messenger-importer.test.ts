@@ -1,4 +1,5 @@
 import { createReadStream, mkdirSync, writeFileSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { access, readdir, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -266,6 +267,116 @@ describe('messengerImporter (M3 — Facebook Messenger export connector)', () =>
     }
   });
 
+  it('rejects absolute drive UNC and traversal media URIs before normalization', async () => {
+    const dir = makeTmpDir('messenger-unsafe-media-');
+    try {
+      const threadDir = join(dir, MESSAGES_ROOT, 'inbox', 'unsafe_abcd');
+      mkdirSync(join(threadDir, 'photos'), { recursive: true });
+      writeFileSync(join(threadDir, 'photos', 'pic.jpg'), 'photo-bytes');
+      writeMessageFile(dir, 'inbox', 'unsafe_abcd', 'message_1.json', {
+        participants: [{ name: 'Me' }],
+        messages: [
+          {
+            sender_name: 'Me',
+            timestamp_ms: 1_706_933_106_000,
+            content: 'bad refs',
+            photos: [
+              { uri: '/your_activity_across_facebook/messages/inbox/unsafe_abcd/photos/pic.jpg' },
+              { uri: '/etc/passwd' },
+              { uri: 'C:\\Users\\me\\pic.jpg' },
+              { uri: '\\\\srv\\share\\pic.jpg' },
+              { uri: '../../pic.jpg' },
+            ],
+          },
+        ],
+      });
+      const deps = depsForRealDir();
+      const statPaths: string[] = [];
+      const realStat = deps.fs.stat;
+      deps.fs.stat = async (path: string): Promise<FileStat> => {
+        statPaths.push(path);
+        return await realStat(path);
+      };
+
+      const { records, skips } = await run(dir, deps);
+
+      expect(records.map((r) => r.sourceRef)).toEqual(['inbox/unsafe_abcd/message_1.json#0:text']);
+      expect(skips.filter((skip) => skip.code === 'E_MEDIA_PATH')).toHaveLength(5);
+      const safeRoot = ps(dir);
+      for (const statted of statPaths.map(ps)) {
+        expect(statted.startsWith(safeRoot)).toBe(true);
+      }
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('canHandle finds message markers after a bounded large metadata prefix', async () => {
+    const dir = makeTmpDir('messenger-can-large-prefix-');
+    try {
+      writeMessageFile(dir, 'inbox', 'large_abcd', 'message_1.json', {
+        participants: [{ name: 'Mamá' }],
+        title: 'x'.repeat(80_000),
+        messages: [{ sender_name: 'Mamá', timestamp_ms: 1_702_000_000_000, content: 'hola' }],
+      });
+
+      expect(await messengerImporter.canHandle(dir, depsForRealDir())).toBe(true);
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('bounds directory walk depth before discovering nested message files', async () => {
+    const dir = makeTmpDir('messenger-depth-');
+    try {
+      const tooDeep = Array.from({ length: 40 }, (_, index) => `d${index}`).join('/');
+      writeMessageFile(dir, 'inbox', `deep_abcd/${tooDeep}`, 'message_1.json', {
+        participants: [{ name: 'Mamá' }],
+        messages: [{ sender_name: 'Mamá', timestamp_ms: 1, content: 'too deep' }],
+      });
+
+      const { records, skips } = await run(dir, depsForRealDir());
+
+      expect(records).toEqual([]);
+      expect(skips).toContainEqual(expect.objectContaining({ code: 'E_DIR_TOO_DEEP' }));
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('stops cleanly when aborted mid-stream', async () => {
+    const dir = makeTmpDir('messenger-mid-abort-');
+    const controller = new AbortController();
+    try {
+      writeMessageFile(dir, 'inbox', 'family_abcd', 'message_1.json', {
+        participants: [{ name: 'Mamá' }],
+        messages: [
+          { sender_name: 'Mamá', timestamp_ms: 1, content: 'first' },
+          { sender_name: 'Mamá', timestamp_ms: 2, content: 'second' },
+        ],
+      });
+      const deps = depsForRealDir();
+      const realOpen = deps.fs.openReadStream;
+      deps.fs.openReadStream = (path: string) => {
+        const source = realOpen?.(path) ?? Readable.from([]);
+        let chunked = false;
+        return source.on('data', () => {
+          if (!chunked) {
+            chunked = true;
+            controller.abort();
+          }
+        });
+      };
+
+      const { records, result } = await run(dir, deps, controller.signal);
+
+      expect(records.length).toBeLessThan(2);
+      expect(result.recordCount).toBe(records.length);
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
   it('caps one oversized message object and keeps later messages without unbounded buffering', async () => {
     const dir = makeTmpDir('messenger-bounds-');
     try {
@@ -282,7 +393,7 @@ describe('messengerImporter (M3 — Facebook Messenger export connector)', () =>
       expect(records.map((r) => r.body)).toEqual(['after huge']);
       expect(skips).toContainEqual(
         expect.objectContaining({
-          ref: ps(path).split('/your_activity_across_facebook/messages/')[1],
+          ref: `${ps(path).split('/your_activity_across_facebook/messages/')[1]}#0`,
           code: 'E_MESSAGE_TOO_LARGE',
         }),
       );

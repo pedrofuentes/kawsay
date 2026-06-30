@@ -1,4 +1,5 @@
 import { createReadStream, mkdirSync, writeFileSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { drainImporter } from '../../electron/main/importers/drain';
@@ -102,15 +103,162 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
       expect(await telegramImporter.canHandle(htmlDir, depsForRealDir())).toBe(true);
       expect(await telegramImporter.canHandle(plainDir, depsForRealDir())).toBe(false);
       expect(await telegramImporter.canHandle(genericJsonDir, depsForRealDir())).toBe(false);
-      expect(await telegramImporter.canHandle(join(plainDir, 'result.json'), depsForRealDir())).toBe(
+      expect(
+        await telegramImporter.canHandle(join(plainDir, 'result.json'), depsForRealDir()),
+      ).toBe(false);
+      expect(await telegramImporter.canHandle(join(plainDir, 'missing'), depsForRealDir())).toBe(
         false,
       );
-      expect(await telegramImporter.canHandle(join(plainDir, 'missing'), depsForRealDir())).toBe(false);
     } finally {
       removeTmpDir(jsonDir);
       removeTmpDir(htmlDir);
       removeTmpDir(plainDir);
       removeTmpDir(genericJsonDir);
+    }
+  });
+
+  it('returns false when the messages.html marker cannot be read', async () => {
+    const dir = makeTmpDir('telegram-html-read-error-');
+    try {
+      writeFileSync(join(dir, 'messages.html'), '<html><title>Telegram Desktop</title></html>');
+      const deps = depsForRealDir();
+      deps.fs.openReadStream = () => {
+        throw new Error('EACCES: denied');
+      };
+
+      expect(await telegramImporter.canHandle(dir, deps)).toBe(false);
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('caps one oversized message object and keeps later Telegram messages', async () => {
+    const dir = makeTmpDir('telegram-bounds-');
+    try {
+      writeResult(dir, {
+        name: 'Mamá',
+        type: 'personal_chat',
+        id: 42,
+        messages: [
+          { id: 1, type: 'message', date_unixtime: 1, from: 'Mamá', text: 'A'.repeat(2_500_000) },
+          { id: 2, type: 'message', date_unixtime: 2, from: 'Mamá', text: 'after huge' },
+        ],
+      });
+
+      const { records, skips } = await run(dir, depsForRealDir());
+
+      expect(records.map((r) => r.body)).toEqual(['after huge']);
+      expect(skips).toContainEqual(
+        expect.objectContaining({ ref: 'message:0', code: 'E_MESSAGE_TOO_LARGE' }),
+      );
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('caps deeply nested and wide rich text without overflowing recursion or memory', async () => {
+    const dir = makeTmpDir('telegram-text-bounds-');
+    try {
+      let nested: unknown = 'too deep';
+      for (let i = 0; i < 80; i++) nested = { text: nested };
+      writeResult(dir, {
+        name: 'Mamá',
+        type: 'personal_chat',
+        id: 42,
+        messages: [
+          { id: 1, type: 'message', date_unixtime: 1, from: 'Mamá', text: nested },
+          {
+            id: 2,
+            type: 'message',
+            date_unixtime: 2,
+            from: 'Mamá',
+            text: Array.from({ length: 50_000 }, () => 'x'),
+          },
+        ],
+      });
+
+      const { byRef } = await run(dir, depsForRealDir());
+
+      expect(byRef.get('message:1')?.body).toBeNull();
+      expect(byRef.get('message:2')?.body).toHaveLength(20_000);
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('rejects absolute drive UNC and traversal media paths before normalization', async () => {
+    const dir = makeTmpDir('telegram-unsafe-media-');
+    try {
+      mkdirSync(join(dir, 'photos'), { recursive: true });
+      writeFileSync(join(dir, 'photos', 'photo_1.jpg'), 'photo-bytes');
+      writeResult(dir, {
+        name: 'Family',
+        type: 'private_group',
+        id: 7,
+        messages: [
+          { id: 1, type: 'message', text: 'abs', photo: '/photos/photo_1.jpg' },
+          { id: 2, type: 'message', text: 'unix', photo: '/etc/passwd' },
+          { id: 3, type: 'message', text: 'drive', photo: 'C:\\Users\\me\\pic.jpg' },
+          { id: 4, type: 'message', text: 'unc', photo: '\\\\srv\\share\\pic.jpg' },
+          { id: 5, type: 'message', text: 'trav', photo: '../../pic.jpg' },
+        ],
+      });
+      const deps = depsForRealDir();
+      const statPaths: string[] = [];
+      const realStat = deps.fs.stat;
+      deps.fs.stat = async (path: string): Promise<FileStat> => {
+        statPaths.push(path);
+        return await realStat(path);
+      };
+
+      const { records, skips } = await run(dir, deps);
+
+      expect(records.map((r) => r.mediaType)).toEqual([
+        'message',
+        'message',
+        'message',
+        'message',
+        'message',
+      ]);
+      expect(skips.filter((skip) => skip.code === 'E_MEDIA_PATH')).toHaveLength(5);
+      expect(statPaths.map(normalizePath)).not.toContain(expect.stringContaining('photo_1.jpg'));
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('stops cleanly when aborted mid-stream', async () => {
+    const dir = makeTmpDir('telegram-mid-abort-');
+    const controller = new AbortController();
+    try {
+      writeResult(dir, {
+        name: 'Mamá',
+        type: 'personal_chat',
+        id: 42,
+        messages: [
+          { id: 1, type: 'message', date_unixtime: 1, from: 'Mamá', text: 'first' },
+          { id: 2, type: 'message', date_unixtime: 2, from: 'Mamá', text: 'second' },
+        ],
+      });
+      const deps = depsForRealDir();
+      const realOpen = deps.fs.openReadStream;
+      deps.fs.openReadStream = (path: string) => {
+        const source = realOpen?.(path) ?? Readable.from([]);
+        let chunked = false;
+        return source.on('data', () => {
+          if (!chunked) {
+            chunked = true;
+            controller.abort();
+          }
+        });
+      };
+
+      const { records, result } = await run(dir, deps, controller.signal);
+
+      expect(records.length).toBeLessThan(2);
+      expect(result.recordCount).toBe(records.length);
+    } finally {
+      removeTmpDir(dir);
     }
   });
 
@@ -311,9 +459,9 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
         mediaType: 'audio',
         mimeType: 'audio/ogg',
       });
-      expect(normalizePath(byRef.get('message:10:media:photos/photo_1.jpg')?.originalPath ?? '')).toContain(
-        '/photos/photo_1.jpg',
-      );
+      expect(
+        normalizePath(byRef.get('message:10:media:photos/photo_1.jpg')?.originalPath ?? ''),
+      ).toContain('/photos/photo_1.jpg');
       expect(skips).toContainEqual(
         expect.objectContaining({
           ref: 'message:13:media:../escape.jpg',
