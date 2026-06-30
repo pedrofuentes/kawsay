@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Security
+
+### Removed
+
+## [0.3.0] - 2026-06-30
+
+### Added
+
 - **Instagram import first slice (M3 · AC-28)**: Kawsay can now recognize Instagram Meta DYI
   JSON exports, stream direct-message `message_*.json` inbox threads, fix Meta mojibake, preserve
   sender/timestamp/provenance, and link photo/video/audio refs through traversal-safe local paths for
@@ -93,11 +105,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Instagram import first slice (M3 · AC-28)**: Kawsay can now recognize Instagram Meta DYI
-  JSON exports, stream direct-message `message_*.json` inbox threads, fix Meta mojibake, preserve
-  sender/timestamp/provenance, and link photo/video/audio refs through traversal-safe local paths for
-  the content-addressed blob store. Posts, stories, reels, comments, likes, and richer media surfaces
-  are deferred follow-ups.
 - **Read your memories' words on screen — and find them by what was said** (card #136, M2 · ADR-0027,
   **AC-13 / AC-19 / AC-22**): the last piece a grieving person actually sees. A calm **Start transcribing**
   control turns transcription loose on the library, with **gentle live progress** in a polite live region
@@ -304,11 +311,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Instagram import first slice (M3 · AC-28)**: Kawsay can now recognize Instagram Meta DYI
-  JSON exports, stream direct-message `message_*.json` inbox threads, fix Meta mojibake, preserve
-  sender/timestamp/provenance, and link photo/video/audio refs through traversal-safe local paths for
-  the content-addressed blob store. Posts, stories, reels, comments, likes, and richer media surfaces
-  are deferred follow-ups.
 - **Automated release pipeline** that publishes the installers to GitHub Releases (card #120, AC-5): a new
   `.github/workflows/release.yml` builds Kawsay on native **macOS** and **Windows** runners and uploads the
   installers — the macOS `.dmg`/`.zip` (Apple Silicon + Intel) and the Windows `.exe` (NSIS) — as assets of a
