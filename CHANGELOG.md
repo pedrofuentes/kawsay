@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   content-addressed blob store, de-duplicates source references when the same message appears in
   multiple chats, and keeps detection cheap with a folder + SQLite-header marker check.
 - **Telegram import first slice (M3 · AC-26)**: Kawsay can now recognize Telegram Desktop export
-  folders via `result.json` (or `messages.html` fallback), stream messages through the importer
+  folders via `result.json` (with `messages.html` detection only; message import requires `result.json`), stream messages through the importer
   interface, flatten rich text, preserve sender/timestamps/provenance, and link photo/video/voice
   files through traversal-safe local paths for the content-addressed blob store. Full multi-account
   `chats/` nesting and service-message semantics are deferred follow-ups.
@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **M3 connector hardening** (#196, #199, #207): Messenger/Instagram shared Meta media URI resolution and Telegram media paths now reject absolute, drive, UNC, and traversal-looking refs before normalization; JSON stream parsers cap per-message size and nesting; rich text flattening, directory discovery, and media indexes are bounded; read-error probes fail closed; and Instagram zip detection is covered.
 - Removed the standalone `@electron/rebuild` dev dependency and `rebuild:native` script; packaging relies on
   electron-builder's app-scoped native rebuild path and keeps native install-script tracking pinned to
   `better-sqlite3` only (#46).
