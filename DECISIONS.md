@@ -30,11 +30,13 @@
 
 ### ADR-0029: M4 — On-device AI categorization & smart search (design)
 
-**Date**: 2026-06-30
-**Status**: Proposed — 🚨 **HUMAN-REQUIRED** (@pedrofuentes sign-off required before any M4 building). This is the
-**M4 design-discovery gate artifact** (the analogue of ADR-0027 for M2): research + design only — **no product code,
-no schema, no dependency, no config**. It lays out a concrete on-device approach and surfaces the decisions
-@pedrofuentes must confirm before the first implementation slice (M4-1).
+**Date**: 2026-06-30 (accepted 2026-07-01)
+**Status**: Accepted — @pedrofuentes signed off on 2026-07-01; the design below is ratified and the
+implementation decisions settled during M4-1b are recorded in **Decisions ratified during implementation
+(M4-1b)** at the end of this ADR. This was the **M4 design-discovery gate artifact** (the analogue of ADR-0027
+for M2): research + design only — **no product code, no schema, no dependency, no config** — that laid out the
+concrete on-device approach and surfaced the decisions @pedrofuentes confirmed before the first implementation
+slice (M4-1).
 **Tier**: **human-required** (MISSION §9 + ROADMAP M4). M4's default is **time-boxed _only if_ models are
 bundled/on-device with no new egress**; **any model download or cloud API is human-required** (network egress —
 MISSION §9 project override; ROADMAP.md:144). Independently, three further triggers can fire: a **heavy/unusual
@@ -229,6 +231,24 @@ acceptance direction is fixed: categorization + inference run **on-device** (pre
   dependency** (`sqlite-vec` / HNSW) → heavy-dep human-required.
 - **(e) First implementation slice scope** — confirm **M4-1 = semantic search over existing text/transcripts**
   (recommended), with **face/people (biometric) clustering deferred** to a later, separately-gated slice.
+
+**Decisions ratified during implementation (M4-1b)** _(confirmed 2026-07-01; these settle the open confirm-items
+above and are recorded here as the audit note)_
+
+- **(1) Delivery = opt-in consent-download, NOT bundled.** The ~124 MB embedder model is fetched once on explicit
+  opt-in, reusing the M2 pattern verbatim (`consent-store.ts` + an Electron `net.request` on the guarded session +
+  a single pinned, data-free `GET` on the `network-guard.ts` allowlist), rather than shipped in the installer.
+  **Cofounder-approved** — resolves confirm-item (b); mirrors ADR-0027's whisper-model decision.
+- **(2) The bundled `llama-embedding` binary is built network-free + CPU-only, per-arch.** It is compiled from
+  pinned llama.cpp source with `LLAMA_OPENSSL=OFF` (no httplib/curl → no HTTP surface in the binary) and CPU-only,
+  once per arch (`mac-arm64` / `mac-x64` / `win-x64`) on parallel CI legs — resolves confirm-items (a)/(d): the
+  runtime is the bundled-native-binary GGUF seam with brute-force cosine, no new vector dependency.
+- **(3) Semantic search stays dormant behind byte-identical exact FTS until the model is present.** With no model
+  on disk the embedder resolves UNAVAILABLE and `catalogSession.search` returns exact-FTS results identical at
+  every offset (AC-29 / AC-7 no-regression); the semantic merge path only activates once the model is downloaded.
+- **(4) The model is published as a Kawsay Release asset (`models-embed-v1`)** via a maintainer-gated
+  `workflow_dispatch`, sequenced BEFORE the consumer download flow (ADR-0027 Decision 6e), so the pinned download
+  URL resolves to a Kawsay-owned, checksum-verified asset.
 
 ---
 

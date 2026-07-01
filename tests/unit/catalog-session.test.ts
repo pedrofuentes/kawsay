@@ -130,6 +130,49 @@ function seedSemanticCorpus(catalogPath: string): { exactId: string; semanticId:
   db.close();
   return { exactId, semanticId };
 }
+
+/**
+ * Seed a corpus that straddles the exact→semantic boundary for pagination tests:
+ * THREE exact-lexical matches for "familia" (no embeddings) plus TWO
+ * semantically-related memories with NO lexical overlap ("la playa") whose stored
+ * vectors align with the query vector. The globally-merged order is therefore
+ * [3 exact ranked first, AC-29] ++ [2 semantic-only by score], so paging with
+ * limit 2 crosses the boundary mid-page (page 1 = last exact + first semantic-only).
+ */
+function seedPaginationCorpus(catalogPath: string): {
+  exactIds: string[];
+  semanticIds: string[];
+} {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const embeddings = createEmbeddingsRepo(db);
+  const src = repo.registerSource({ sourceKey: 'seed', type: 'folder', label: 'Seed' });
+  const exactIds = ['uno', 'dos', 'tres'].map((word, i) => {
+    const id = repo.insertItem({
+      mediaType: 'message',
+      contentHash: `h-e${i}`,
+      description: `familia ${word}`,
+    });
+    repo.addOccurrence({ itemId: id, sourceId: src, sourceRef: `e/${i}` });
+    return id;
+  });
+  // Distinct cosine scores (1.0, then ~0.99 vs the [1,0,0] query) so the KNN order
+  // is deterministic; neither carries the lexical token "familia".
+  const vectors = [Float32Array.from([1, 0, 0]), Float32Array.from([0.9, 0.1, 0])];
+  const semanticIds = vectors.map((vector, i) => {
+    const id = repo.insertItem({
+      mediaType: 'photo',
+      contentHash: `h-s${i}`,
+      description: `la playa ${i}`,
+    });
+    repo.addOccurrence({ itemId: id, sourceId: src, sourceRef: `s/${i}` });
+    embeddings.upsertEmbedding(id, EMBED_MODEL_ID, vector);
+    return id;
+  });
+  db.close();
+  return { exactIds, semanticIds };
+}
+
 function seedPhotoWithLocalOriginal(catalogPath: string, originalPath: string): string {
   const db = openCatalog(catalogPath);
   const repo = createCatalogRepo(db);
@@ -754,6 +797,105 @@ describe('createCatalogSession (the IPC application service)', () => {
       } finally {
         s.dispose();
         warn.mockRestore();
+      }
+    });
+
+    it('paginates a globally-merged result set with no dup/skip and a page-independent total (#225)', async () => {
+      const s = sessionWithEmbedder([1, 0, 0]);
+      try {
+        s.createLibrary({ path: root });
+        const { exactIds, semanticIds } = seedPaginationCorpus(join(root, 'catalog.sqlite3'));
+        const limit = 2;
+
+        // Same query, three consecutive pages of a 5-result merged set (3 exact + 2 semantic).
+        const p0 = await s.search({ query: 'familia', limit, offset: 0 });
+        const p1 = await s.search({ query: 'familia', limit, offset: 2 });
+        const p2 = await s.search({ query: 'familia', limit, offset: 4 });
+
+        const ids0 = p0.items.map((i) => i.id);
+        const ids1 = p1.items.map((i) => i.id);
+        const ids2 = p2.items.map((i) => i.id);
+        const all = [...ids0, ...ids1, ...ids2];
+
+        // No dup (no overlap) AND no skip (no gap): the pages tile the full set exactly once.
+        expect(new Set(all).size).toBe(all.length);
+        expect(new Set(all)).toEqual(new Set([...exactIds, ...semanticIds]));
+        expect(all.length).toBe(5);
+
+        // total is page-independent — identical on every page — and counts the whole merged set.
+        expect(p0.total).toBe(5);
+        expect(p1.total).toBe(p0.total);
+        expect(p2.total).toBe(p0.total);
+
+        // AC-29: every exact match ranks AHEAD of any semantic-only match across the pages.
+        const lastExact = Math.max(...exactIds.map((id) => all.indexOf(id)));
+        const firstSemantic = Math.min(...semanticIds.map((id) => all.indexOf(id)));
+        expect(lastExact).toBeLessThan(firstSemantic);
+
+        // Contiguous slabs of `limit` (2 + 2 + 1).
+        expect(ids0.length).toBe(2);
+        expect(ids1.length).toBe(2);
+        expect(ids2.length).toBe(1);
+      } finally {
+        s.dispose();
+      }
+    });
+
+    it('exact-only fallback (UNAVAILABLE embedder) is byte-identical to FTS at every offset (#225)', async () => {
+      // The default session injects no embedder → UNAVAILABLE; the seeded embeddings are ignored.
+      session.createLibrary({ path: root });
+      const catalogPath = join(root, 'catalog.sqlite3');
+      seedPaginationCorpus(catalogPath);
+      const db = openCatalog(catalogPath);
+      const repo = createCatalogRepo(db);
+      try {
+        for (const offset of [0, 1, 2, 3]) {
+          const got = await session.search({ query: 'familia', limit: 2, offset });
+          const expected = repo.search({ query: 'familia', limit: 2, offset });
+          expect(got.items.map((i) => i.id)).toEqual(expected.rows.map((r) => r.id));
+          expect(got.total).toBe(expected.total);
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+    it('does NOT embed a punctuation-only query even when the embedder is available (#225 guard)', async () => {
+      const embedded: string[][] = [];
+      const s = sessionWithEmbedder([1, 0, 0], (texts) => embedded.push([...texts]));
+      try {
+        s.createLibrary({ path: root });
+        seedSemanticCorpus(join(root, 'catalog.sqlite3'));
+
+        const result = await s.search({ query: '!!!', limit: 10, offset: 0 });
+
+        // hasEmbeddableText is FALSE → the embedder is never invoked; pure exact FTS.
+        expect(embedded).toEqual([]);
+        expect(result.items).toEqual([]);
+        expect(result.total).toBe(0);
+      } finally {
+        s.dispose();
+      }
+    });
+
+    it('returns exact FTS when the embedder yields no query vector (#225 empty-embed guard)', async () => {
+      const s = createCatalogSession({
+        coordinator: coordinator.coordinator,
+        resolveMediaBinaries,
+        resolveEmbedder: () => ({ available: true, embed: async () => [] }),
+      });
+      try {
+        s.createLibrary({ path: root });
+        const { exactId, semanticId } = seedSemanticCorpus(join(root, 'catalog.sqlite3'));
+
+        const result = await s.search({ query: 'beach', limit: 10, offset: 0 });
+
+        // queryVector === undefined → early return before any semantic scan.
+        expect(result.items.map((i) => i.id)).toEqual([exactId]);
+        expect(result.items.map((i) => i.id)).not.toContain(semanticId);
+        expect(result.total).toBe(1);
+      } finally {
+        s.dispose();
       }
     });
   });
