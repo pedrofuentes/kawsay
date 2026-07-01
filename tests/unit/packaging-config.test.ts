@@ -7,6 +7,10 @@ import {
   WHISPER_CLI_RESOURCE_SUBDIR,
 } from '../../electron/main/transcription/whisper-cli';
 import {
+  EMBED_RESOURCE_SUBDIR,
+  SUPPORTED_EMBED_TARGETS,
+} from '../../electron/main/search/embed-cli';
+import {
   MEDIA_RESOURCE_SUBDIR,
   SUPPORTED_MEDIA_TARGETS,
 } from '../../electron/main/importers/deps/media-binaries';
@@ -77,6 +81,23 @@ function releaseJobBlock(jobId: string): string {
 
 /** Every `uses:` line in the workflow (for the SHA-pin assertions). */
 const releaseUsesLines = releaseYml.split(/\r?\n/).filter((l) => /^\s*uses:/.test(l));
+
+/** Return the body lines of a ci.yml `jobs:` entry (a 2-space-indented id) by job id. */
+function ciJobBlock(jobId: string): string {
+  const lines = ciYml.split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp(`^ {2}${jobId}:\\s*$`).test(l));
+  if (start === -1) return '';
+  const body: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() !== '' && /^ {0,2}\S/.test(line)) break; // next job or top-level key
+    body.push(line);
+  }
+  return body.join('\n');
+}
+
+/** Every `uses:` line in the CI workflow (for the SHA-pin assertions). */
+const ciUsesLines = ciYml.split(/\r?\n/).filter((l) => /^\s*uses:/.test(l));
 
 function escapedRegexLiteral(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -231,7 +252,9 @@ describe('whisper-cli engine bundling contract (#129, ADR-0027)', () => {
     // <resourcesPath>/<subdir>/<os>-<arch>/whisper-cli[.exe]; the `to:` sub-dir
     // here MUST equal that constant or the packaged app can't find the binary.
     expect(WHISPER_CLI_RESOURCE_SUBDIR).toBe('whisper');
-    expect(extra).toMatch(new RegExp(`to:\\s*'?${escapedRegexLiteral(WHISPER_CLI_RESOURCE_SUBDIR)}[\\\\/]`));
+    expect(extra).toMatch(
+      new RegExp(`to:\\s*'?${escapedRegexLiteral(WHISPER_CLI_RESOURCE_SUBDIR)}[\\\\/]`),
+    );
   });
 
   it('ships NO model alongside the binary (the ggml model is a separate opt-in download)', () => {
@@ -276,7 +299,9 @@ describe('ffmpeg + ffprobe media-binary bundling contract (#175)', () => {
     // <resourcesPath>/<subdir>/<os>-<arch>/<ffmpeg|ffprobe>[.exe]; the `to:` sub-dir
     // here MUST equal that constant or the packaged app can't find the binaries.
     expect(MEDIA_RESOURCE_SUBDIR).toBe('media');
-    expect(extra).toMatch(new RegExp(`to:\\s*'?${escapedRegexLiteral(MEDIA_RESOURCE_SUBDIR)}[\\\\/]`));
+    expect(extra).toMatch(
+      new RegExp(`to:\\s*'?${escapedRegexLiteral(MEDIA_RESOURCE_SUBDIR)}[\\\\/]`),
+    );
   });
 });
 
@@ -461,5 +486,111 @@ describe('release workflow preserves the M1 hardening + whisper-cli build (#129,
     expect(releaseYml).toMatch(/workflow_dispatch:/);
     expect(releaseYml).toMatch(/concurrency:/);
     expect(releaseYml).toMatch(/cancel-in-progress:\s*false/);
+  });
+});
+
+describe('embed-cli engine build + bundling contract (M4-1b, ADR-0029)', () => {
+  // The llama.cpp `llama-embedding` (MIT) is built FROM SOURCE per-arch in CI
+  // (scripts/build-embed-cli.sh) and bundled as an out-of-asar extraResource, so
+  // the packaged app spawns it via process.resourcesPath — resolved by
+  // electron/main/search/embed-cli.ts. It is the exact sibling of the whisper-cli
+  // engine (same build/cache/verify/bundle shape). These assertions pin that
+  // packaging contract so it cannot silently drift from the resolver, and prove
+  // the addition is ADDITIVE (the whisper-cli job/step/bundle stay intact).
+  const extra = topLevelBlock('extraResources');
+  const embedJob = ciJobBlock('embed-cli');
+  const releaseBuild = releaseJobBlock('build');
+
+  it('bundles a per-arch llama-embedding as an out-of-asar extraResource', () => {
+    // A native executable cannot be spawned from inside an asar (same constraint
+    // as whisper-cli / ffmpeg), so it travels in Resources, copied from the
+    // per-arch build output into <resources>/embed/<os>-<arch>/.
+    expect(extra).toMatch(assetPathRegex('resources', 'embed', '${os}-${arch}'));
+    expect(extra).toMatch(assetPathRegex('embed', '${os}-${arch}'));
+    expect('from: resources\\embed\\${os}-${arch}').toMatch(
+      assetPathRegex('resources', 'embed', '${os}-${arch}'),
+    );
+  });
+
+  it('parameterizes the bundle per build leg via the ${os}-${arch} macros (each shipped arch)', () => {
+    // One macro'd entry that electron-builder expands to a binary per build leg —
+    // macOS arm64 + x64, Windows x64 — so each installer carries exactly its own
+    // arch's llama-embedding. The resolver's shipped-target set is the cartesian
+    // product of those legs; keep the two in lock-step here.
+    expect(extra).toContain('${os}');
+    expect(extra).toContain('${arch}');
+    expect([...SUPPORTED_EMBED_TARGETS].sort()).toEqual(['mac-arm64', 'mac-x64', 'win-x64']);
+  });
+
+  it('keeps the resolver bundle sub-directory in lock-step with the extraResource `to:`', () => {
+    // electron/main/search/embed-cli.ts resolves
+    // <resourcesPath>/<subdir>/<os>-<arch>/llama-embedding[.exe]; the `to:` sub-dir
+    // here MUST equal that constant or the packaged app can't find the binary.
+    expect(EMBED_RESOURCE_SUBDIR).toBe('embed');
+    expect(extra).toMatch(
+      new RegExp(`to:\\s*'?${escapedRegexLiteral(EMBED_RESOURCE_SUBDIR)}[\\\\/]`),
+    );
+  });
+
+  it('ships ONLY the binary in this slice (no embedding weights / GGUF)', () => {
+    // M4-1b binary slice: bundle ONLY the executable; the multilingual-e5-small
+    // GGUF is a separate, later opt-in slice, so nothing weights/GGUF-shaped ships
+    // in the embed extraResource here.
+    expect(extra).not.toMatch(/\.gguf\b/i);
+    expect(extra).not.toMatch(/multilingual-e5/i);
+  });
+
+  it('CI builds the embed-cli matrix and runs the arch-checking verify guard', () => {
+    // Mirrors the whisper-cli CI job: a macOS+Windows matrix compile gate that
+    // builds from pinned source and then fails on a missing/wrong-arch binary.
+    expect(embedJob).toMatch(/matrix:/);
+    expect(embedJob).toMatch(/os:\s*\[\s*macos-latest\s*,\s*windows-latest\s*\]/);
+    expect(embedJob).toMatch(/scripts\/build-embed-cli\.sh/);
+    expect(embedJob).toMatch(/scripts\/verify-embed-binary\.mjs/);
+  });
+
+  it('pins llama.cpp by repo + ref + 40-hex commit as the single source of truth (CI env)', () => {
+    // The workflow env is the ONE pin location; build-embed-cli.sh reads it and
+    // asserts the cloned HEAD == COMMIT, so a re-pointed tag fails the build.
+    expect(embedJob).toMatch(/LLAMA_CPP_REPO:\s*ggml-org\/llama\.cpp/);
+    expect(embedJob).toMatch(/LLAMA_CPP_REF:\s*\S+/);
+    expect(embedJob).toMatch(/LLAMA_CPP_COMMIT:\s*[0-9a-f]{40}/);
+  });
+
+  it('keys the CI build cache on the llama.cpp pins + build-script hash', () => {
+    expect(embedJob).toMatch(
+      /key:\s*embed-cli-v1-.*LLAMA_CPP_REF.*LLAMA_CPP_COMMIT.*hashFiles\('scripts\/build-embed-cli\.sh'\)/,
+    );
+  });
+
+  it('release builds + verifies the per-arch llama-embedding BEFORE packaging', () => {
+    expect(releaseBuild).toMatch(/scripts\/build-embed-cli\.sh/);
+    expect(releaseBuild).toMatch(/scripts\/verify-embed-binary\.mjs/);
+    expect(releaseBuild).toMatch(/LLAMA_CPP_COMMIT:\s*[0-9a-f]{40}/);
+    // electron-builder must bundle the binary, so the build+verify run first.
+    const buildIdx = releaseBuild.indexOf('scripts/build-embed-cli.sh');
+    const verifyIdx = releaseBuild.indexOf('scripts/verify-embed-binary.mjs');
+    const packageIdx = releaseBuild.indexOf('electron-builder --publish never');
+    expect(buildIdx).toBeGreaterThanOrEqual(0);
+    expect(verifyIdx).toBeGreaterThan(buildIdx);
+    expect(packageIdx).toBeGreaterThan(verifyIdx);
+  });
+
+  it('SHA-pins every CI action to a 40-hex commit with a # vX.Y.Z comment', () => {
+    // Repo rule: any `uses:` (including the new embed-cli job's) must be a full
+    // 40-hex SHA pin with a trailing # vX.Y.Z, enforced across the whole CI
+    // workflow so an unpinned action can't slip in alongside the embed additions.
+    expect(ciUsesLines.length).toBeGreaterThan(0);
+    for (const line of ciUsesLines) {
+      expect(line).toMatch(/uses:\s*[^@\s]+@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/);
+    }
+  });
+
+  it('adds the embed-cli engine WITHOUT disturbing the whisper-cli job/step/bundle (additive)', () => {
+    // The additive-only contract: the whisper-cli CI job + release build step +
+    // extraResource must remain intact alongside the new embed ones.
+    expect(ciJobBlock('whisper-cli')).toMatch(/scripts\/build-whisper-cli\.sh/);
+    expect(releaseBuild).toMatch(/scripts\/build-whisper-cli\.sh/);
+    expect(extra).toMatch(assetPathRegex('resources', 'whisper', '${os}-${arch}'));
   });
 });

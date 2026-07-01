@@ -64,6 +64,9 @@ jobs:
       FFMPEG_REPO: FFmpeg/FFmpeg
       FFMPEG_REF: n7.1
       FFMPEG_COMMIT: b08d7969c550a804a59511c7b83f2dd8cc0499b8
+      LLAMA_CPP_REPO: ggml-org/llama.cpp
+      LLAMA_CPP_REF: b9848
+      LLAMA_CPP_COMMIT: 931eb37f8cac5a6ca84d5641445d460af2a9d7dd
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -146,6 +149,28 @@ jobs:
             [ -s "$f" ] || { echo "missing/empty: $f" >&2; exit 1; }
             echo "ok: $f ($(wc -c <"$f") bytes)"
           done
+
+      - name: Cache compiled llama-embedding
+        id: embed-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: resources/embed
+          key: embed-cli-v1-${{ runner.os }}-${{ env.LLAMA_CPP_REF }}-${{ env.LLAMA_CPP_COMMIT }}-${{ hashFiles('scripts/build-embed-cli.sh') }}
+
+      - name: Build llama-embedding from source
+        # Compile the per-arch llama-embedding (ADR-0029 · M4-1b) into
+        # resources/embed/<os>-<arch>/ BEFORE packaging, so electron-builder's
+        # extraResources bundles it. cmake + git are preinstalled on the runners.
+        if: steps.embed-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: ./scripts/build-embed-cli.sh
+
+      - name: Verify staged embed binary
+        # Build guard: fail the build if the staged llama-embedding is missing, the
+        # wrong arch, or not executable — even on a cache hit — so a corrupt/partial
+        # cache fails here instead of silently shipping nothing. Mirrors the whisper
+        # "Verify staged binaries" guard above + the media-binary guard.
+        run: node scripts/verify-embed-binary.mjs
 
       - name: Package installers (no publish)
         # electron-builder reads electron-builder.yml: it builds the per-OS targets
