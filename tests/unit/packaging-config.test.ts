@@ -540,11 +540,19 @@ describe('embed-cli engine build + bundling contract (M4-1b, ADR-0029)', () => {
     expect(extra).not.toMatch(/multilingual-e5/i);
   });
 
-  it('CI builds the embed-cli matrix and runs the arch-checking verify guard', () => {
-    // Mirrors the whisper-cli CI job: a macOS+Windows matrix compile gate that
-    // builds from pinned source and then fails on a missing/wrong-arch binary.
+  it('CI fans the embed-cli build out to one (os, arch) leg each + runs the arch-checking verify guard', () => {
+    // Mirrors the whisper-cli CI job, but the build is fanned out to ONE (os, arch)
+    // leg each — macOS arm64, macOS x64, Windows x64 — so the two macOS arches
+    // compile in parallel jobs (each with its own timeout budget) instead of
+    // back-to-back on one runner, which overran the 60-min timeout. Each leg builds
+    // exactly its arch via EMBED_ARCH; Windows has no arm64 leg (excluded).
     expect(embedJob).toMatch(/matrix:/);
     expect(embedJob).toMatch(/os:\s*\[\s*macos-latest\s*,\s*windows-latest\s*\]/);
+    expect(embedJob).toMatch(/arch:\s*\[\s*arm64\s*,\s*x64\s*\]/);
+    expect(embedJob).toMatch(/exclude:/);
+    expect(embedJob).toMatch(/os:\s*windows-latest\s+arch:\s*arm64/);
+    // Each leg passes its single arch to BOTH the build script and the verify guard.
+    expect(embedJob).toMatch(/EMBED_ARCH:\s*\$\{\{\s*matrix\.arch\s*\}\}/);
     expect(embedJob).toMatch(/scripts\/build-embed-cli\.sh/);
     expect(embedJob).toMatch(/scripts\/verify-embed-binary\.mjs/);
   });
@@ -557,9 +565,12 @@ describe('embed-cli engine build + bundling contract (M4-1b, ADR-0029)', () => {
     expect(embedJob).toMatch(/LLAMA_CPP_COMMIT:\s*[0-9a-f]{40}/);
   });
 
-  it('keys the CI build cache on the llama.cpp pins + build-script hash', () => {
+  it('keys the CI build cache on the arch + llama.cpp pins + build-script hash', () => {
+    // Each (os, arch) leg builds only its own arch into resources/embed, so the
+    // cache key MUST include matrix.arch — otherwise the two macOS legs (same
+    // runner.os) would collide and one arch could restore the other's cache.
     expect(embedJob).toMatch(
-      /key:\s*embed-cli-v1-.*LLAMA_CPP_REF.*LLAMA_CPP_COMMIT.*hashFiles\('scripts\/build-embed-cli\.sh'\)/,
+      /key:\s*embed-cli-v1-.*matrix\.arch.*LLAMA_CPP_REF.*LLAMA_CPP_COMMIT.*hashFiles\('scripts\/build-embed-cli\.sh'\)/,
     );
   });
 
@@ -574,6 +585,15 @@ describe('embed-cli engine build + bundling contract (M4-1b, ADR-0029)', () => {
     expect(buildIdx).toBeGreaterThanOrEqual(0);
     expect(verifyIdx).toBeGreaterThan(buildIdx);
     expect(packageIdx).toBeGreaterThan(verifyIdx);
+  });
+
+  it('release stages BOTH mac arches in one packaging job (no per-arch EMBED_ARCH filter)', () => {
+    // Unlike CI (which fans out per-arch), electron-builder builds both mac-arch
+    // installers in a SINGLE job, so that job must stage both arches together.
+    // build-embed-cli.sh with no EMBED_ARCH builds every arch for the OS, so the
+    // release build job must NOT pin EMBED_ARCH — otherwise it would drop mac-x64.
+    expect(releaseBuild).toMatch(/scripts\/build-embed-cli\.sh/);
+    expect(releaseBuild).not.toMatch(/EMBED_ARCH/);
   });
 
   it('SHA-pins every CI action to a 40-hex commit with a # vX.Y.Z comment', () => {
