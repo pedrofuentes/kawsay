@@ -25,6 +25,16 @@
 #   * Only the `llama-embedding` example is built (tools, server, the unified app
 #     binary and its Web UI are all OFF) — smaller, faster, and it avoids any
 #     build-time network fetch of a prebuilt UI (zero-egress hygiene, AC-4).
+#   * Built NETWORK-FREE (LLAMA_OPENSSL=OFF): `common` unconditionally links
+#     cpp-httplib, which at this pinned commit compiles WITH OpenSSL HTTPS support
+#     whenever CMake's LLAMA_OPENSSL (default ON) finds a host OpenSSL — so the
+#     binary would link libssl/libcrypto. The embedder only reads a LOCAL `-m`
+#     GGUF (Kawsay does its own consent-gated model fetch), so we force it OFF: the
+#     statically-linked httplib then carries NO TLS/HTTP code and the binary links
+#     zero libssl/libcrypto/curl (AC-4 zero-egress). This ALSO fixes the macOS
+#     x86_64 cross-link, which otherwise fails resolving OpenSSL symbols the arm64
+#     runner's host OpenSSL can't provide for x86_64. (LLAMA_CURL is deprecated/
+#     ignored at this pin — LLAMA_OPENSSL is the real control.)
 #   * macOS ships BOTH arm64 and x86_64 (dual-arch layout mirrors whisper-cli),
 #     built CPU-only — Metal is intentionally OFF (unlike whisper-cli): this is a
 #     tiny background embedder, so CPU inference is plenty fast. Set EMBED_ARCH
@@ -191,6 +201,17 @@ build_one() {
     -DLLAMA_BUILD_SERVER=OFF
     -DLLAMA_BUILD_APP=OFF
     -DLLAMA_BUILD_UI=OFF
+    # Network-free: force OpenSSL OFF. `common` (needed by the example) ALWAYS links
+    # cpp-httplib, which at this pinned commit compiles WITH OpenSSL HTTPS support
+    # whenever CMake's LLAMA_OPENSSL (default ON) finds a host OpenSSL — baking
+    # _SSL_get_error/_X509_*/_ERR_* into httplib.cpp.o and linking libssl/libcrypto.
+    # On the arm64 macOS runner that host OpenSSL is arm64-only, so the x86_64
+    # cross-link can't resolve those symbols → the mac-x64 leg fails to link. The
+    # embedder never downloads (reads a LOCAL `-m` GGUF; Kawsay does its own consent-
+    # gated model fetch), so OFF links ZERO TLS/HTTP/curl code (AC-4 zero-egress) AND
+    # unblocks the x64 cross-link. LLAMA_CURL is deprecated/ignored at this pin —
+    # LLAMA_OPENSSL is the real control for cpp-httplib's TLS.
+    -DLLAMA_OPENSSL=OFF
   )
   if [ "$OS_KEY" = mac ]; then
     # CPU-only: force Metal OFF. llama.cpp defaults GGML_METAL=ON on Apple, and
