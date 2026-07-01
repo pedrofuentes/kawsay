@@ -72,3 +72,21 @@ export const EMBED_MODEL_SHA256 = '0'.repeat(64);
  * same follow-up as the SHA-256.
  */
 export const EMBED_MODEL_SIZE_BYTES = 130_000_000;
+
+/**
+ * Whether a REAL embedder model has been published — i.e. {@link EMBED_MODEL_SHA256}
+ * is no longer the fail-closed all-zero sentinel. This is the build-time signal the
+ * renderer uses to decide whether to reveal the smart-search opt-in UI at all:
+ *
+ * - `false` (pre-publish): the descriptor still holds the `'0'.repeat(64)` sentinel,
+ *   so no real bytes can ever verify — the feature stays hidden and smart search
+ *   remains exact FTS.
+ * - `true` (post-publish): the maintainer has run publish-embed-model.yml and pinned
+ *   the real digest here, so a genuine model exists to fetch + verify.
+ *
+ * It intentionally reads ONLY the pinned constant (never the network or disk) so the
+ * gate flips deterministically the moment the SHA is finalized, with no runtime probe.
+ */
+export function isEmbedModelPublished(): boolean {
+  return EMBED_MODEL_SHA256 !== '0'.repeat(64);
+}

@@ -13,6 +13,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SMART_SEARCH_DOWNLOAD_MODEL,
+  SMART_SEARCH_MODEL_STATUS,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -21,6 +23,7 @@ import {
 } from '@shared/ipc/contract';
 import {
   IMPORT_PROGRESS,
+  SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_PROGRESS,
 } from '@shared/ipc/events';
@@ -32,6 +35,7 @@ import {
   handleStartTranscription,
   handleTranscriptionStatus,
 } from './ipc/handlers/transcription-run';
+import { handleSmartSearchEnable, handleSmartSearchStatus } from './ipc/handlers/smart-search';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
@@ -42,6 +46,13 @@ import { createWorkerThreadsSpawner } from './importers/ingestion/worker-threads
 import { createFfmpegVideoFrameThumbnailer } from './importers/deps/thumbnail';
 import { resolveFfmpegPath, resolveFfprobePath } from './importers/deps/media-binaries';
 import { createEmbedder } from './search/embed-cli';
+import {
+  createEmbedModelDownloader,
+  createSmartSearchConsentStore,
+  createSmartSearchController,
+  type SmartSearchController,
+} from './search/smart-search-model';
+import { isEmbedModelPublished } from './search/embed-model-source';
 import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-service';
 import { createModelDownloader } from './transcription/model-download';
 import { createElectronModelFetcher } from './transcription/electron-net-fetcher';
@@ -138,6 +149,23 @@ function requireConsentStore(): ConsentStore {
     throw new Error('the transcription consent store is not initialised yet');
   }
   return transcriptionConsentStore;
+}
+
+// The opt-in SMART-SEARCH embedder-model controller (M4-1b / ADR-0029), built in
+// bootstrap() (it needs the guarded `session.defaultSession` + `userData` path). Kept
+// fully INDEPENDENT of transcription — its OWN consent file and OWN progress event — so
+// enabling one never implies or interferes with the other. It is NEVER auto-started:
+// only the caller-initiated `smartSearch:downloadModel` channel begins a download.
+let smartSearchController: SmartSearchController | undefined;
+// Whether THIS platform can install the embedder (the downloader is null otherwise). A
+// module-level latch because the handler map is built at module load, yet the status
+// handler's `isOffered` closure must read the post-bootstrap result at invoke time.
+let smartSearchDownloaderSupported = false;
+function requireSmartSearchController(): SmartSearchController {
+  if (smartSearchController === undefined) {
+    throw new Error('the smart-search controller is not initialised yet');
+  }
+  return smartSearchController;
 }
 
 // The thumbnail decoders (U4), injected into the catalog session so it stays
@@ -250,6 +278,15 @@ const ipcHandlers: IpcHandlerMap = {
     handleTranscriptionStatus({ controller: requireTranscriptionController() }),
   [TRANSCRIPTION_CANCEL]: () =>
     handleCancelTranscription({ controller: requireTranscriptionController() }),
+  [SMART_SEARCH_DOWNLOAD_MODEL]: () =>
+    handleSmartSearchEnable({ controller: requireSmartSearchController() }),
+  [SMART_SEARCH_MODEL_STATUS]: () =>
+    handleSmartSearchStatus({
+      controller: requireSmartSearchController(),
+      // `offered` is true ONLY when a real model is published AND this platform can
+      // install it — read lazily so it reflects bootstrap()'s downloader result.
+      isOffered: () => isEmbedModelPublished() && smartSearchDownloaderSupported,
+    }),
 };
 
 function createMainWindow(): void {
@@ -339,6 +376,30 @@ async function bootstrap(): Promise<void> {
       scratchDir: join(app.getPath('userData'), 'transcription-scratch'),
     }),
     emitProgress: (snapshot) => emitEvent(TRANSCRIPTION_PROGRESS, snapshot),
+  });
+
+  // The opt-in smart-search embedder download (M4-1b), built alongside — but fully
+  // INDEPENDENT of — transcription: its OWN consent file and OWN progress event, so
+  // enabling one never implies the other. It flows through the SAME guarded `net`
+  // fetcher (zero-egress allowlisted) and is null on an unshipped platform (nowhere to
+  // install → smart search stays exact FTS). NEVER auto-started here — only the
+  // caller-initiated `smartSearch:downloadModel` channel begins a download.
+  const smartSearchConsentStore = createSmartSearchConsentStore({
+    filePath: join(app.getPath('userData'), 'smart-search-consent.json'),
+  });
+  const smartSearchDownloader = createEmbedModelDownloader({
+    fetcher: createElectronModelFetcher(net, session.defaultSession),
+    resolve: {
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      projectRoot: app.getAppPath(),
+    },
+    onProgress: (progress) => emitEvent(SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS, progress),
+  });
+  smartSearchDownloaderSupported = smartSearchDownloader !== null;
+  smartSearchController = createSmartSearchController({
+    consent: smartSearchConsentStore,
+    downloader: smartSearchDownloader,
   });
 
   registerIpcHandlers(ipcMain, ipcHandlers, senderOptions);

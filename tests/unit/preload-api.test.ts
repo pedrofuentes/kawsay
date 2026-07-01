@@ -12,6 +12,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SMART_SEARCH_DOWNLOAD_MODEL,
+  SMART_SEARCH_MODEL_STATUS,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -20,6 +22,7 @@ import {
 } from '@shared/ipc/contract';
 import {
   IMPORT_PROGRESS,
+  SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_PROGRESS,
 } from '@shared/ipc/events';
@@ -42,6 +45,8 @@ function fakeInvoke() {
     [CATALOG_THUMBNAIL]: 'data:image/png;base64,AAAA',
     [TRANSCRIPTION_DOWNLOAD_MODEL]: { status: 'started' },
     [TRANSCRIPTION_MODEL_STATUS]: { ready: true },
+    [SMART_SEARCH_MODEL_STATUS]: { optedIn: true, modelReady: false, offered: true },
+    [SMART_SEARCH_DOWNLOAD_MODEL]: { outcome: 'download-started' },
     [TRANSCRIPTION_START]: {
       outcome: 'started',
       reason: null,
@@ -89,6 +94,8 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     const runStatus = await api.getTranscriptionStatus();
     const cancelRun = await api.cancelTranscription();
     const transcript = await api.getTranscript({ id: UUID });
+    const smartStatus = await api.getSmartSearchStatus();
+    const smartEnable = await api.enableSmartSearch();
 
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
@@ -108,6 +115,8 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       text: 'Hola, te quiero mucho.',
       segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
     });
+    expect(smartStatus).toEqual({ optedIn: true, modelReady: false, offered: true });
+    expect(smartEnable).toEqual({ outcome: 'download-started' });
     expect(calls.map((c) => c.channel)).toEqual([
       APP_GET_VERSION,
       LIBRARY_CREATE,
@@ -125,6 +134,8 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       TRANSCRIPTION_STATUS,
       TRANSCRIPTION_CANCEL,
       CATALOG_GET_TRANSCRIPT,
+      SMART_SEARCH_MODEL_STATUS,
+      SMART_SEARCH_DOWNLOAD_MODEL,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
@@ -136,6 +147,8 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(calls[13].payload).toEqual({});
     expect(calls[14].payload).toEqual({});
     expect(calls[15].payload).toEqual({ id: UUID });
+    expect(calls[16].payload).toEqual({});
+    expect(calls[17].payload).toEqual({});
   });
 
   it('wires onModelDownloadProgress onto the model-download event subscription', () => {
@@ -148,6 +161,19 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     const returned = api.onModelDownloadProgress(listener);
 
     expect(subscribe).toHaveBeenCalledWith(TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS, listener);
+    expect(returned).toBe(unsubscribe);
+  });
+
+  it('wires onSmartSearchModelDownloadProgress onto the smart-search model-download event subscription', () => {
+    const { invoke } = fakeInvoke();
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn(() => unsubscribe) as never;
+    const api = createKawsayApi(invoke, subscribe);
+    const listener = () => {};
+
+    const returned = api.onSmartSearchModelDownloadProgress(listener);
+
+    expect(subscribe).toHaveBeenCalledWith(SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS, listener);
     expect(returned).toBe(unsubscribe);
   });
 
@@ -187,7 +213,9 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'cancelTranscription',
         'createLibrary',
         'downloadTranscriptionModel',
+        'enableSmartSearch',
         'getAppVersion',
+        'getSmartSearchStatus',
         'getThumbnail',
         'getTimeline',
         'getTranscript',
@@ -195,6 +223,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'isTranscriptionModelReady',
         'onImportProgress',
         'onModelDownloadProgress',
+        'onSmartSearchModelDownloadProgress',
         'onTranscriptionProgress',
         'openDirectory',
         'openFile',

@@ -127,6 +127,39 @@ export interface KawsayAPI {
    * unsubscribe function. Mirrors {@link onImportProgress}.
    */
   onTranscriptionProgress(listener: (event: TranscriptionProgressEvent) => void): () => void;
+
+  /**
+   * The smart-search capability snapshot the (opt-in) UI reads (M4-1b / ADR-0029):
+   * whether the user `optedIn`, whether the embedder model is present-and-verified
+   * (`modelReady`), and whether the feature is even `offered` yet — true ONLY when a
+   * real model is published AND this platform can install it. While `offered` is
+   * false the whole opt-in surface stays hidden and search remains exact FTS.
+   */
+  getSmartSearchStatus(): Promise<{ optedIn: boolean; modelReady: boolean; offered: boolean }>;
+
+  /**
+   * Opt in to smart search and start the embedder-model download (M4-1b / ADR-0029).
+   * CALLER-INITIATED only (the opt-in UI is a later slice) — never auto-runs. Resolves
+   * as soon as the work is scheduled: `download-started` means a fetch is now in
+   * flight, `already-present` means a verified model is already on disk, and
+   * `unsupported-platform` means there is nowhere to install it (search stays exact
+   * FTS). Byte progress and the terminal result arrive via
+   * {@link onSmartSearchModelDownloadProgress}; the file never leaves a
+   * checksum-verified, atomically-installed state.
+   */
+  enableSmartSearch(): Promise<{
+    outcome: 'download-started' | 'already-present' | 'unsupported-platform';
+  }>;
+
+  /**
+   * Subscribe to the smart-search model-download progress + terminal stream; returns
+   * an unsubscribe function. A channel SEPARATE from {@link onModelDownloadProgress}
+   * (transcription) so the two downloads never cross-talk, though it reuses the same
+   * {@link ModelDownloadProgressEvent} payload shape.
+   */
+  onSmartSearchModelDownloadProgress(
+    listener: (event: ModelDownloadProgressEvent) => void,
+  ): () => void;
 }
 
 /**
