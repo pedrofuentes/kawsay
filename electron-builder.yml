@@ -55,6 +55,21 @@ extraResources:
     to: 'whisper/${os}-${arch}/'
     filter:
       - '**/*'
+  # The llama.cpp `llama-embedding` engine (MIT) for on-device M4 smart search
+  # (ADR-0029 Decision 1, milestone M4-1b). Built FROM SOURCE per-arch in CI
+  # (scripts/build-embed-cli.sh) into resources/embed/<os>-<arch>/, then bundled
+  # here as an extraResource — the same out-of-asar pattern as whisper-cli above,
+  # resolved at runtime by electron/main/search/embed-cli.ts (EMBED_RESOURCE_SUBDIR
+  # = 'embed'). electron-builder expands ${os}-${arch} per build leg (mac-arm64,
+  # mac-x64, win-x64), so each installer carries ONLY its own-arch binary. NO
+  # embedding weights ship here — those are a separate, later opt-in slice; this
+  # bundles ONLY the executable. A missing source dir is a build-time WARNING (not
+  # an error), so a local `pnpm dist` that skips the build script still produces an
+  # app — search just degrades to exact FTS (embed-cli.ts returns UNAVAILABLE).
+  - from: 'resources/embed/${os}-${arch}/'
+    to: 'embed/${os}-${arch}/'
+    filter:
+      - '**/*'
   # ffmpeg + ffprobe for audio extraction (transcription) and video posters /
   # media probing (ingestion) — #175/#181. macOS binaries are built from pinned
   # LGPL FFmpeg source by scripts/build-ffmpeg.sh; Windows is copied from clean
