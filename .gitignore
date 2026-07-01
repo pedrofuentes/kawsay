@@ -19,6 +19,12 @@ out/
 /.ffmpeg-build/
 /resources/media/*/
 
+# Compiled llama-embedding binaries (ADR-0029 / M4-1b) — built from pinned source
+# by scripts/build-embed-cli.sh in CI, never committed; the per-arch subdirs are
+# bundled by electron-builder. Mirrors the whisper-cli / media ignores above.
+/.llama-build/
+/resources/embed/*/
+
 # AC-4 OS-deny whisper harness (ADR-0027 / #138): the real-binary run output is
 # ephemeral and the downloaded jfk.wav + tiny model fixtures are cached in CI,
 # never committed.

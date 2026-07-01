@@ -25,11 +25,14 @@
 #   * Only the `llama-embedding` example is built (tools, server, the unified app
 #     binary and its Web UI are all OFF) — smaller, faster, and it avoids any
 #     build-time network fetch of a prebuilt UI (zero-egress hygiene, AC-4).
-#   * macOS builds BOTH arm64 and x86_64 on one runner (dual-arch layout mirrors
-#     whisper-cli) but CPU-only — Metal is intentionally OFF (unlike whisper-cli):
-#     this is a tiny background embedder, so CPU inference is plenty fast and it
-#     keeps the CI build ~minutes not ~hour. See the mac cfg block for the full
-#     rationale.
+#   * macOS ships BOTH arm64 and x86_64 (dual-arch layout mirrors whisper-cli),
+#     built CPU-only — Metal is intentionally OFF (unlike whisper-cli): this is a
+#     tiny background embedder, so CPU inference is plenty fast. Set EMBED_ARCH
+#     (or pass the arch as $1) to build a SINGLE arch — CI's embed-cli matrix
+#     builds one (os, arch) per PARALLEL leg so the two macOS arches no longer
+#     compile back-to-back on one runner (which overran the job timeout). Release
+#     + local builds leave EMBED_ARCH unset to stage every arch in one pass. See
+#     the mac cfg block for the Metal rationale.
 #   * Windows links the MSVC runtime dynamically (default /MD); any machine that
 #     can run the Kawsay Electron app already ships that runtime.
 #
@@ -62,12 +65,47 @@ esac
 
 # --- per-OS arch matrix: "<electron-builder arch>:<CMAKE_OSX_ARCHITECTURES>" ---
 case "$OS_KEY" in
-  mac) TARGETS=("arm64:arm64" "x64:x86_64") ;;
-  win) TARGETS=("x64:") ;;
+  mac) ALL_TARGETS=("arm64:arm64" "x64:x86_64") ;;
+  win) ALL_TARGETS=("x64:") ;;
 esac
+
+# Optional single-arch selector. CI's embed-cli matrix builds ONE arch per leg —
+# each (os, arch) in its own parallel job with its own timeout budget — by setting
+# EMBED_ARCH (or passing the arch as $1). That is what stopped the macOS build from
+# compiling arm64 + x86_64 back-to-back on one runner and overrunning the timeout.
+# Left UNSET (release packaging + local dev-builds) it builds EVERY arch for the
+# OS, so electron-builder still stages both mac arches from a single pass.
+ARCH_FILTER="${EMBED_ARCH:-${1:-}}"
+if [ -n "$ARCH_FILTER" ]; then
+  TARGETS=()
+  for t in "${ALL_TARGETS[@]}"; do
+    [ "${t%%:*}" = "$ARCH_FILTER" ] && TARGETS+=("$t")
+  done
+  [ "${#TARGETS[@]}" -gt 0 ] \
+    || die "EMBED_ARCH='$ARCH_FILTER' is not a valid arch for $OS_KEY (valid: ${ALL_TARGETS[*]%%:*})"
+  log "single-arch build requested: $ARCH_FILTER"
+else
+  TARGETS=("${ALL_TARGETS[@]}")
+fi
 
 command -v cmake >/dev/null 2>&1 || die "cmake not found on PATH"
 command -v git   >/dev/null 2>&1 || die "git not found on PATH"
+
+# Bound compile parallelism to the core count. `cmake --build -j` with NO number
+# maps to `make -j` (UNBOUNDED) under the default macOS "Unix Makefiles" generator:
+# it launches one compiler per translation unit at once, which on the memory-limited
+# (~7 GB) macOS CI runner thrashes into swap — a big contributor to the dual-arch
+# build overrunning its timeout. A fixed core-count cap keeps every core busy without
+# the swap storm (and is harmless on Windows/MSVC, which bounds itself already).
+if command -v nproc >/dev/null 2>&1; then
+  JOBS="$(nproc)"
+elif command -v sysctl >/dev/null 2>&1; then
+  JOBS="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+else
+  JOBS="${NUMBER_OF_PROCESSORS:-4}"
+fi
+case "$JOBS" in ''|*[!0-9]*) JOBS=4 ;; esac
+[ "$JOBS" -ge 1 ] || JOBS=4
 
 # --- clone + verify the immutable pin ----------------------------------------
 if [ ! -d "$SRC_DIR/.git" ]; then
@@ -175,8 +213,8 @@ build_one() {
 
   cmake "${cfg[@]}"
 
-  log "$arch_dir: building llama-embedding"
-  cmake --build "$build_dir" --config Release --target llama-embedding -j
+  log "$arch_dir: building llama-embedding (-j $JOBS)"
+  cmake --build "$build_dir" --config Release --target llama-embedding -j "$JOBS"
 
   # Locate the binary across single-config (bin/) and multi-config (bin/Release/)
   # generator layouts; CMAKE_RUNTIME_OUTPUT_DIRECTORY is build/bin upstream.

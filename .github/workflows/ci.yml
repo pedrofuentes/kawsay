@@ -140,19 +140,30 @@ jobs:
   # contract + resolver, not a spawned binary), so this job stands alone — cmake +
   # git are preinstalled on the runners; Node runs the arch-checking verify guard.
   embed-cli:
-    name: Build llama-embedding (${{ matrix.os }})
+    name: Build llama-embedding (${{ matrix.os }} ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
+        arch: [arm64, x64]
+        # Windows ships x64 only — drop the non-existent win arm64 leg. The result
+        # is exactly the 3 shipped (os, arch) targets, each its OWN parallel job, so
+        # the two macOS arches no longer compile back-to-back on one runner (which
+        # overran the 60-min timeout twice). Each leg keeps its own full budget.
+        exclude:
+          - os: windows-latest
+            arch: arm64
     # Pin llama.cpp here so the workflow YAML is the single source of truth;
     # build-embed-cli.sh reads these and asserts the cloned HEAD == COMMIT.
+    # EMBED_ARCH scopes build-embed-cli.sh + verify-embed-binary.mjs to this leg's
+    # single arch (unset elsewhere → build/verify every arch for the OS).
     env:
       LLAMA_CPP_REPO: ggml-org/llama.cpp
       LLAMA_CPP_REF: b9848
       LLAMA_CPP_COMMIT: 931eb37f8cac5a6ca84d5641445d460af2a9d7dd
+      EMBED_ARCH: ${{ matrix.arch }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -169,7 +180,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: resources/embed
-          key: embed-cli-v1-${{ runner.os }}-${{ env.LLAMA_CPP_REF }}-${{ env.LLAMA_CPP_COMMIT }}-${{ hashFiles('scripts/build-embed-cli.sh') }}
+          key: embed-cli-v1-${{ runner.os }}-${{ matrix.arch }}-${{ env.LLAMA_CPP_REF }}-${{ env.LLAMA_CPP_COMMIT }}-${{ hashFiles('scripts/build-embed-cli.sh') }}
 
       - name: Build llama-embedding from source
         if: steps.embed-cache.outputs.cache-hit != 'true'

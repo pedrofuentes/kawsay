@@ -51,21 +51,38 @@ export function stagedEmbedBinaryPath(target, projectRoot) {
 }
 
 /**
- * The `<os>-<arch>` targets to verify on this host's electron-builder leg: macOS
- * builds BOTH arm64 + x64 on one runner, Windows builds x64. Throws on any other
- * platform (Kawsay ships macOS + Windows only — ADR-0007).
+ * The `<os>-<arch>` targets to verify on this host's build leg. With `EMBED_ARCH`
+ * set (CI's per-arch matrix legs), verify ONLY that single `<os>-<arch>`; unset
+ * (release packaging builds every arch in one job, and local dev-builds), verify
+ * every arch this OS ships — macOS arm64 + x64, Windows x64. Kept in lock-step with
+ * build-embed-cli.sh's EMBED_ARCH selector so the guard checks exactly what the
+ * build produced. Throws on any other platform (Kawsay ships macOS + Windows only
+ * — ADR-0007) or an arch this OS does not ship.
  */
-export function hostEmbedTargets(platform = process.platform) {
+export function hostEmbedTargets(platform = process.platform, arch = process.env.EMBED_ARCH) {
+  let all;
   switch (platform) {
     case 'darwin':
-      return ['mac-arm64', 'mac-x64'];
+      all = ['mac-arm64', 'mac-x64'];
+      break;
     case 'win32':
-      return ['win-x64'];
+      all = ['win-x64'];
+      break;
     default:
       throw new Error(
         `cannot verify llama-embedding on ${platform} (Kawsay ships macOS + Windows only)`,
       );
   }
+  if (arch) {
+    const target = `${platform === 'darwin' ? 'mac' : 'win'}-${arch}`;
+    if (!all.includes(target)) {
+      throw new Error(
+        `EMBED_ARCH='${arch}' is not a valid arch for ${platform} (have: ${all.join(', ')})`,
+      );
+    }
+    return [target];
+  }
+  return all;
 }
 
 // --- Mach-O / PE arch reader (lock-step copy of tests/helpers/binary-arch.ts) ---

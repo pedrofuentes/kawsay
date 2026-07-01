@@ -47,7 +47,12 @@ jobs:
   build:
     name: Build installers (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # This one job compiles BOTH mac arches of every from-source engine (ffmpeg,
+    # whisper-cli, llama-embedding) and then packages both-arch installers, so it
+    # can't fan the arches out the way ci.yml's compile-only gate does. 75 min (vs
+    # the 60 elsewhere) gives that sequential dual-arch work headroom on a cold
+    # engine cache; the bounded-parallelism build scripts keep it well inside that.
+    timeout-minutes: 75
     strategy:
       # Build every OS even if one fails, so all platform errors surface in one run.
       # The publish job needs ALL legs to succeed (default `needs` semantics), so a
@@ -161,6 +166,9 @@ jobs:
         # Compile the per-arch llama-embedding (ADR-0029 · M4-1b) into
         # resources/embed/<os>-<arch>/ BEFORE packaging, so electron-builder's
         # extraResources bundles it. cmake + git are preinstalled on the runners.
+        # No per-arch filter here (unlike ci.yml's parallel per-arch legs):
+        # electron-builder stages both mac arches from this one job, so this build
+        # produces EVERY arch the OS ships in a single pass.
         if: steps.embed-cache.outputs.cache-hit != 'true'
         shell: bash
         run: ./scripts/build-embed-cli.sh
