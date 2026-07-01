@@ -201,4 +201,37 @@ describe('EmbeddingsRepo (item_embeddings + embed_status drain, ADR-0029 · M4-1
       expect(statusOf(db, 'i1')).toBe('pending');
     });
   });
+
+  describe('markEmbedFailed / markEmbedSkipped (terminal drain markers, no vector stored)', () => {
+    it('markEmbedFailed flips pending → error and drops the item from the pending drain', () => {
+      seedItem('i1');
+      seedItem('i2');
+      expect(statusOf(db, 'i1')).toBe('pending');
+
+      repo.markEmbedFailed('i1');
+
+      expect(statusOf(db, 'i1')).toBe('error');
+      // The marked item is no longer awaiting embedding; i2 still is.
+      expect(repo.listPendingEmbeddings(10).map((r) => r.id)).toEqual(['i2']);
+      // No vector is written by a failure marker.
+      expect(repo.getEmbedding('i1', MODEL)).toBeNull();
+    });
+
+    it('markEmbedSkipped flips pending → skipped and drops the item from the pending drain', () => {
+      seedItem('i1');
+      seedItem('i2');
+
+      repo.markEmbedSkipped('i1');
+
+      expect(statusOf(db, 'i1')).toBe('skipped');
+      expect(repo.listPendingEmbeddings(10).map((r) => r.id)).toEqual(['i2']);
+      expect(repo.getEmbedding('i1', MODEL)).toBeNull();
+    });
+
+    it('marking an unknown item is a calm no-op (no throw, writes nothing)', () => {
+      expect(() => repo.markEmbedFailed('nope')).not.toThrow();
+      expect(() => repo.markEmbedSkipped('nope')).not.toThrow();
+      expect(count(db, 'SELECT COUNT(*) n FROM item_embeddings')).toBe(0);
+    });
+  });
 });
