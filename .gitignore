@@ -25,6 +25,11 @@ out/
 /.llama-build/
 /resources/embed/*/
 
+# Converted embedder GGUF + its scratch checkout/build (ADR-0029 / M4-1b) — produced
+# by scripts/convert-embed-model.sh in the maintainer-gated publish-embed-model
+# workflow, uploaded as a Release asset, never committed.
+/.embed-model-build/
+
 # AC-4 OS-deny whisper harness (ADR-0027 / #138): the real-binary run output is
 # ephemeral and the downloaded jfk.wav + tiny model fixtures are cached in CI,
 # never committed.

@@ -1,0 +1,213 @@
+name: Publish embedder model
+
+# HUMAN-REQUIRED, workflow_dispatch ONLY (never auto-runs). Converts + publishes the
+# M4 embedder model (intfloat/multilingual-e5-small, MIT) as the Kawsay Release asset
+# the consent-download flow targets (electron/main/search/embed-model-source.ts). The
+# upload creates a ~124 MB PUBLIC asset — a MISSION §9 T4 maintainer action — so it is
+# gated behind the protected `release` GitHub Environment (required reviewer), exactly
+# like the app release in release.yml.
+#
+# Two jobs, mirroring release.yml's build→publish split so least privilege holds:
+#   • convert  (contents: read)  — runs scripts/convert-embed-model.sh: patches
+#                BertModel for the SentencePiece (t5) tokenizer, converts →
+#                Q4_K_M, and HARD-ASSERTS tokenizer.ggml.model == t5 + arch/size
+#                (a wrong tokenizer = broken embeddings). Hands the GGUF to publish
+#                as an internal workflow artifact and prints SHA-256 + byte size.
+#   • publish  (contents: write, environment: release) — uploads the GGUF to the
+#                `models-embed-v1` release (created if absent). ONLY this job can write.
+#
+# Both print the SHA-256 + size in the job summary so the maintainer can finalize
+# EMBED_MODEL_SHA256 / EMBED_MODEL_SIZE_BYTES in the descriptor (a tiny follow-up; the
+# consent-download stays inert until then + until the pkg-egress slice allowlists the
+# URL). Set the `dry_run` input to convert + verify + print those facts WITHOUT
+# creating the public asset or requesting the release-environment approval.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Convert, verify (t5) and print SHA-256/size only — do NOT create or upload the release asset.'
+        type: boolean
+        default: false
+
+# Never cancel an in-progress publish; serialize dispatches so two runs can't race to
+# create/overwrite the same release asset.
+concurrency:
+  group: publish-embed-model
+  cancel-in-progress: false
+
+# Least privilege at the top level; only the publish job widens to contents: write.
+permissions:
+  contents: read
+
+# Single source of truth for the pins. llama.cpp is the SAME immutable commit as
+# scripts/build-embed-cli.sh + ci.yml's embed-cli job; the model is pinned to an
+# immutable HF revision so the produced bytes (and the SHA-256) are reproducible.
+env:
+  LLAMA_CPP_REPO: ggml-org/llama.cpp
+  LLAMA_CPP_REF: b9848
+  LLAMA_CPP_COMMIT: 931eb37f8cac5a6ca84d5641445d460af2a9d7dd
+  EMBED_MODEL_REPO: intfloat/multilingual-e5-small
+  EMBED_MODEL_REVISION: 614241f622f53c4eeff9890bdc4f31cfecc418b3
+  EMBED_MODEL_FILE_NAME: multilingual-e5-small-q4_k_m.gguf
+  RELEASE_TAG: models-embed-v1
+
+jobs:
+  convert:
+    name: Convert + verify (t5 tokenizer)
+    runs-on: ubuntu-latest
+    # torch + a from-source llama-quantize build + the f16→Q4_K_M pass fit well under
+    # this; it is a manual, one-off conversion, not a per-PR gate.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.meta.outputs.sha256 }}
+      size: ${{ steps.meta.outputs.size }}
+    steps:
+      - name: Checkout Kawsay
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.11'
+
+      - name: Clone the pinned llama.cpp (convert + quantize source)
+        # One shallow clone provides BOTH convert_hf_to_gguf.py (the conversion/
+        # package that defines BertModel) AND the llama-quantize target. Assert the
+        # HEAD equals the pinned commit so a re-pointed tag fails loudly.
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$LLAMA_CPP_REF" \
+            "https://github.com/$LLAMA_CPP_REPO.git" .llama-cpp-src
+          head="$(git -C .llama-cpp-src rev-parse HEAD)"
+          if [ "$head" != "$LLAMA_CPP_COMMIT" ]; then
+            echo "llama.cpp pin drift: $head != $LLAMA_CPP_COMMIT" >&2
+            exit 1
+          fi
+          echo "Pinned llama.cpp commit verified: $head"
+
+      - name: Install Python conversion deps
+        # The canonical requirements for THIS pin (torch, transformers, sentencepiece,
+        # gguf, protobuf, numpy) plus huggingface_hub for the model download.
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r .llama-cpp-src/requirements/requirements-convert_hf_to_gguf.txt
+          pip install huggingface_hub
+
+      - name: Convert + quantize + assert tokenizer == t5
+        # The script patches BertModel.set_vocab → SentencePiece path, converts to f16,
+        # builds llama-quantize from the SAME checkout, quantizes to Q4_K_M, then FAILS
+        # unless tokenizer.ggml.model == t5 and general.architecture == bert.
+        shell: bash
+        env:
+          LLAMA_CPP_DIR: ${{ github.workspace }}/.llama-cpp-src
+        run: ./scripts/convert-embed-model.sh
+
+      - name: Capture + verify SHA-256 + size
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          meta=".embed-model-build/${EMBED_MODEL_FILE_NAME}.metadata"
+          [ -f "$meta" ] || { echo "conversion metadata not produced: $meta" >&2; exit 1; }
+          echo "Conversion metadata:"
+          cat "$meta"
+          tokenizer="$(grep '^EMBED_MODEL_TOKENIZER=' "$meta" | cut -d= -f2-)"
+          sha="$(grep '^EMBED_MODEL_SHA256=' "$meta" | cut -d= -f2-)"
+          size="$(grep '^EMBED_MODEL_SIZE_BYTES=' "$meta" | cut -d= -f2-)"
+          # Defence in depth: the script already asserts t5, re-check the surfaced facts.
+          [ "$tokenizer" = "t5" ] || { echo "tokenizer is '$tokenizer', expected t5" >&2; exit 1; }
+          case "$sha" in *[!0-9a-f]* | "") echo "bad sha256: '$sha'" >&2; exit 1 ;; esac
+          [ "${#sha}" -eq 64 ] || { echo "sha256 is not 64 hex chars: '$sha'" >&2; exit 1; }
+          case "$size" in ''|*[!0-9]*) echo "bad size: '$size'" >&2; exit 1 ;; esac
+          [ "$size" -gt 50000000 ] || { echo "converted GGUF suspiciously small: $size bytes" >&2; exit 1; }
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Embedder model converted (tokenizer verified \`t5\`)"
+            echo ""
+            echo "- Asset: \`${EMBED_MODEL_FILE_NAME}\`"
+            echo "- SHA-256: \`${sha}\`"
+            echo "- Size: \`${size}\` bytes"
+            echo ""
+            echo "Finalize \`EMBED_MODEL_SHA256\` / \`EMBED_MODEL_SIZE_BYTES\` in \`electron/main/search/embed-model-source.ts\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload converted GGUF (internal artifact)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: embed-model-gguf
+          path: .embed-model-build/${{ env.EMBED_MODEL_FILE_NAME }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish embedder model release asset
+    needs: [convert]
+    # Skipped on a dry run, so the release-environment approval is only requested when
+    # actually creating the public asset.
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # HUMAN-REQUIRED gate (MISSION §9 T4): the ~124 MB public asset is uploaded ONLY
+    # after the required reviewer approves this job — the one job that writes.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download converted GGUF
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: embed-model-gguf
+          path: release-asset
+
+      - name: Verify the asset is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          f="release-asset/${EMBED_MODEL_FILE_NAME}"
+          [ -s "$f" ] || { echo "missing converted GGUF: $f" >&2; exit 1; }
+          echo "ok: $f ($(wc -c <"$f") bytes)"
+
+      - name: Publish to the models-embed-v1 release
+        # Creates the release at the pinned tag if absent and uploads the GGUF asset.
+        # make_latest: false so this model asset never steals the app's "Latest" badge.
+        # The token is the repo-scoped Actions token (contents: write).
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Kawsay embedder model (multilingual-e5-small Q4_K_M)
+          body: |
+            On-device embedder model for M4 smart search — intfloat/multilingual-e5-small (MIT),
+            converted with the SentencePiece (t5) tokenizer and quantized to Q4_K_M.
+
+            - SHA-256: ${{ needs.convert.outputs.sha256 }}
+            - Size (bytes): ${{ needs.convert.outputs.size }}
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: release-asset/${{ env.EMBED_MODEL_FILE_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record published facts in the job summary
+        shell: bash
+        env:
+          SHA256: ${{ needs.convert.outputs.sha256 }}
+          SIZE: ${{ needs.convert.outputs.size }}
+        run: |
+          {
+            echo "### Published \`${RELEASE_TAG}\` embedder model asset"
+            echo ""
+            echo "- Asset: \`${EMBED_MODEL_FILE_NAME}\`"
+            echo "- SHA-256: \`${SHA256}\`"
+            echo "- Size: \`${SIZE}\` bytes"
+            echo ""
+            echo "Next: finalize \`EMBED_MODEL_SHA256\` / \`EMBED_MODEL_SIZE_BYTES\` in \`electron/main/search/embed-model-source.ts\`, then allowlist the URL in the pkg-egress slice."
+          } >> "$GITHUB_STEP_SUMMARY"
