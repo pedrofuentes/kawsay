@@ -12,16 +12,21 @@
  * scheme AND carries no remote authority — a `file://host/share` URL is a remote
  * target (on Windows a UNC path → outbound SMB), so only the host-less
  * `file:///…` form is local — or, in development, the Vite dev server / HMR
- * websocket on a loopback host — or it is the ONE narrowly-scoped, opt-in
- * transcription-model download (see {@link isAllowedModelDownloadRequest} /
- * AC-17, ADR-0027 Decision 6). Anything unrecognised — including unparseable
- * URLs and every other remote origin — is cancelled.
+ * websocket on a loopback host — or it is one of the narrowly-scoped, opt-in
+ * model downloads (whisper transcription + M4 embedder; see
+ * {@link isAllowedModelDownloadRequest} / AC-17, ADR-0027 Decision 6, ADR-0029).
+ * Anything unrecognised — including unparseable URLs and every other remote
+ * origin — is cancelled.
  */
 
 import {
   MODEL_DOWNLOAD_REDIRECT_HOST,
   MODEL_DOWNLOAD_URL,
 } from '../transcription/model-source';
+import {
+  EMBED_MODEL_DOWNLOAD_REDIRECT_HOST,
+  EMBED_MODEL_DOWNLOAD_URL,
+} from '../search/embed-model-source';
 
 /** Schemes that never leave the machine and are always permitted. */
 const LOCAL_SCHEMES: ReadonlySet<string> = new Set([
@@ -56,8 +61,8 @@ export interface NetworkGuardOptions {
   /**
    * `app.isPackaged`. A packaged build grants no LOCAL network relaxation — not even
    * loopback; the dev-server / HMR exception applies only when this is `false`. The
-   * sole outbound request a packaged build still permits is the opt-in, scoped model
-   * download (see {@link isAllowedModelDownloadRequest}), which is gated on its own
+   * only outbound requests a packaged build still permits are the opt-in, scoped model
+   * downloads (see {@link isAllowedModelDownloadRequest}), which are gated on their own
    * and evaluated independently of this flag.
    */
   readonly isPackaged: boolean;
@@ -120,27 +125,39 @@ export interface BeforeRequestDetails {
   readonly uploadData?: readonly unknown[];
 }
 
+/** One auditable egress allowlist entry — an opt-in, integrity-verified model
+ *  download pinned two ways: the EXACT origin release URL and its signed CDN
+ *  redirect host. */
+export interface ModelDownloadAllowlistEntry {
+  readonly originUrl: string;
+  readonly redirectHost: string;
+}
+
 /**
- * The single, auditable egress allowlist entry (AC-17 / ADR-0027 Decision 6).
+ * The auditable egress allowlist (AC-17 / ADR-0027 Decision 6, ADR-0029).
  *
- * The ONLY outbound request a packaged Kawsay build may make is the opt-in
- * transcription-model download. It is pinned two ways:
+ * The ONLY outbound requests a packaged Kawsay build may make are the opt-in,
+ * integrity-verified model downloads — the whisper transcription model and the
+ * M4 smart-search embedder. Each entry is pinned two ways:
  *  - `originUrl` — the EXACT release URL we GET first (string-equal match, the
  *    narrowest possible);
  *  - `redirectHost` — the host GitHub's 302 redirects to. That signed CDN URL
  *    carries a time-limited, per-request `se=/sig=/jwt=` path+query, so this leg
  *    is matched by host (+ https + GET + empty body), not by exact URL.
- * Keeping this as one named constant — sourced from the same `model-source`
- * pins the downloader and integrity check use — means the allowlist cannot drift
- * from what is actually fetched, and a reviewer can audit egress at a glance.
+ * Each entry is sourced from the same `*-model-source` module that pins the
+ * downloader and integrity check, so the allowlist cannot drift from what is
+ * actually fetched, and a reviewer can audit every permitted origin at a glance.
+ * A request is permitted iff it exactly equals some entry's `originUrl`, or is an
+ * https request whose host equals some entry's `redirectHost`; anything else stays
+ * denied. Adding a model = adding exactly one narrowly-scoped entry here.
  */
-export const MODEL_DOWNLOAD_ALLOWLIST: {
-  readonly originUrl: string;
-  readonly redirectHost: string;
-} = {
-  originUrl: MODEL_DOWNLOAD_URL,
-  redirectHost: MODEL_DOWNLOAD_REDIRECT_HOST,
-};
+export const MODEL_DOWNLOAD_ALLOWLIST: readonly ModelDownloadAllowlistEntry[] = [
+  // Whisper transcription model (M2 / ADR-0027 Decision 6).
+  { originUrl: MODEL_DOWNLOAD_URL, redirectHost: MODEL_DOWNLOAD_REDIRECT_HOST },
+  // M4 smart-search embedder model (ADR-0029) — the same GET-only, empty-body,
+  // exact-origin-or-https-CDN-host shape as whisper; the ONLY net-new egress.
+  { originUrl: EMBED_MODEL_DOWNLOAD_URL, redirectHost: EMBED_MODEL_DOWNLOAD_REDIRECT_HOST },
+];
 
 /** True iff the request carries no upload body (the model download is a pure GET). */
 function hasEmptyUploadBody(uploadData: readonly unknown[] | undefined): boolean {
@@ -148,14 +165,15 @@ function hasEmptyUploadBody(uploadData: readonly unknown[] | undefined): boolean
 }
 
 /**
- * Decide whether a request is the one permitted opt-in model download (AC-17).
+ * Decide whether a request is one of the permitted opt-in model downloads (AC-17,
+ * ADR-0029).
  *
  * Deny-by-default and deliberately narrow: the request must be a `GET` with an
- * EMPTY upload body, targeting EITHER the exact pinned origin release URL OR the
- * signed-CDN redirect host over https. Every other shape — a POST, a body-bearing
- * GET, a different path/host, a plaintext CDN leg, an unparseable URL — returns
- * `false`. This predicate is the entire widening of the zero-egress guard, so it
- * is intentionally explicit and easy to audit.
+ * EMPTY upload body, targeting EITHER an allowlist entry's exact pinned origin
+ * release URL OR its signed-CDN redirect host over https. Every other shape — a
+ * POST, a body-bearing GET, a different path/host, a plaintext CDN leg, an
+ * unparseable URL — returns `false`. This predicate is the entire widening of the
+ * zero-egress guard, so it is intentionally explicit and easy to audit.
  */
 export function isAllowedModelDownloadRequest(details: BeforeRequestDetails): boolean {
   // Only ever a GET, and only ever with no upload body — never a write, never a
@@ -167,23 +185,24 @@ export function isAllowedModelDownloadRequest(details: BeforeRequestDetails): bo
     return false;
   }
 
-  // Origin leg: the EXACT pinned release URL. A string-equal match is the
-  // narrowest possible and already encodes the https scheme + host + path.
-  if (details.url === MODEL_DOWNLOAD_ALLOWLIST.originUrl) {
+  // Origin leg: the EXACT pinned release URL of ANY allowlist entry. A string-equal
+  // match is the narrowest possible and already encodes the https scheme + host + path.
+  if (MODEL_DOWNLOAD_ALLOWLIST.some((entry) => details.url === entry.originUrl)) {
     return true;
   }
 
-  // CDN leg: GitHub's 302 lands on a fixed host with a varying signed path/query,
-  // so match the host EXACTLY over https. An unparseable URL, a non-https leg, or
-  // a sub-/super-domain spoof (e.g. `…githubusercontent.com.evil.example`) all fail.
+  // CDN leg: GitHub's 302 lands on a fixed host with a varying signed path/query, so
+  // match the host EXACTLY over https against ANY allowlist entry's redirect host. An
+  // unparseable URL, a non-https leg, or a sub-/super-domain spoof
+  // (e.g. `…githubusercontent.com.evil.example`) all fail.
   let parsed: URL;
   try {
     parsed = new URL(details.url);
   } catch {
     return false;
   }
-  return (
-    parsed.protocol === 'https:' && parsed.hostname === MODEL_DOWNLOAD_ALLOWLIST.redirectHost
+  return MODEL_DOWNLOAD_ALLOWLIST.some(
+    (entry) => parsed.protocol === 'https:' && parsed.hostname === entry.redirectHost,
   );
 }
 
@@ -207,7 +226,7 @@ export interface NetworkGuardSessionLike {
 /**
  * Install the zero-egress guard on a session. Registers a single catch-all
  * `<all_urls>` handler that cancels every request except a strictly-local one
- * (see {@link isLocalOnlyRequest}) or the one permitted opt-in model download
+ * (see {@link isLocalOnlyRequest}) or one of the permitted opt-in model downloads
  * (see {@link isAllowedModelDownloadRequest}). Must be installed BEFORE any
  * window loads content (ARCHITECTURE §10), on `defaultSession` and any
  * additional sessions the app creates.
