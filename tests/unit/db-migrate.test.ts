@@ -337,6 +337,22 @@ describe('migration 003 — item_embeddings + embed_status drain (ADR-0029)', ()
     expect(row?.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 
+  it('enforces the dim/vector integrity CHECK (vector byte length = dim*4, dim > 0)', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();
+    const insert = db.prepare(
+      'INSERT INTO item_embeddings (item_id, model_id, dim, vector) VALUES (?, ?, ?, ?)',
+    );
+    // dim claims 2 (⇒ 8 bytes) but the float32 BLOB is only 4 bytes: rejected.
+    expect(() => insert.run('i1', 'model-short', 2, Buffer.alloc(4))).toThrow();
+    // dim claims 1 (⇒ 4 bytes) but the BLOB is 8 bytes: rejected.
+    expect(() => insert.run('i1', 'model-long', 1, Buffer.alloc(8))).toThrow();
+    // dim ≤ 0 is rejected even with a byte-consistent (empty) BLOB.
+    expect(() => insert.run('i1', 'model-zero', 0, Buffer.alloc(0))).toThrow();
+    // A BLOB of exactly dim*4 bytes with dim > 0 is accepted.
+    expect(() => insert.run('i1', 'model-ok', 2, Buffer.alloc(8))).not.toThrow();
+  });
+
   it('cascades item_embeddings rows when their item is deleted (a removable rendition)', () => {
     runMigrations(db);
     db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();

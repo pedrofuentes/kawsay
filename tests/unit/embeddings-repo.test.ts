@@ -51,6 +51,16 @@ describe('encodeVector / decodeVector (float32 little-endian BLOB round-trip)', 
     const decoded = decodeVector(encodeVector(vec(0.1)));
     expect(decoded[0]).toBe(Math.fround(0.1));
   });
+
+  it('throws for a non-finite element so a NaN/±Infinity vector never reaches a BLOB', () => {
+    expect(() => encodeVector(vec(1, NaN, 3))).toThrow();
+    expect(() => encodeVector(vec(1, Infinity))).toThrow();
+    expect(() => encodeVector(vec(-Infinity, 0))).toThrow();
+  });
+
+  it('throws for an empty vector (a stored vector must have dim > 0)', () => {
+    expect(() => encodeVector(vec())).toThrow();
+  });
 });
 
 describe('EmbeddingsRepo (item_embeddings + embed_status drain, ADR-0029 · M4-1)', () => {
@@ -171,6 +181,24 @@ describe('EmbeddingsRepo (item_embeddings + embed_status drain, ADR-0029 · M4-1
 
     it('returns an empty list when no vectors exist for the model', () => {
       expect(repo.semanticSearch(vec(1, 0), 10, { modelId: 'no-such-model' })).toEqual([]);
+    });
+  });
+
+  describe('rejects invalid vectors at the upsert boundary (never persists, never flips the drain)', () => {
+    it('rejects a non-finite vector: no row is written and embed_status stays pending', () => {
+      seedItem('i1');
+      expect(() => repo.upsertEmbedding('i1', MODEL, vec(1, NaN, 3))).toThrow();
+      expect(repo.getEmbedding('i1', MODEL)).toBeNull();
+      expect(count(db, "SELECT COUNT(*) n FROM item_embeddings WHERE item_id = 'i1'")).toBe(0);
+      // A rejected embed must NOT advance the drain — the item is still pending.
+      expect(statusOf(db, 'i1')).toBe('pending');
+    });
+
+    it('rejects an empty vector: no row is written and embed_status stays pending', () => {
+      seedItem('i1');
+      expect(() => repo.upsertEmbedding('i1', MODEL, vec())).toThrow();
+      expect(count(db, "SELECT COUNT(*) n FROM item_embeddings WHERE item_id = 'i1'")).toBe(0);
+      expect(statusOf(db, 'i1')).toBe('pending');
     });
   });
 });
