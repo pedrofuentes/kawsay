@@ -11,6 +11,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SMART_SEARCH_DOWNLOAD_MODEL,
+  SMART_SEARCH_MODEL_STATUS,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -49,6 +51,8 @@ const otherHandlers = {
   [DIALOG_OPEN_FILE]: () => null,
   [TRANSCRIPTION_DOWNLOAD_MODEL]: () => ({ status: 'already-present' as const }),
   [TRANSCRIPTION_MODEL_STATUS]: () => ({ ready: false }),
+  [SMART_SEARCH_DOWNLOAD_MODEL]: () => ({ outcome: 'download-started' as const }),
+  [SMART_SEARCH_MODEL_STATUS]: () => ({ optedIn: false, modelReady: false, offered: false }),
   [TRANSCRIPTION_START]: () => ({
     outcome: 'idle' as const,
     reason: null,
@@ -93,6 +97,13 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     registerIpcHandlers(ipcMain, handlers);
     expect(ipcMain.listeners.has(TRANSCRIPTION_DOWNLOAD_MODEL)).toBe(true);
     expect(ipcMain.listeners.has(TRANSCRIPTION_MODEL_STATUS)).toBe(true);
+  });
+
+  it('registers a handle() listener for the smart-search opt-in channels (M4-1b)', () => {
+    const ipcMain = fakeIpcMain();
+    registerIpcHandlers(ipcMain, handlers);
+    expect(ipcMain.listeners.has(SMART_SEARCH_DOWNLOAD_MODEL)).toBe(true);
+    expect(ipcMain.listeners.has(SMART_SEARCH_MODEL_STATUS)).toBe(true);
   });
 
   it('registers a handle() listener for the gated transcription-run channels (#157)', () => {

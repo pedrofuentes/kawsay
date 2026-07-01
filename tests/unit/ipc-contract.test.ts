@@ -10,6 +10,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SMART_SEARCH_DOWNLOAD_MODEL,
+  SMART_SEARCH_MODEL_STATUS,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -19,6 +21,7 @@ import {
 } from '@shared/ipc/contract';
 import {
   IMPORT_PROGRESS,
+  SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_PROGRESS,
   ipcEventContract,
@@ -259,23 +262,35 @@ describe('ipcContract — catalog:getTranscript (#136: an item’s transcript by
       }),
     ).toBe(true);
     // A not-yet-transcribed item: a calm pending view with no words.
-    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'pending', language: null, text: null, segments: [] })).toBe(
-      true,
-    );
-    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'failed', language: null, text: null, segments: [] })).toBe(
-      true,
-    );
-    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'skipped', language: null, text: null, segments: [] })).toBe(
-      true,
-    );
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'pending',
+        language: null,
+        text: null,
+        segments: [],
+      }),
+    ).toBe(true);
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, { status: 'failed', language: null, text: null, segments: [] }),
+    ).toBe(true);
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'skipped',
+        language: null,
+        text: null,
+        segments: [],
+      }),
+    ).toBe(true);
   });
 
   it('rejects an unknown status, a missing field, a bad segment, or an extra key', () => {
-    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'weird', language: null, text: null, segments: [] })).toBe(
+    expect(
+      resOk(CATALOG_GET_TRANSCRIPT, { status: 'weird', language: null, text: null, segments: [] }),
+    ).toBe(false);
+    // segments is required (strictObject) — a partial view cannot cross the boundary.
+    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'done', language: null, text: 'hi' })).toBe(
       false,
     );
-    // segments is required (strictObject) — a partial view cannot cross the boundary.
-    expect(resOk(CATALOG_GET_TRANSCRIPT, { status: 'done', language: null, text: 'hi' })).toBe(false);
     expect(
       resOk(CATALOG_GET_TRANSCRIPT, {
         status: 'done',
@@ -285,7 +300,13 @@ describe('ipcContract — catalog:getTranscript (#136: an item’s transcript by
       }),
     ).toBe(false);
     expect(
-      resOk(CATALOG_GET_TRANSCRIPT, { status: 'pending', language: null, text: null, segments: [], extra: 1 }),
+      resOk(CATALOG_GET_TRANSCRIPT, {
+        status: 'pending',
+        language: null,
+        text: null,
+        segments: [],
+        extra: 1,
+      }),
     ).toBe(false);
   });
 
@@ -333,7 +354,9 @@ describe('ipcContract — import:start / import:cancel', () => {
   it('accepts a known sourceType + inputPath and returns a jobId', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x' })).toBe(true);
     expect(reqOk(IMPORT_START, { sourceType: 'whatsapp', inputPath: '/x.zip' })).toBe(true);
-    expect(reqOk(IMPORT_START, { sourceType: 'telegram', inputPath: '/Telegram Export' })).toBe(true);
+    expect(reqOk(IMPORT_START, { sourceType: 'telegram', inputPath: '/Telegram Export' })).toBe(
+      true,
+    );
     expect(resOk(IMPORT_START, { jobId: UUID })).toBe(true);
     expect(resOk(IMPORT_START, { jobId: 'not-a-uuid' })).toBe(false);
   });
@@ -345,9 +368,9 @@ describe('ipcContract — import:start / import:cancel', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: '/x', rogue: 1 })).toBe(false);
   });
   it('accepts Windows drive-letter absolute paths as renderer-supplied paths', () => {
-    expect(reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'C:\\Users\\mateo\\Memories' })).toBe(
-      true,
-    );
+    expect(
+      reqOk(IMPORT_START, { sourceType: 'folder', inputPath: 'C:\\Users\\mateo\\Memories' }),
+    ).toBe(true);
   });
   it('cancel requires a uuid jobId and returns a cancelled flag', () => {
     expect(reqOk(IMPORT_CANCEL, { jobId: UUID })).toBe(true);
@@ -727,6 +750,99 @@ describe('ipcEventContract — transcription:modelDownloadProgress (AC-17)', () 
     expect(
       schema.safeParse({ phase: 'downloading', bytesDownloaded: -1, totalBytes: 0, error: null })
         .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        phase: 'downloading',
+        bytesDownloaded: 0,
+        totalBytes: 0,
+        error: null,
+        rogue: true,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('ipcContract — smartSearch:downloadModel / smartSearch:modelStatus (M4-1b)', () => {
+  it('takes an empty request and answers with a terminal enable outcome', () => {
+    expect(reqOk(SMART_SEARCH_DOWNLOAD_MODEL, {})).toBe(true);
+    for (const outcome of [
+      'download-started',
+      'already-present',
+      'unsupported-platform',
+    ] as const) {
+      expect(resOk(SMART_SEARCH_DOWNLOAD_MODEL, { outcome })).toBe(true);
+    }
+  });
+
+  it('rejects an unknown outcome, extra request keys, or a non-empty body', () => {
+    // `started` is the transcription vocabulary — smart search must NOT accept it.
+    expect(resOk(SMART_SEARCH_DOWNLOAD_MODEL, { outcome: 'started' })).toBe(false);
+    expect(resOk(SMART_SEARCH_DOWNLOAD_MODEL, {})).toBe(false);
+    expect(reqOk(SMART_SEARCH_DOWNLOAD_MODEL, { force: true })).toBe(false);
+  });
+
+  it('reports the { optedIn, modelReady, offered } snapshot as strict booleans', () => {
+    expect(reqOk(SMART_SEARCH_MODEL_STATUS, {})).toBe(true);
+    expect(
+      resOk(SMART_SEARCH_MODEL_STATUS, { optedIn: true, modelReady: false, offered: true }),
+    ).toBe(true);
+    expect(
+      resOk(SMART_SEARCH_MODEL_STATUS, { optedIn: false, modelReady: false, offered: false }),
+    ).toBe(true);
+  });
+
+  it('rejects a non-boolean field, a missing field, or unknown keys (strict)', () => {
+    expect(
+      resOk(SMART_SEARCH_MODEL_STATUS, { optedIn: 'yes', modelReady: false, offered: true }),
+    ).toBe(false);
+    // `offered` is required — a status that omits it must not validate.
+    expect(resOk(SMART_SEARCH_MODEL_STATUS, { optedIn: true, modelReady: false })).toBe(false);
+    expect(
+      resOk(SMART_SEARCH_MODEL_STATUS, {
+        optedIn: true,
+        modelReady: false,
+        offered: true,
+        rogue: true,
+      }),
+    ).toBe(false);
+    expect(resOk(SMART_SEARCH_MODEL_STATUS, {})).toBe(false);
+  });
+});
+
+describe('ipcEventContract — smartSearch:modelDownloadProgress (M4-1b, separate from transcription)', () => {
+  const schema = ipcEventContract[SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS];
+
+  it('reuses the shared model-download progress schema (identical payload rules)', () => {
+    expect(schema).toBe(ipcEventContract[TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS]);
+  });
+
+  it('is a DISTINCT channel from the transcription model download (no cross-talk)', () => {
+    expect(SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS).not.toBe(TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS);
+  });
+
+  it('accepts a downloading tick and a typed error terminal tick', () => {
+    expect(
+      schema.safeParse({
+        phase: 'downloading',
+        bytesDownloaded: 1024,
+        totalBytes: 130_000_000,
+        error: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({
+        phase: 'error',
+        bytesDownloaded: 0,
+        totalBytes: 130_000_000,
+        error: { kind: 'integrity', message: 'bad', retryable: true },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a bad phase or unknown keys', () => {
+    expect(
+      schema.safeParse({ phase: 'nope', bytesDownloaded: 0, totalBytes: 0, error: null }).success,
     ).toBe(false);
     expect(
       schema.safeParse({

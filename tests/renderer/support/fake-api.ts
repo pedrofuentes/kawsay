@@ -154,6 +154,8 @@ export interface FakeApiOptions {
   getTranscriptionStatus?: KawsayAPI['getTranscriptionStatus'];
   cancelTranscription?: KawsayAPI['cancelTranscription'];
   getTranscript?: KawsayAPI['getTranscript'];
+  getSmartSearchStatus?: KawsayAPI['getSmartSearchStatus'];
+  enableSmartSearch?: KawsayAPI['enableSmartSearch'];
 }
 
 /** A zero transcription tally (the calm default for status/start fakes). */
@@ -177,13 +179,13 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
     createLibrary:
       opts.createLibrary ??
       vi.fn((input: { path: string; personName?: string }) =>
-        Promise.resolve(makeLibrarySummary({ root: input.path, name: input.personName ?? 'Library' })),
+        Promise.resolve(
+          makeLibrarySummary({ root: input.path, name: input.personName ?? 'Library' }),
+        ),
       ),
     openLibrary:
       opts.openLibrary ??
-      vi.fn((input: { path: string }) =>
-        Promise.resolve(makeLibrarySummary({ root: input.path })),
-      ),
+      vi.fn((input: { path: string }) => Promise.resolve(makeLibrarySummary({ root: input.path }))),
     getTimeline: opts.getTimeline ?? vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
     searchCatalog: opts.searchCatalog ?? vi.fn(() => Promise.resolve({ items: [], total: 0 })),
     startImport: opts.startImport ?? vi.fn(() => Promise.resolve({ jobId })),
@@ -245,6 +247,17 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         transcriptionListeners.delete(listener);
       };
     },
+    // Smart-search opt-in (M4-1b) — the renderer UI is a later slice (UI-2), so these
+    // are calm inert defaults that satisfy the KawsayAPI surface: not offered, nothing
+    // installed, and a no-op progress subscription. UI-2 replaces them with drivable
+    // helpers (like the model-download stream above) when it wires the opt-in UI.
+    getSmartSearchStatus:
+      opts.getSmartSearchStatus ??
+      vi.fn(() => Promise.resolve({ optedIn: false, modelReady: false, offered: false })),
+    enableSmartSearch:
+      opts.enableSmartSearch ??
+      vi.fn(() => Promise.resolve({ outcome: 'unsupported-platform' as const })),
+    onSmartSearchModelDownloadProgress: () => () => {},
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },
