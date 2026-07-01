@@ -4,7 +4,12 @@
 // unless the user has explicitly turned it on. The default — for an absent OR
 // corrupt file — is the calm, privacy-preserving OPTED-OUT, so a damaged config can
 // never silently start on-device transcription. It is a single tiny JSON file
-// (`{ "transcriptionOptedIn": boolean }`); no new dependency, no DB migration.
+// (`{ "<key>OptedIn": boolean }`); no new dependency, no DB migration.
+//
+// The opt-in `key` + diagnostic `label` are parameterized (defaulting to the
+// transcription opt-in) so a SEPARATE feature — M4 smart search — reuses this exact
+// store for its own independent opt-in (its own file + its own key), rather than
+// forking a second consent implementation.
 //
 // The filesystem is injected (defaulting to node:fs) so the store unit-tests
 // without touching a real home directory, and writes are best-effort: a write
@@ -18,10 +23,8 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 
-/** The persisted shape — one boolean, nothing else. */
-interface ConsentFile {
-  transcriptionOptedIn: boolean;
-}
+/** The persisted shape — a single `{ [key]: boolean }` entry, nothing else. */
+type ConsentFile = Record<string, boolean>;
 
 /** The slice of `node:fs` the store needs (injected for testability). */
 export interface ConsentStoreFs {
@@ -35,6 +38,10 @@ export interface ConsentStoreOptions {
   filePath: string;
   /** Filesystem seam (defaults to node:fs). */
   fs?: ConsentStoreFs;
+  /** The JSON boolean key this store reads/writes (defaults to `transcriptionOptedIn`). */
+  key?: string;
+  /** Human label for the fail-closed diagnostics (defaults to `transcription`). */
+  label?: string;
 }
 
 /** The durable opt-in store the transcription gate consults. */
@@ -67,6 +74,8 @@ function diagnosticError(error: unknown): { code?: string; name: string } {
 export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
   const fs = options.fs ?? DEFAULT_FS;
   const { filePath } = options;
+  const key = options.key ?? 'transcriptionOptedIn';
+  const label = options.label ?? 'transcription';
 
   function read(): boolean {
     let raw: string;
@@ -76,19 +85,19 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
       // No file yet (or unreadable) ⇒ never opted in.
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.warn(
-          '[kawsay] transcription consent could not be read; treating as opted-out',
+          `[kawsay] ${label} consent could not be read; treating as opted-out`,
           diagnosticError(error),
         );
       }
       return false;
     }
     try {
-      const parsed = JSON.parse(raw) as Partial<ConsentFile>;
-      return parsed.transcriptionOptedIn === true;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return parsed[key] === true;
     } catch (error) {
       // A corrupt file is treated as opted-out — calm default, never a crash.
       console.warn(
-        '[kawsay] transcription consent was malformed; treating as opted-out',
+        `[kawsay] ${label} consent was malformed; treating as opted-out`,
         diagnosticError(error),
       );
       return false;
@@ -100,7 +109,7 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
       return read();
     },
     setOptedIn(value) {
-      const payload: ConsentFile = { transcriptionOptedIn: value };
+      const payload: ConsentFile = { [key]: value };
       try {
         fs.mkdirSync(dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -110,7 +119,7 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
         // relaunch reads the prior/absent value, defaulting to opted-OUT) — and
         // leave a diagnostic rather than throwing out of the seam.
         console.warn(
-          '[kawsay] could not persist transcription consent; future launches may remain opted-out',
+          `[kawsay] could not persist ${label} consent; future launches may remain opted-out`,
           diagnosticError(error),
         );
       }
