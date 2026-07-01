@@ -156,6 +156,15 @@ export interface CatalogRepo {
   registerSource(input: SourceInput): string;
   queryTimeline(query: TimelineQuery): TimelinePage;
   search(query: SearchQuery): SearchResult;
+  /**
+   * Hydrate a set of item ids into full {@link ItemRow}s (M4-1b semantic-hit
+   * hydration, ADR-0029), using the SAME projection and connector-source filter as
+   * {@link search}. When `source` is non-null, only ids with an occurrence from
+   * that source are returned — so a semantic hit the exact query would have
+   * filtered out by source is never surfaced (AC-7). Unknown ids are ignored and an
+   * empty list yields []. Order is unspecified: the caller re-ranks by similarity.
+   */
+  getItemsByIds(ids: readonly string[], source?: SourceType | null): ItemRow[];
   /** Enumerate every audio/video item (id + duration) for transcription (#157). */
   listTranscribableItems(): TranscribableItem[];
 }
@@ -441,6 +450,15 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     WHERE items_fts MATCH @match
       AND ${sourceFilter('i')}
   `);
+  // Hydrate a JSON array of ids back into full item rows for the semantic-hit
+  // merge (ADR-0029), reusing the exact search's projection + source filter so a
+  // hit is never surfaced past the connector filter (AC-7). `json_each` keeps this
+  // a single static prepared statement over a variable-length id list.
+  const itemsByIdsStmt = db.prepare(`
+    SELECT ${ITEM_SELECT_I}, ${sourceProjection('i')} FROM items i
+    WHERE i.id IN (SELECT value FROM json_each(@ids))
+      AND ${sourceFilter('i')}
+  `);
   // Audio + video only (the transcribable media types), newest-agnostic stable id
   // order so a re-run dispatches the same sequence (#157).
   const listTranscribableStmt = db.prepare(`
@@ -551,6 +569,15 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
       );
       const raws = searchStmt.all<RawItemRow>({ match, limit, offset, source: sourceParam });
       return { rows: raws.map(mapItemRow), total };
+    },
+
+    getItemsByIds(ids, source) {
+      if (ids.length === 0) return [];
+      const raws = itemsByIdsStmt.all<RawItemRow>({
+        ids: JSON.stringify([...ids]),
+        source: source ?? null,
+      });
+      return raws.map(mapItemRow);
     },
 
     listTranscribableItems() {

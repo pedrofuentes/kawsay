@@ -314,4 +314,55 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
       expect(res.rows[0]?.source).toBe('whatsapp');
     });
   });
+
+  describe('getItemsByIds (semantic-hit hydration — ADR-0029 / M4-1b)', () => {
+    let whatsapp: string;
+    let folder: string;
+
+    beforeEach(() => {
+      whatsapp = repo.registerSource({ sourceKey: 'wa', type: 'whatsapp', label: 'WhatsApp' });
+      folder = repo.registerSource({ sourceKey: 'fold', type: 'folder', label: 'Folder' });
+    });
+
+    it('hydrates the requested ids with the full ItemRow projection, including source', () => {
+      const a = repo.insertItem({ mediaType: 'message', description: 'uno', contentHash: 'h-a' });
+      repo.addOccurrence({ itemId: a, sourceId: whatsapp, sourceRef: 'wa/1' });
+      const b = repo.insertItem({ mediaType: 'photo', description: 'dos', contentHash: 'h-b' });
+      repo.addOccurrence({ itemId: b, sourceId: folder, sourceRef: 'fold/1' });
+
+      const rows = repo.getItemsByIds([a, b]);
+
+      expect(new Set(rows.map((r) => r.id))).toEqual(new Set([a, b]));
+      expect(new Set(rows.map((r) => r.source))).toEqual(new Set(['whatsapp', 'folder']));
+      // A full projection (not just ids): a payload field round-trips.
+      expect(rows.find((r) => r.id === a)?.description).toBe('uno');
+    });
+
+    it('ignores unknown ids and returns [] for an empty id list', () => {
+      const a = repo.insertItem({ mediaType: 'message', contentHash: 'h-a' });
+      repo.addOccurrence({ itemId: a, sourceId: whatsapp, sourceRef: 'wa/1' });
+
+      expect(repo.getItemsByIds([])).toEqual([]);
+      expect(repo.getItemsByIds(['no-such-id', a]).map((r) => r.id)).toEqual([a]);
+    });
+
+    it('applies the same source filter as search (never hydrates an out-of-source item)', () => {
+      const wa = repo.insertItem({ mediaType: 'message', contentHash: 'h-wa' });
+      repo.addOccurrence({ itemId: wa, sourceId: whatsapp, sourceRef: 'wa/1' });
+      const fo = repo.insertItem({ mediaType: 'photo', contentHash: 'h-fo' });
+      repo.addOccurrence({ itemId: fo, sourceId: folder, sourceRef: 'fold/1' });
+
+      expect(repo.getItemsByIds([wa, fo], 'whatsapp').map((r) => r.id)).toEqual([wa]);
+    });
+
+    it('finds a memory shared across sources under either source filter (AC-7 parity)', () => {
+      const shared = repo.insertItem({ mediaType: 'photo', contentHash: 'h-shared' });
+      repo.addOccurrence({ itemId: shared, sourceId: whatsapp, sourceRef: 'wa/s' });
+      repo.addOccurrence({ itemId: shared, sourceId: folder, sourceRef: 'fold/s' });
+
+      expect(repo.getItemsByIds([shared], 'whatsapp').map((r) => r.id)).toEqual([shared]);
+      expect(repo.getItemsByIds([shared], 'folder').map((r) => r.id)).toEqual([shared]);
+      expect(repo.getItemsByIds([shared], 'linkedin')).toHaveLength(0);
+    });
+  });
 });

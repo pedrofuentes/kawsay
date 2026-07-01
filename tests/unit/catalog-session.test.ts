@@ -5,6 +5,8 @@ import { createCatalogSession } from '../../electron/main/app/catalog-session';
 import { openCatalog } from '../../electron/main/db/connection';
 import { createCatalogRepo } from '../../electron/main/db/catalog-repo';
 import { createTranscriptRepo } from '../../electron/main/db/transcript-repo';
+import { createEmbeddingsRepo } from '../../electron/main/db/embeddings-repo';
+import { EMBED_MODEL_ID } from '../../electron/main/search/embed-cli';
 import { librarySummarySchema, itemCardSchema, transcriptViewSchema } from '@shared/ipc/schemas';
 import type { SourceType } from '@shared/catalog';
 import type { IngestionCoordinator } from '../../electron/main/importers/ingestion/coordinator';
@@ -100,8 +102,34 @@ function seedMultiSource(catalogPath: string): void {
   db.close();
 }
 
-/** Seed one photo whose original is a real local file (in_place), returning its
- *  opaque id so a thumbnail call can be resolved through the session. */
+/**
+ * Seed one exact-lexical match ("beach") plus one semantically-related memory that
+ * shares NO lexical overlap ("la playa") but carries a stored embedding aligned
+ * with the query vector the mock embedder returns. Exercises the ADR-0029 merge:
+ * the exact item is preserved & ranked ahead, the semantic-only item is appended.
+ */
+function seedSemanticCorpus(catalogPath: string): { exactId: string; semanticId: string } {
+  const db = openCatalog(catalogPath);
+  const repo = createCatalogRepo(db);
+  const embeddings = createEmbeddingsRepo(db);
+  const src = repo.registerSource({ sourceKey: 'seed', type: 'folder', label: 'Seed' });
+  const exactId = repo.insertItem({
+    mediaType: 'message',
+    contentHash: 'h-exact',
+    description: 'beach sunset',
+  });
+  repo.addOccurrence({ itemId: exactId, sourceId: src, sourceRef: 'e/1' });
+  const semanticId = repo.insertItem({
+    mediaType: 'photo',
+    contentHash: 'h-semantic',
+    description: 'la playa',
+  });
+  repo.addOccurrence({ itemId: semanticId, sourceId: src, sourceRef: 's/1' });
+  // Only the semantic-only memory carries a vector aligned with the query (below).
+  embeddings.upsertEmbedding(semanticId, EMBED_MODEL_ID, Float32Array.from([1, 0, 0]));
+  db.close();
+  return { exactId, semanticId };
+}
 function seedPhotoWithLocalOriginal(catalogPath: string, originalPath: string): string {
   const db = openCatalog(catalogPath);
   const repo = createCatalogRepo(db);
@@ -234,9 +262,9 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(reopened.root).toBe(root);
   });
 
-  it('refuses catalog reads / imports when no library is open', () => {
+  it('refuses catalog reads / imports when no library is open', async () => {
     expect(() => session.getTimeline({ limit: 10 })).toThrow();
-    expect(() => session.search({ query: 'x', limit: 10, offset: 0 })).toThrow();
+    await expect(session.search({ query: 'x', limit: 10, offset: 0 })).rejects.toThrow();
     expect(() => session.beginImport({ sourceType: 'folder', inputPath: root })).toThrow();
   });
 
@@ -259,7 +287,7 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(dto.root).toBe(root);
   });
 
-  it('bounds untrusted ItemCard title and description strings', () => {
+  it('bounds untrusted ItemCard title and description strings', async () => {
     session.createLibrary({ path: root });
     const db = openCatalog(join(root, 'catalog.sqlite3'));
     const repo = createCatalogRepo(db);
@@ -281,7 +309,7 @@ describe('createCatalogSession (the IPC application service)', () => {
     });
     db.close();
 
-    const [item] = session.search({ query: 'needle', limit: 10, offset: 0 }).items;
+    const [item] = (await session.search({ query: 'needle', limit: 10, offset: 0 })).items;
 
     expect(itemCardSchema.safeParse(item).success).toBe(true);
     expect(item?.title).toHaveLength(200);
@@ -293,26 +321,26 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(() => session.getTimeline({ limit: 2, cursor: 'not-a-real-cursor!!' })).toThrow();
   });
 
-  it('searches the catalog and maps rows to ItemCards', () => {
+  it('searches the catalog and maps rows to ItemCards', async () => {
     session.createLibrary({ path: root });
     seedItems(join(root, 'catalog.sqlite3'));
-    const result = session.search({ query: 'beach', limit: 10, offset: 0 });
+    const result = await session.search({ query: 'beach', limit: 10, offset: 0 });
     expect(result.total).toBeGreaterThanOrEqual(1);
     expect(result.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
   });
 
-  it('passes a source filter through to the catalog and projects each tile’s source (AC-7)', () => {
+  it('passes a source filter through to the catalog and projects each tile’s source (AC-7)', async () => {
     session.createLibrary({ path: root });
     seedMultiSource(join(root, 'catalog.sqlite3'));
 
     // Unfiltered: every source comes back, each tile carrying its connector source.
-    const all = session.search({ query: 'familia', limit: 10, offset: 0 });
+    const all = await session.search({ query: 'familia', limit: 10, offset: 0 });
     expect(all.total).toBe(2);
     expect(all.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
     expect(new Set(all.items.map((i) => i.source))).toEqual(new Set(['whatsapp', 'folder']));
 
     // Filtered to one connector: only that source’s memories survive.
-    const onlyWhatsapp = session.search({
+    const onlyWhatsapp = await session.search({
       query: 'familia',
       limit: 10,
       offset: 0,
@@ -404,11 +432,11 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(coordinator.disposed).toBeGreaterThanOrEqual(1);
   });
 
-  it('marks photo/video tiles renderable (hasThumbnail) and non-visual tiles not (U4)', () => {
+  it('marks photo/video tiles renderable (hasThumbnail) and non-visual tiles not (U4)', async () => {
     session.createLibrary({ path: root });
     seedMultiSource(join(root, 'catalog.sqlite3'));
 
-    const result = session.search({ query: 'familia', limit: 10, offset: 0 });
+    const result = await session.search({ query: 'familia', limit: 10, offset: 0 });
     const byType = new Map(result.items.map((item) => [item.mediaType, item.hasThumbnail]));
     expect(byType.get('photo')).toBe(true);
     expect(byType.get('message')).toBe(false);
@@ -544,5 +572,189 @@ describe('createCatalogSession (the IPC application service)', () => {
   it('getTranscript refuses when no library is open (#136)', async () => {
     const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
     await expect(s.getTranscript({ id: JOB_ID })).rejects.toThrow();
+  });
+
+  describe('search — M4 smart search (ADR-0029 / AC-29)', () => {
+    /** A session whose on-device embedder is AVAILABLE and returns `queryVector`
+     *  for every batch; `onEmbed` observes the (prefixed) query texts. */
+    function sessionWithEmbedder(
+      queryVector: number[],
+      onEmbed?: (texts: readonly string[]) => void,
+    ): ReturnType<typeof createCatalogSession> {
+      return createCatalogSession({
+        coordinator: coordinator.coordinator,
+        resolveMediaBinaries,
+        resolveEmbedder: () => ({
+          available: true,
+          embed: async (texts) => {
+            onEmbed?.(texts);
+            return [Float32Array.from(queryVector)];
+          },
+        }),
+      });
+    }
+
+    it('extends exact FTS with a semantically-related memory, exact ranked first (AC-29)', async () => {
+      const embedded: string[][] = [];
+      const s = sessionWithEmbedder([1, 0, 0], (texts) => embedded.push([...texts]));
+      try {
+        s.createLibrary({ path: root });
+        const { exactId, semanticId } = seedSemanticCorpus(join(root, 'catalog.sqlite3'));
+
+        const result = await s.search({ query: 'beach', limit: 10, offset: 0 });
+
+        const ids = result.items.map((i) => i.id);
+        // The lexical match AND the no-lexical-overlap semantic match are BOTH returned.
+        expect(ids).toContain(exactId);
+        expect(ids).toContain(semanticId);
+        // AC-29: every exact result is preserved and ranked AHEAD of any semantic-only one.
+        expect(ids[0]).toBe(exactId);
+        expect(ids.indexOf(exactId)).toBeLessThan(ids.indexOf(semanticId));
+        // The query was embedded with the e5 "query: " prefix.
+        expect(embedded[0]).toEqual(['query: beach']);
+        // total EXTENDS the exact-FTS count by the appended semantic-only memory.
+        expect(result.total).toBe(2);
+        expect(result.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
+      } finally {
+        s.dispose();
+      }
+    });
+
+    it('a memory that is BOTH an exact and a semantic match appears exactly once', async () => {
+      const s = sessionWithEmbedder([1, 0, 0]);
+      try {
+        s.createLibrary({ path: root });
+        const catalogPath = join(root, 'catalog.sqlite3');
+        const db = openCatalog(catalogPath);
+        const repo = createCatalogRepo(db);
+        const embeddings = createEmbeddingsRepo(db);
+        const src = repo.registerSource({ sourceKey: 'seed', type: 'folder', label: 'Seed' });
+        const bothId = repo.insertItem({
+          mediaType: 'message',
+          contentHash: 'h-both',
+          description: 'beach playa',
+        });
+        repo.addOccurrence({ itemId: bothId, sourceId: src, sourceRef: 'b/1' });
+        embeddings.upsertEmbedding(bothId, EMBED_MODEL_ID, Float32Array.from([1, 0, 0]));
+        db.close();
+
+        const result = await s.search({ query: 'beach', limit: 10, offset: 0 });
+
+        expect(result.items.map((i) => i.id)).toEqual([bothId]);
+        expect(result.total).toBe(1);
+      } finally {
+        s.dispose();
+      }
+    });
+
+    it('applies the source filter to semantic hits (never surfaces an out-of-source memory)', async () => {
+      const s = sessionWithEmbedder([1, 0, 0]);
+      try {
+        s.createLibrary({ path: root });
+        const catalogPath = join(root, 'catalog.sqlite3');
+        const db = openCatalog(catalogPath);
+        const repo = createCatalogRepo(db);
+        const embeddings = createEmbeddingsRepo(db);
+        const whatsapp = repo.registerSource({ sourceKey: 'wa', type: 'whatsapp', label: 'WhatsApp' });
+        const folder = repo.registerSource({ sourceKey: 'fold', type: 'folder', label: 'Folder' });
+        const exactId = repo.insertItem({
+          mediaType: 'message',
+          contentHash: 'h-e',
+          description: 'beach day',
+        });
+        repo.addOccurrence({ itemId: exactId, sourceId: whatsapp, sourceRef: 'wa/1' });
+        const semanticId = repo.insertItem({
+          mediaType: 'photo',
+          contentHash: 'h-s',
+          description: 'la playa',
+        });
+        repo.addOccurrence({ itemId: semanticId, sourceId: folder, sourceRef: 'fold/1' });
+        embeddings.upsertEmbedding(semanticId, EMBED_MODEL_ID, Float32Array.from([1, 0, 0]));
+        db.close();
+
+        const result = await s.search({ query: 'beach', limit: 10, offset: 0, source: 'whatsapp' });
+
+        // The semantic hit is a folder memory → excluded by the whatsapp filter.
+        expect(result.items.map((i) => i.id)).toEqual([exactId]);
+        expect(result.items.map((i) => i.id)).not.toContain(semanticId);
+      } finally {
+        s.dispose();
+      }
+    });
+
+    it('falls back to byte-identical exact FTS when the embedder is UNAVAILABLE (no regression)', async () => {
+      // The default session (beforeEach) injects no embedder → UNAVAILABLE.
+      session.createLibrary({ path: root });
+      const catalogPath = join(root, 'catalog.sqlite3');
+      const { exactId, semanticId } = seedSemanticCorpus(catalogPath);
+
+      const result = await session.search({ query: 'beach', limit: 10, offset: 0 });
+
+      // The semantically-related memory (no lexical overlap) is NOT surfaced.
+      expect(result.items.map((i) => i.id)).toEqual([exactId]);
+      expect(result.items.map((i) => i.id)).not.toContain(semanticId);
+
+      // Byte-identical to the unchanged FTS path (repo.search) — same ids, order, total.
+      const db = openCatalog(catalogPath);
+      const expected = createCatalogRepo(db).search({ query: 'beach', limit: 10, offset: 0 });
+      db.close();
+      expect(result.total).toBe(expected.total);
+      expect(result.items.map((i) => i.id)).toEqual(expected.rows.map((r) => r.id));
+
+      // An EXPLICITLY-unavailable embedder yields the identical exact-FTS result.
+      const explicit = createCatalogSession({
+        coordinator: coordinator.coordinator,
+        resolveMediaBinaries,
+        resolveEmbedder: () => ({ available: false, reason: 'binary-unavailable' }),
+      });
+      try {
+        explicit.openLibrary({ path: root });
+        const explicitResult = await explicit.search({ query: 'beach', limit: 10, offset: 0 });
+        expect(explicitResult.items.map((i) => i.id)).toEqual([exactId]);
+        expect(explicitResult.total).toBe(expected.total);
+      } finally {
+        explicit.dispose();
+      }
+    });
+
+    it('with an available embedder but no stored embeddings yet, returns exactly exact FTS (today)', async () => {
+      const s = sessionWithEmbedder([1, 0, 0]);
+      try {
+        s.createLibrary({ path: root });
+        seedItems(join(root, 'catalog.sqlite3')); // items only — no embeddings stored
+        const result = await s.search({ query: 'beach', limit: 10, offset: 0 });
+        expect(result.total).toBe(1);
+        expect(result.items.every((i) => itemCardSchema.safeParse(i).success)).toBe(true);
+      } finally {
+        s.dispose();
+      }
+    });
+
+    it('degrades to exact FTS when query embedding throws (search never fails)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const s = createCatalogSession({
+        coordinator: coordinator.coordinator,
+        resolveMediaBinaries,
+        resolveEmbedder: () => ({
+          available: true,
+          embed: async () => {
+            throw new Error('embed boom');
+          },
+        }),
+      });
+      try {
+        s.createLibrary({ path: root });
+        const { exactId, semanticId } = seedSemanticCorpus(join(root, 'catalog.sqlite3'));
+
+        const result = await s.search({ query: 'beach', limit: 10, offset: 0 });
+
+        expect(result.items.map((i) => i.id)).toEqual([exactId]);
+        expect(result.items.map((i) => i.id)).not.toContain(semanticId);
+        expect(result.total).toBe(1);
+      } finally {
+        s.dispose();
+        warn.mockRestore();
+      }
+    });
   });
 });

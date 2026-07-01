@@ -41,6 +41,7 @@ import { createIngestionCoordinator } from './importers/ingestion/coordinator';
 import { createWorkerThreadsSpawner } from './importers/ingestion/worker-threads-transport';
 import { createFfmpegVideoFrameThumbnailer } from './importers/deps/thumbnail';
 import { resolveFfmpegPath, resolveFfprobePath } from './importers/deps/media-binaries';
+import { createEmbedder } from './search/embed-cli';
 import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-service';
 import { createModelDownloader } from './transcription/model-download';
 import { createElectronModelFetcher } from './transcription/electron-net-fetcher';
@@ -199,6 +200,15 @@ const catalogSession = createCatalogSession({
   coordinator: ingestionCoordinator,
   thumbnailers: { image: imageThumbnailer, video: buildVideoThumbnailer() },
   resolveMediaBinaries,
+  // The on-device text embedder for M4 smart search (ADR-0029). Resolved lazily
+  // (like the media binaries) and non-throwing: until the packaging slice bundles
+  // the binary + model it degrades to UNAVAILABLE, so search stays exact FTS.
+  resolveEmbedder: () =>
+    createEmbedder({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      projectRoot: app.getAppPath(),
+    }),
 });
 
 // The native open-dialog capability (W2): always parented to the focused window

@@ -34,6 +34,9 @@ import {
   type ItemRow,
   type TimelineCursor,
 } from '../db/catalog-repo';
+import { createEmbeddingsRepo, type EmbeddingsRepo } from '../db/embeddings-repo';
+import { mergeSemanticAndExact, type SemanticHit } from '../search/semantic';
+import { EMBED_MODEL_ID, withQueryPrefix, type EmbedderStatus } from '../search/embed-cli';
 import { createTranscriptRepo, type TranscriptRepo } from '../db/transcript-repo';
 import { createTranscriptionLibrary } from '../transcription/transcription-library';
 import type { TranscriptionLibraryPort } from '../transcription/transcription-orchestrator';
@@ -90,6 +93,15 @@ export interface CatalogSessionOptions {
    * strings into the job spec.
    */
   resolveMediaBinaries: () => { ffmpegPath: string; ffprobePath: string };
+  /**
+   * Resolve the on-device text embedder for M4 smart search (ADR-0029), injected
+   * as a lazy thunk (like {@link resolveMediaBinaries}) so the session stays
+   * Electron-free and unit-testable, and so no filesystem probe runs at boot. It is
+   * resolved ONCE, on the first search that could use it. Defaults to a typed
+   * UNAVAILABLE sentinel, so search is byte-identical exact FTS until the packaging
+   * slice bundles the binary + model (AC-7 / AC-29 no-regression).
+   */
+  resolveEmbedder?: () => EmbedderStatus;
 }
 
 export interface CatalogSession {
@@ -101,7 +113,7 @@ export interface CatalogSession {
     limit: number;
     offset: number;
     source?: SourceType;
-  }): SearchResultDTO;
+  }): Promise<SearchResultDTO>;
   /** Render one memory's bounded thumbnail by opaque id (U4), or null. */
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
   /**
@@ -124,6 +136,7 @@ interface OpenLibrary {
   summary: LibrarySummary;
   db: CatalogDatabase;
   repo: CatalogRepo;
+  embeddings: EmbeddingsRepo;
   thumbnails: ThumbnailService;
   transcripts: TranscriptRepo;
   transcription: TranscriptionLibraryPort;
@@ -183,11 +196,28 @@ function toLibraryDto(summary: LibrarySummary): LibrarySummaryDTO {
   };
 }
 
+/** A typed UNAVAILABLE embedder — the default when none is injected, so a headless
+ *  / pre-packaging session searches with exact FTS only (AC-7 / AC-29). */
+const UNAVAILABLE_EMBEDDER: EmbedderStatus = { available: false, reason: 'binary-unavailable' };
+
+/** Whether a query carries at least one embeddable token (a letter or digit) —
+ *  mirrors the FTS token predicate. A blank / punctuation-only query has nothing to
+ *  embed, so smart search skips straight to exact FTS. */
+function hasEmbeddableText(query: string): boolean {
+  return /[\p{L}\p{N}]/u.test(query);
+}
+
 export function createCatalogSession(options: CatalogSessionOptions): CatalogSession {
   const { coordinator } = options;
   const newId = options.newId ?? (() => randomUUID());
   const thumbnailers = options.thumbnailers ?? NOOP_THUMBNAILERS;
   const resolveMediaBinaries = options.resolveMediaBinaries;
+  // Resolved lazily and cached on first use (not at boot), mirroring the media
+  // binaries: the on-device embedder degrades to UNAVAILABLE → exact FTS until the
+  // packaging slice bundles the binary + model.
+  const resolveEmbedder = options.resolveEmbedder ?? (() => UNAVAILABLE_EMBEDDER);
+  let embedderStatus: EmbedderStatus | undefined;
+  const getEmbedder = (): EmbedderStatus => (embedderStatus ??= resolveEmbedder());
   let current: OpenLibrary | undefined;
 
   function closeCurrent(): void {
@@ -200,6 +230,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     closeCurrent();
     const db = openCatalog(summary.catalogPath);
     const repo = createCatalogRepo(db);
+    const embeddings = createEmbeddingsRepo(db);
     const thumbnails = createThumbnailService({
       db,
       root: summary.root,
@@ -213,7 +244,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       catalog: repo,
       transcripts,
     });
-    current = { summary, db, repo, thumbnails, transcripts, transcription };
+    current = { summary, db, repo, embeddings, thumbnails, transcripts, transcription };
     return toLibraryDto(summary);
   }
 
@@ -240,15 +271,66 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         nextCursor: page.nextCursor === null ? null : encodeCursor(page.nextCursor),
       };
     },
-    search(input) {
-      const { repo } = requireOpen();
-      const result = repo.search({
+    async search(input) {
+      const { repo, embeddings } = requireOpen();
+      // The exact FTS result is ALWAYS the authoritative exact set (AC-7) — the
+      // semantic layer only ever EXTENDS it, never regresses it (AC-29).
+      const exact = repo.search({
         query: input.query,
         limit: input.limit,
         offset: input.offset,
         source: input.source,
       });
-      return { items: result.rows.map(toItemCard), total: result.total };
+      const exactDto = (): SearchResultDTO => ({
+        items: exact.rows.map(toItemCard),
+        total: exact.total,
+      });
+
+      // Fallback (byte-identical, no regression): no on-device embedder, or nothing
+      // embeddable in the query → today's exact FTS (AC-7 / AC-29).
+      const embedder = getEmbedder();
+      if (!embedder.available || !hasEmbeddableText(input.query)) {
+        return exactDto();
+      }
+
+      try {
+        const [queryVector] = await embedder.embed([withQueryPrefix(input.query)]);
+        if (queryVector === undefined) return exactDto();
+        const hits = embeddings.semanticSearch(queryVector, input.limit, {
+          modelId: EMBED_MODEL_ID,
+        });
+        // No stored embeddings yet (the case today, until the back-fill drain runs)
+        // → exact FTS unchanged.
+        if (hits.length === 0) return exactDto();
+
+        // Hydrate the hit ids, honouring the SAME source filter as the exact query,
+        // so a semantic hit from a filtered-out connector is never surfaced (AC-7).
+        const rows = repo.getItemsByIds(
+          hits.map((hit) => hit.itemId),
+          input.source,
+        );
+        const rowById = new Map(rows.map((row) => [row.id, row] as const));
+        const semanticHits: SemanticHit<ItemRow>[] = [];
+        for (const hit of hits) {
+          const row = rowById.get(hit.itemId);
+          if (row !== undefined) semanticHits.push({ item: row, score: hit.score });
+        }
+
+        // AC-29: every exact result is preserved and ranked AHEAD of any
+        // semantic-only match; an item in both appears once. The appended
+        // semantic-only extras EXTEND (never shrink) the exact total.
+        const merged = mergeSemanticAndExact(exact.rows, semanticHits, { limit: input.limit });
+        const semanticOnlyCount = merged.length - exact.rows.length;
+        return {
+          items: merged.map((entry) => toItemCard(entry.item)),
+          total: exact.total + semanticOnlyCount,
+        };
+      } catch (error) {
+        // Resilience: a query-embed / KNN failure must NEVER fail the search — it
+        // degrades silently to exact FTS (AC-7 no-regression).
+        console.warn('[kawsay] smart search failed; falling back to exact FTS', error);
+        return exactDto();
+      }
     },
     async getThumbnail(input) {
       // requireOpen throws synchronously; `async` turns that into a rejected
