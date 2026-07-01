@@ -273,35 +273,56 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     },
     async search(input) {
       const { repo, embeddings } = requireOpen();
-      // The exact FTS result is ALWAYS the authoritative exact set (AC-7) — the
-      // semantic layer only ever EXTENDS it, never regresses it (AC-29).
-      const exact = repo.search({
+      // The exact FTS page is ALWAYS the authoritative exact set (AC-7), correctly
+      // paginated by offset/limit. It is the byte-identical fallback for every branch
+      // below (no embedder, nothing embeddable, empty embed, no stored vectors, or a
+      // failed scan) at ALL offsets, so exact search never regresses (AC-29).
+      const exactPage = repo.search({
         query: input.query,
         limit: input.limit,
         offset: input.offset,
         source: input.source,
       });
-      const exactDto = (): SearchResultDTO => ({
-        items: exact.rows.map(toItemCard),
-        total: exact.total,
+      const exactPageDto = (): SearchResultDTO => ({
+        items: exactPage.rows.map(toItemCard),
+        total: exactPage.total,
       });
 
-      // Fallback (byte-identical, no regression): no on-device embedder, or nothing
-      // embeddable in the query → today's exact FTS (AC-7 / AC-29).
+      // Only a query with embeddable text can use the embedder — check that FIRST so a
+      // blank / punctuation-only query stays pure exact FTS and never even resolves
+      // (probes the filesystem for) the embedder.
+      if (!hasEmbeddableText(input.query)) return exactPageDto();
       const embedder = getEmbedder();
-      if (!embedder.available || !hasEmbeddableText(input.query)) {
-        return exactDto();
-      }
+      if (!embedder.available) return exactPageDto();
 
       try {
         const [queryVector] = await embedder.embed([withQueryPrefix(input.query)]);
-        if (queryVector === undefined) return exactDto();
+        if (queryVector === undefined) return exactPageDto();
+        // A fixed (page-independent) K = `limit` bounds the semantic augmentation to
+        // at most `limit` best semantic-only extras. Because K does not grow with
+        // `offset`, the merged set — and therefore `total` — is identical on every
+        // page (a page-dependent K would let later pages discover more extras).
         const hits = embeddings.semanticSearch(queryVector, input.limit, {
           modelId: EMBED_MODEL_ID,
         });
         // No stored embeddings yet (the case today, until the back-fill drain runs)
         // → exact FTS unchanged.
-        if (hits.length === 0) return exactDto();
+        if (hits.length === 0) return exactPageDto();
+
+        // Globally-merged pagination: rebuild the SAME merged ordering on every page
+        // and slice [offset, offset+limit) out of it, so paging can never duplicate or
+        // skip a semantic-only item and `total` is page-independent. The merge needs
+        // the WHOLE authoritative exact set (not just this page) to dedupe semantic
+        // hits against every exact match and rank exact ahead (AC-29); fetching it
+        // whole is consistent with the brute-force-at-v1-scale semantic path
+        // (ADR-0029), which already scans every stored vector. `exactPage` above keeps
+        // its cheap paginated read for the fallback, so exact search never regresses.
+        const exactAll = repo.search({
+          query: input.query,
+          limit: exactPage.total,
+          offset: 0,
+          source: input.source,
+        });
 
         // Hydrate the hit ids, honouring the SAME source filter as the exact query,
         // so a semantic hit from a filtered-out connector is never surfaced (AC-7).
@@ -316,20 +337,21 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
           if (row !== undefined) semanticHits.push({ item: row, score: hit.score });
         }
 
-        // AC-29: every exact result is preserved and ranked AHEAD of any
-        // semantic-only match; an item in both appears once. The appended
-        // semantic-only extras EXTEND (never shrink) the exact total.
-        const merged = mergeSemanticAndExact(exact.rows, semanticHits, { limit: input.limit });
-        const semanticOnlyCount = merged.length - exact.rows.length;
+        // AC-29: every exact result is preserved and ranked AHEAD of any semantic-only
+        // match; an item in both appears once. The semantic-only extras (≤ limit)
+        // EXTEND the exact set, so the merged length IS the page-independent `total`.
+        const merged = mergeSemanticAndExact(exactAll.rows, semanticHits);
         return {
-          items: merged.map((entry) => toItemCard(entry.item)),
-          total: exact.total + semanticOnlyCount,
+          items: merged
+            .slice(input.offset, input.offset + input.limit)
+            .map((entry) => toItemCard(entry.item)),
+          total: merged.length,
         };
       } catch (error) {
         // Resilience: a query-embed / KNN failure must NEVER fail the search — it
         // degrades silently to exact FTS (AC-7 no-regression).
         console.warn('[kawsay] smart search failed; falling back to exact FTS', error);
-        return exactDto();
+        return exactPageDto();
       }
     },
     async getThumbnail(input) {
