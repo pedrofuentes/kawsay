@@ -65,6 +65,11 @@ const releaseYml = readFileSync(repoRoot('.github/workflows/release.yml'), 'utf8
 );
 const ciYml = readFileSync(repoRoot('.github/workflows/ci.yml'), 'utf8').replace(/\r\n/g, '\n');
 
+// The llama-embedding build script itself (not just its CI wiring) is part of the
+// packaging contract: it must build the engine NETWORK-FREE so no TLS/HTTP/curl
+// code is compiled into the shipped binary (AC-4 zero-egress).
+const embedBuildScript = readFileSync(repoRoot('scripts/build-embed-cli.sh'), 'utf8');
+
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
   const lines = releaseYml.split(/\r?\n/);
@@ -604,6 +609,21 @@ describe('embed-cli engine build + bundling contract (M4-1b, ADR-0029)', () => {
     for (const line of ciUsesLines) {
       expect(line).toMatch(/uses:\s*[^@\s]+@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/);
     }
+  });
+
+  it('builds the embedder NETWORK-FREE — forces LLAMA_OPENSSL=OFF so no TLS/HTTP link (AC-4)', () => {
+    // llama.cpp's `common` unconditionally links cpp-httplib, and at the pinned
+    // commit cpp-httplib compiles WITH OpenSSL HTTPS support whenever CMake's
+    // LLAMA_OPENSSL (default ON) discovers a host OpenSSL — baking _SSL_get_error/
+    // _X509_STORE_CTX_get_error/_ERR_* references into httplib.cpp.o and linking
+    // libssl/libcrypto. On the arm64 runner that host OpenSSL is arm64-only, so the
+    // x86_64 cross-link can't resolve those symbols and the mac-x64 leg fails. The
+    // embedder never downloads (it reads a LOCAL `-m` GGUF; Kawsay does its own
+    // consent-gated model fetch elsewhere), so we force LLAMA_OPENSSL=OFF: the
+    // binary then links ZERO TLS/HTTP/curl code (AC-4 zero-egress) AND the x64 leg
+    // links clean. NB: LLAMA_CURL is deprecated/ignored at this pin — LLAMA_OPENSSL
+    // is the real control for cpp-httplib's OpenSSL support.
+    expect(embedBuildScript).toMatch(/-DLLAMA_OPENSSL=OFF/);
   });
 
   it('adds the embed-cli engine WITHOUT disturbing the whisper-cli job/step/bundle (additive)', () => {
