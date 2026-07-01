@@ -10,6 +10,10 @@ import {
   MODEL_DOWNLOAD_REDIRECT_HOST,
   MODEL_DOWNLOAD_URL,
 } from '../../electron/main/transcription/model-source';
+import {
+  EMBED_MODEL_DOWNLOAD_REDIRECT_HOST,
+  EMBED_MODEL_DOWNLOAD_URL,
+} from '../../electron/main/search/embed-model-source';
 
 const LOCAL_URLS = [
   'file:///app/index.html',
@@ -300,6 +304,157 @@ describe('isAllowedModelDownloadRequest — scoped model-download allowlist (AC-
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// M4-1b / ADR-0029 — the embedder-model download is the SECOND scoped allowlist
+// entry, added byte-for-byte the same shape as whisper: a GET, with an empty
+// upload body, to EITHER the pinned embedder origin release URL OR its signed CDN
+// redirect host over https. It widens egress by EXACTLY one more opt-in,
+// integrity-verified model download — a POST, a body-bearing GET, a look-alike
+// host, a plaintext leg, or any other path/host all stay denied, and whisper's
+// entry keeps behaving identically (see the regression block below).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The embedder's signed CDN leg lands on the SAME GitHub `release-assets` edge as
+// whisper (both re-host from Kawsay's own GitHub Releases) with a different opaque,
+// time-limited path/query, so the guard keys on the host (+ https + GET + empty
+// body) for this leg, exactly as it does for whisper.
+const EMBED_SIGNED_CDN_URL =
+  'https://release-assets.githubusercontent.com/github-production-release-asset-2e65be/' +
+  '900002/multilingual-e5-small-q4_k_m.gguf?se=2025-06-01T00%3A00%3A00Z&sig=zyxWVU987&jwt=******' +
+  'IUzI1NiJ9.payload.signature';
+
+describe('isAllowedModelDownloadRequest — embedder is the SECOND scoped allowlist entry (M4-1b / ADR-0029)', () => {
+  it('ALLOWS a GET to the pinned embedder origin release URL with an empty body', () => {
+    expect(isAllowedModelDownloadRequest({ url: EMBED_MODEL_DOWNLOAD_URL, method: 'GET' })).toBe(
+      true,
+    );
+    expect(
+      isAllowedModelDownloadRequest({
+        url: EMBED_MODEL_DOWNLOAD_URL,
+        method: 'GET',
+        uploadData: [],
+      }),
+    ).toBe(true);
+  });
+
+  it('ALLOWS a GET to the embedder signed CDN redirect host over https (host-keyed leg)', () => {
+    expect(isAllowedModelDownloadRequest({ url: EMBED_SIGNED_CDN_URL, method: 'GET' })).toBe(true);
+    // A different signed path on the same host is still allowed (host-keyed leg).
+    expect(
+      isAllowedModelDownloadRequest({
+        url: `https://${EMBED_MODEL_DOWNLOAD_REDIRECT_HOST}/embed/other/path.gguf?se=x&sig=y`,
+        method: 'GET',
+      }),
+    ).toBe(true);
+  });
+
+  it('DENIES a NON-GET (POST) to the pinned embedder origin URL and its CDN host', () => {
+    expect(isAllowedModelDownloadRequest({ url: EMBED_MODEL_DOWNLOAD_URL, method: 'POST' })).toBe(
+      false,
+    );
+    expect(isAllowedModelDownloadRequest({ url: EMBED_SIGNED_CDN_URL, method: 'POST' })).toBe(false);
+  });
+
+  it('DENIES a GET to the embedder that carries a non-empty upload body (exfiltration vector)', () => {
+    expect(
+      isAllowedModelDownloadRequest({
+        url: EMBED_MODEL_DOWNLOAD_URL,
+        method: 'GET',
+        uploadData: [{ bytes: Buffer.from('memories') }],
+      }),
+    ).toBe(false);
+    expect(
+      isAllowedModelDownloadRequest({
+        url: EMBED_SIGNED_CDN_URL,
+        method: 'GET',
+        uploadData: [{ bytes: Buffer.from('memories') }],
+      }),
+    ).toBe(false);
+  });
+
+  it('DENIES a subdomain-spoof of the embedder CDN host (exact host match, not suffix)', () => {
+    expect(
+      isAllowedModelDownloadRequest({
+        url: `https://${EMBED_MODEL_DOWNLOAD_REDIRECT_HOST}.evil.example/multilingual-e5-small-q4_k_m.gguf`,
+        method: 'GET',
+      }),
+    ).toBe(false);
+    expect(
+      isAllowedModelDownloadRequest({
+        url: 'https://evil.example/release-assets.githubusercontent.com/embed.gguf',
+        method: 'GET',
+      }),
+    ).toBe(false);
+  });
+
+  it('DENIES a non-https (plaintext) embedder CDN leg', () => {
+    expect(
+      isAllowedModelDownloadRequest({
+        url: `http://${EMBED_MODEL_DOWNLOAD_REDIRECT_HOST}/embed.gguf?se=1&sig=2`,
+        method: 'GET',
+      }),
+    ).toBe(false);
+  });
+
+  it('DENIES a GET to a DIFFERENT path on the embedder origin host', () => {
+    expect(
+      isAllowedModelDownloadRequest({
+        url: 'https://github.com/pedrofuentes/kawsay/releases/download/models-embed-v1/evil.gguf',
+        method: 'GET',
+      }),
+    ).toBe(false);
+    expect(isAllowedModelDownloadRequest({ url: `${EMBED_MODEL_DOWNLOAD_URL}?x=1`, method: 'GET' })).toBe(
+      false,
+    );
+  });
+
+  it('DENIES an unrelated URL and a missing method (deny-by-default)', () => {
+    expect(
+      isAllowedModelDownloadRequest({
+        url: 'https://example.com/multilingual-e5-small-q4_k_m.gguf',
+        method: 'GET',
+      }),
+    ).toBe(false);
+    expect(isAllowedModelDownloadRequest({ url: EMBED_MODEL_DOWNLOAD_URL })).toBe(false);
+  });
+});
+
+describe('isAllowedModelDownloadRequest — whisper entry is UNCHANGED by the embedder addition (regression)', () => {
+  it('still ALLOWS the whisper origin + signed CDN leg exactly as before', () => {
+    expect(isAllowedModelDownloadRequest({ url: MODEL_DOWNLOAD_URL, method: 'GET' })).toBe(true);
+    expect(isAllowedModelDownloadRequest({ url: SIGNED_CDN_URL, method: 'GET' })).toBe(true);
+  });
+
+  it('still DENIES the whisper legs for the wrong method / body / scheme (byte-identical guard)', () => {
+    expect(isAllowedModelDownloadRequest({ url: MODEL_DOWNLOAD_URL, method: 'POST' })).toBe(false);
+    expect(
+      isAllowedModelDownloadRequest({
+        url: MODEL_DOWNLOAD_URL,
+        method: 'GET',
+        uploadData: [{ bytes: Buffer.from('x') }],
+      }),
+    ).toBe(false);
+    expect(
+      isAllowedModelDownloadRequest({
+        url: `http://${MODEL_DOWNLOAD_REDIRECT_HOST}/x?se=1&sig=2`,
+        method: 'GET',
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps the two models distinct — neither exact origin URL matches the other', () => {
+    // Adding the embedder entry must not make one model's pinned origin URL match
+    // the other's; they are different release tags / asset names.
+    expect(MODEL_DOWNLOAD_URL).not.toBe(EMBED_MODEL_DOWNLOAD_URL);
+    expect(
+      isAllowedModelDownloadRequest({ url: MODEL_DOWNLOAD_URL, method: 'GET' }),
+    ).toBe(true);
+    expect(
+      isAllowedModelDownloadRequest({ url: EMBED_MODEL_DOWNLOAD_URL, method: 'GET' }),
+    ).toBe(true);
+  });
+});
+
 describe('installNetworkGuard — the model download is the ONLY permitted egress', () => {
   it('lets the pinned GET (origin + signed CDN host, empty body) through the guard', async () => {
     const { session, fire } = createFakeSession();
@@ -330,5 +485,61 @@ describe('installNetworkGuard — the model download is the ONLY permitted egres
     expect(await fire(`http://${MODEL_DOWNLOAD_REDIRECT_HOST}/x`, { method: 'GET' })).toEqual({
       cancel: true,
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M4-1b — the same zero-egress proof, now covering the embedder path: the guard
+// lets the ONE opt-in embedder GET (origin + signed CDN host, empty body) through
+// while EVERYTHING else — a POST to the embedder URL, a body-carrying GET, a
+// different path/host, a plaintext leg — stays DENIED. The whisper "ONLY permitted
+// egress" block above is left byte-identical; deny-by-default still holds for the
+// whole allowlist.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('installNetworkGuard — the embedder download is permitted, nothing else leaks (M4-1b)', () => {
+  it('lets the pinned embedder GET (origin + signed CDN host, empty body) through the guard', async () => {
+    const { session, fire } = createFakeSession();
+    installNetworkGuard(session, { isPackaged: true });
+    // The origin leg and the followed-redirect CDN leg both proceed…
+    expect(await fire(EMBED_MODEL_DOWNLOAD_URL, { method: 'GET' })).toEqual({ cancel: false });
+    expect(await fire(EMBED_SIGNED_CDN_URL, { method: 'GET' })).toEqual({ cancel: false });
+  });
+
+  it('still cancels everything that is not the exact embedder model GET', async () => {
+    const { session, fire } = createFakeSession();
+    installNetworkGuard(session, { isPackaged: true });
+    // POST to the embedder origin host…
+    expect(await fire(EMBED_MODEL_DOWNLOAD_URL, { method: 'POST' })).toEqual({ cancel: true });
+    // …a body-carrying GET (would smuggle memories out)…
+    expect(
+      await fire(EMBED_MODEL_DOWNLOAD_URL, {
+        method: 'GET',
+        uploadData: [{ bytes: Buffer.from('x') }],
+      }),
+    ).toEqual({ cancel: true });
+    // …a GET to a different path on the embedder origin host…
+    expect(
+      await fire(
+        'https://github.com/pedrofuentes/kawsay/releases/download/models-embed-v1/evil.gguf',
+        { method: 'GET' },
+      ),
+    ).toEqual({ cancel: true });
+    // …a GET to an unrelated host…
+    expect(await fire('https://example.com/track', { method: 'GET' })).toEqual({ cancel: true });
+    // …and a plaintext CDN leg.
+    expect(await fire(`http://${EMBED_MODEL_DOWNLOAD_REDIRECT_HOST}/x`, { method: 'GET' })).toEqual({
+      cancel: true,
+    });
+  });
+
+  it('permits BOTH opt-in model GETs, but a POST to either is still cancelled (deny-by-default)', async () => {
+    const { session, fire } = createFakeSession();
+    installNetworkGuard(session, { isPackaged: true });
+    // Both opt-in downloads proceed as pure GETs…
+    expect(await fire(MODEL_DOWNLOAD_URL, { method: 'GET' })).toEqual({ cancel: false });
+    expect(await fire(EMBED_MODEL_DOWNLOAD_URL, { method: 'GET' })).toEqual({ cancel: false });
+    // …but neither model host may be POSTed to.
+    expect(await fire(MODEL_DOWNLOAD_URL, { method: 'POST' })).toEqual({ cancel: true });
+    expect(await fire(EMBED_MODEL_DOWNLOAD_URL, { method: 'POST' })).toEqual({ cancel: true });
   });
 });
