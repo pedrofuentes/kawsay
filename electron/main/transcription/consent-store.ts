@@ -85,7 +85,9 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
       // No file yet (or unreadable) ⇒ never opted in.
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.warn(
-          `[kawsay] ${label} consent could not be read; treating as opted-out`,
+          '[kawsay]',
+          label,
+          'consent could not be read; treating as opted-out',
           diagnosticError(error),
         );
       }
@@ -97,7 +99,9 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
     } catch (error) {
       // A corrupt file is treated as opted-out — calm default, never a crash.
       console.warn(
-        `[kawsay] ${label} consent was malformed; treating as opted-out`,
+        '[kawsay]',
+        label,
+        'consent was malformed; treating as opted-out',
         diagnosticError(error),
       );
       return false;
@@ -119,7 +123,9 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
         // relaunch reads the prior/absent value, defaulting to opted-OUT) — and
         // leave a diagnostic rather than throwing out of the seam.
         console.warn(
-          `[kawsay] could not persist ${label} consent; future launches may remain opted-out`,
+          '[kawsay] could not persist',
+          label,
+          'consent; future launches may remain opted-out',
           diagnosticError(error),
         );
       }

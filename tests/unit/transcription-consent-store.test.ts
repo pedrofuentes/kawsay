@@ -98,7 +98,9 @@ describe('transcription consent store (durable opt-in — gates start AND downlo
     expect(createConsentStore({ filePath: malformed }).isOptedIn()).toBe(false);
 
     expect(warn).toHaveBeenCalledWith(
-      '[kawsay] transcription consent was malformed; treating as opted-out',
+      '[kawsay]',
+      'transcription',
+      'consent was malformed; treating as opted-out',
       expect.not.objectContaining({ stack: expect.any(String) }),
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain(malformed);
