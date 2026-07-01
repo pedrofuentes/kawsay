@@ -130,6 +130,10 @@ export interface FakeApi extends KawsayAPI {
   emitModelDownloadProgress(event: ModelDownloadProgressEvent): void;
   /** Number of live model-download-progress subscribers (asserts clean unsubscribe). */
   modelSubscriberCount(): number;
+  /** Push a progress event to every onSmartSearchModelDownloadProgress subscriber. */
+  emitSmartSearchModelDownloadProgress(event: ModelDownloadProgressEvent): void;
+  /** Number of live smart-search-model-download subscribers (asserts clean unsubscribe). */
+  smartSearchModelSubscriberCount(): number;
   /** Push a transcription progress snapshot to every onTranscriptionProgress subscriber. */
   emitTranscriptionProgress(event: TranscriptionProgressEvent): void;
   /** Number of live transcription-progress subscribers (asserts clean unsubscribe). */
@@ -171,6 +175,7 @@ const ZERO_TRANSCRIPTION_COUNTS = {
 export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
   const listeners = new Set<(event: ImportProgressEvent) => void>();
   const modelListeners = new Set<(event: ModelDownloadProgressEvent) => void>();
+  const smartSearchModelListeners = new Set<(event: ModelDownloadProgressEvent) => void>();
   const transcriptionListeners = new Set<(event: TranscriptionProgressEvent) => void>();
   const jobId = opts.jobId ?? FAKE_JOB_ID;
 
@@ -247,17 +252,21 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         transcriptionListeners.delete(listener);
       };
     },
-    // Smart-search opt-in (M4-1b) — the renderer UI is a later slice (UI-2), so these
-    // are calm inert defaults that satisfy the KawsayAPI surface: not offered, nothing
-    // installed, and a no-op progress subscription. UI-2 replaces them with drivable
-    // helpers (like the model-download stream above) when it wires the opt-in UI.
+    // Smart-search opt-in (M4-1b) — the renderer UI (UI-2) drives this the same way
+    // the transcription card drives onModelDownloadProgress: a real subscriber set +
+    // an emitter helper below. Defaults stay calm: not offered, nothing installed.
     getSmartSearchStatus:
       opts.getSmartSearchStatus ??
       vi.fn(() => Promise.resolve({ optedIn: false, modelReady: false, offered: false })),
     enableSmartSearch:
       opts.enableSmartSearch ??
       vi.fn(() => Promise.resolve({ outcome: 'unsupported-platform' as const })),
-    onSmartSearchModelDownloadProgress: () => () => {},
+    onSmartSearchModelDownloadProgress: (listener) => {
+      smartSearchModelListeners.add(listener);
+      return () => {
+        smartSearchModelListeners.delete(listener);
+      };
+    },
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },
@@ -266,6 +275,10 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       for (const listener of [...modelListeners]) listener(event);
     },
     modelSubscriberCount: () => modelListeners.size,
+    emitSmartSearchModelDownloadProgress: (event) => {
+      for (const listener of [...smartSearchModelListeners]) listener(event);
+    },
+    smartSearchModelSubscriberCount: () => smartSearchModelListeners.size,
     emitTranscriptionProgress: (event) => {
       for (const listener of [...transcriptionListeners]) listener(event);
     },
