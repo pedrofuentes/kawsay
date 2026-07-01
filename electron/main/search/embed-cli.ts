@@ -58,6 +58,21 @@ export const EMBED_TIMEOUT_MS = 120_000;
 export const EMBED_STDERR_CAP = 8192;
 
 /**
+ * Hard cap on accumulated stdout (the JSON payload). Unlike stderr — diagnostic, so
+ * it is silently sliced — stdout IS the result, so on overflow the runner SIGKILLs
+ * the child and REJECTS (a truncated payload would misparse) rather than trim. This
+ * bounds memory even against a verbose/buggy binary (or a runaway batch) that floods
+ * stdout faster than the wall-clock timeout can fire.
+ *
+ * Sizing (generous by design): one 384-float embedding is ~10 KiB of JSON (384
+ * floats x ~24 B worst-case each, plus the OpenAI-style envelope), so 64 MiB
+ * comfortably holds a ~6,000-vector batch — far above any realistic single embed
+ * call — while still capping a pathological producer well short of an OOM crash of
+ * the desktop app.
+ */
+export const EMBED_STDOUT_CAP = 64 * 1024 * 1024;
+
+/**
  * The exact `<os>-<arch>` bundle sub-directories Kawsay ships for — identical to
  * whisper-cli's / media's shipped matrix (macOS arm64 + x64, Windows x64); the
  * three bundles travel together. Windows arm64 is deferred (ADR-0007).
@@ -378,12 +393,13 @@ export type RunEmbedding = (
 
 /**
  * The production runner: spawn the bundled `llama-embedding` with an array argv (no
- * shell), a bounded stderr buffer, OUR OWN timer that SIGKILLs a child overrunning
- * `timeoutMs`, and an `AbortSignal` listener that SIGKILLs the in-flight child the
- * instant a cancel fires. An already-aborted signal refuses to spawn at all.
- * `timedOut` / `cancelled` are detected precisely (own flags), not inferred from
- * the exit signal. Resolves with the full stdout (the JSON), which the caller
- * parses; stdout size is bounded by the caller's batch against a trusted binary.
+ * shell), bounded stderr AND stdout buffers, OUR OWN timer that SIGKILLs a child
+ * overrunning `timeoutMs`, and an `AbortSignal` listener that SIGKILLs the in-flight
+ * child the instant a cancel fires. An already-aborted signal refuses to spawn at
+ * all. `timedOut` / `cancelled` are detected precisely (own flags), not inferred
+ * from the exit signal. Resolves with the full stdout (the JSON), which the caller
+ * parses; stdout is hard-capped at {@link EMBED_STDOUT_CAP} (SIGKILL + reject on
+ * overflow) so a runaway binary cannot balloon memory.
  */
 export const defaultRunEmbedding: RunEmbedding = (command, args, { timeoutMs, signal }) =>
   new Promise<string>((resolvePromise, reject) => {
@@ -401,6 +417,7 @@ export const defaultRunEmbedding: RunEmbedding = (command, args, { timeoutMs, si
     }
     const child = spawn(command, [...args], { windowsHide: true });
     let stdout = '';
+    let stdoutBytes = 0;
     let stderr = '';
     let settled = false;
     let timedOut = false;
@@ -423,6 +440,23 @@ export const defaultRunEmbedding: RunEmbedding = (command, args, { timeoutMs, si
     };
     signal?.addEventListener('abort', onAbort);
     child.stdout?.on('data', (chunk: Buffer) => {
+      // stdout is the PAYLOAD (not diagnostic like stderr), so on overflow SIGKILL
+      // the still-producing child and REJECT — a silently sliced payload would
+      // misparse. `settle` runs the cleanup + rejection exactly once (the later
+      // `close` re-entry, and any further chunks, are no-ops).
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > EMBED_STDOUT_CAP) {
+        child.kill('SIGKILL');
+        settle(() =>
+          reject(
+            new EmbedRunError(
+              `llama-embedding stdout exceeded cap (${String(EMBED_STDOUT_CAP)} bytes)`,
+              { code: null, signal: null, timedOut, cancelled, stderr },
+            ),
+          ),
+        );
+        return;
+      }
       stdout += chunk.toString('utf8');
     });
     child.stderr?.on('data', (chunk: Buffer) => {
