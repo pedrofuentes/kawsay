@@ -67,6 +67,20 @@ export interface EmbeddingsRepo {
   /** The next items awaiting embedding (embed_status = 'pending'), in stable id order. */
   listPendingEmbeddings(limit: number): PendingEmbeddingItem[];
   /**
+   * Mark an item's embedding drain as FAILED (embed_status → 'error') WITHOUT
+   * storing a vector — a broken/failed embed for this item (ADR-0029). A plain
+   * UPDATE keyed by id: an unknown id is a calm no-op (like the item already gone),
+   * consistent with the drain's other status writes. The item then leaves the
+   * `listPendingEmbeddings` set, so it is not re-drained on the next pass.
+   */
+  markEmbedFailed(itemId: string): void;
+  /**
+   * Mark an item's embedding drain as SKIPPED (embed_status → 'skipped') WITHOUT
+   * storing a vector — the item has no embeddable text (ADR-0029). Same plain-UPDATE
+   * semantics as {@link markEmbedFailed}; the item leaves the pending set.
+   */
+  markEmbedSkipped(itemId: string): void;
+  /**
    * Brute-force cosine KNN over the stored vectors of ONE model (ADR-0029): rank
    * every same-dimension vector for `filters.modelId` by cosine similarity to
    * `queryVector` (desc, id-asc tiebreak) and return the top `limit`. Returns []
@@ -157,6 +171,12 @@ export function createEmbeddingsRepo(db: CatalogDatabase): EmbeddingsRepo {
   const markEmbeddedStmt = db.prepare(`
     UPDATE items SET embed_status = 'done', updated_at = datetime('now') WHERE id = @itemId
   `);
+  const markFailedStmt = db.prepare(`
+    UPDATE items SET embed_status = 'error', updated_at = datetime('now') WHERE id = @itemId
+  `);
+  const markSkippedStmt = db.prepare(`
+    UPDATE items SET embed_status = 'skipped', updated_at = datetime('now') WHERE id = @itemId
+  `);
   const selectEmbeddingStmt = db.prepare(`
     SELECT item_id, model_id, dim, vector, created_at
       FROM item_embeddings
@@ -206,6 +226,14 @@ export function createEmbeddingsRepo(db: CatalogDatabase): EmbeddingsRepo {
         description: row.description,
         searchMeta: row.search_meta,
       }));
+    },
+
+    markEmbedFailed(itemId) {
+      markFailedStmt.run({ itemId });
+    },
+
+    markEmbedSkipped(itemId) {
+      markSkippedStmt.run({ itemId });
     },
 
     semanticSearch(queryVector, limit, filters) {
