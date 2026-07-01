@@ -85,8 +85,30 @@ export interface EmbeddingsRepo {
 // over Buffer.buffer) is robust to Node's shared Buffer pool byte-offset/alignment
 // AND pins little-endian, so a catalog is portable across CPU endianness.
 
+/**
+ * Guard the persistence boundary before a vector is serialized to a BLOB: a
+ * stored vector must be non-empty and every element finite. A NaN/±Infinity
+ * element or an empty vector signals a broken upstream embed — reject it here so
+ * it can never be encoded, persisted, or flip an item's `embed_status` to `done`
+ * (ADR-0029; complements the migration-003 `dim > 0 AND length(vector) = dim*4`
+ * CHECK, which cannot see the float values themselves).
+ */
+function assertPersistableVector(vector: Float32Array): void {
+  if (vector.length === 0) {
+    throw new Error('encodeVector: refusing to encode an empty vector (dim must be > 0)');
+  }
+  for (let i = 0; i < vector.length; i += 1) {
+    if (!Number.isFinite(vector[i])) {
+      throw new Error(
+        `encodeVector: refusing to encode a non-finite vector (element ${i} = ${vector[i]})`,
+      );
+    }
+  }
+}
+
 /** Encode a Float32Array as a fresh little-endian float32 Buffer (dim*4 bytes). */
 export function encodeVector(vector: Float32Array): Buffer {
+  assertPersistableVector(vector);
   const buffer = Buffer.alloc(vector.length * 4);
   for (let i = 0; i < vector.length; i += 1) buffer.writeFloatLE(vector[i], i * 4);
   return buffer;

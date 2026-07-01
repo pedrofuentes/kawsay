@@ -31,7 +31,13 @@ CREATE TABLE IF NOT EXISTS item_embeddings (
   dim        INTEGER NOT NULL,                                      -- vector length; equals the BLOB byte length / 4
   vector     BLOB NOT NULL,                                         -- float32 little-endian, dim*4 bytes
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),  -- canonical ISO-8601 UTC instant
-  UNIQUE (item_id, model_id)                                        -- re-embedding REPLACES (no duplicate vectors per model)
+  UNIQUE (item_id, model_id),                                       -- re-embedding REPLACES (no duplicate vectors per model)
+  -- Integrity: dim is a positive length and the float32 BLOB is EXACTLY dim*4
+  -- bytes (4 bytes per float32; length(vector) is the BLOB byte count). This binds
+  -- dim and vector so a truncated/oversized or zero-length vector can never persist.
+  -- A table CHECK can only be declared at CREATE time, so the invariant is added
+  -- now while 003 is still unshipped (ADR-0029; later would need a table rebuild).
+  CHECK (dim > 0 AND length(vector) = dim * 4)
 );
 
 -- Lookups + cascade by item (the FK target column). UNIQUE(item_id, model_id)
