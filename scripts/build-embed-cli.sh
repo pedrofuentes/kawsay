@@ -25,8 +25,11 @@
 #   * Only the `llama-embedding` example is built (tools, server, the unified app
 #     binary and its Web UI are all OFF) — smaller, faster, and it avoids any
 #     build-time network fetch of a prebuilt UI (zero-egress hygiene, AC-4).
-#   * macOS builds BOTH arm64 and x86_64 on one runner (mirrors whisper-cli),
-#     each with Metal embedded so the binary is self-contained.
+#   * macOS builds BOTH arm64 and x86_64 on one runner (dual-arch layout mirrors
+#     whisper-cli) but CPU-only — Metal is intentionally OFF (unlike whisper-cli):
+#     this is a tiny background embedder, so CPU inference is plenty fast and it
+#     keeps the CI build ~minutes not ~hour. See the mac cfg block for the full
+#     rationale.
 #   * Windows links the MSVC runtime dynamically (default /MD); any machine that
 #     can run the Kawsay Electron app already ships that runtime.
 #
@@ -152,11 +155,18 @@ build_one() {
     -DLLAMA_BUILD_UI=OFF
   )
   if [ "$OS_KEY" = mac ]; then
+    # CPU-only: force Metal OFF. llama.cpp defaults GGML_METAL=ON on Apple, and
+    # compiling the Metal shader library for BOTH arm64 + x86_64 added ~60 min to
+    # CI (vs ~3 min CPU-only, matching Windows). Metal is unnecessary here: the
+    # embedder is multilingual-e5-small (tiny, 118M params) and embeddings are
+    # produced by a background off-thread drain (not real-time), so CPU inference
+    # is more than fast enough. Embeddings are backend-invariant for cosine
+    # ranking, so a CPU build is equivalent to a Metal one. The CPU/Accelerate
+    # (BLAS) backend stays on — only the GPU/Metal path is dropped.
     cfg+=(
       -DCMAKE_OSX_ARCHITECTURES="$osx_arch"
       -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-      -DGGML_METAL=ON
-      -DGGML_METAL_EMBED_LIBRARY=ON
+      -DGGML_METAL=OFF
     )
   elif [ "$OS_KEY" = win ]; then
     # Default VS generator is multi-config; pin the platform explicitly.
