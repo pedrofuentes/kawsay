@@ -9,6 +9,7 @@ import {
   EMBED_MODEL_FILENAME,
   EMBED_RESOURCE_SUBDIR,
   EMBED_STDERR_CAP,
+  EMBED_STDOUT_CAP,
   EMBED_TIMEOUT_MS,
   EmbedParseError,
   EmbedRunError,
@@ -403,6 +404,39 @@ describe('defaultRunEmbedding (real spawn seam via a node stub)', () => {
       { timeoutMs: 5000 },
     ).catch((e: unknown) => e);
     expect((error as EmbedRunError).stderr.length).toBeLessThanOrEqual(EMBED_STDERR_CAP);
+  });
+
+  it('hard-caps stdout: SIGKILLs the still-producing child and rejects (typed) past the cap', async () => {
+    // stdout is the PAYLOAD (not diagnostic like stderr): a sliced payload would
+    // misparse, so on overflow the runner SIGKILLs the still-producing child and
+    // rejects with a typed error instead of silently truncating. A normal child
+    // flushes its whole output and exits 0 (see the happy path above), so a
+    // rejection here proves the runner cut the flood off before it ballooned memory.
+    expect(EMBED_STDOUT_CAP).toBeGreaterThanOrEqual(16 * 1024 * 1024);
+    const mib = 1 << 20;
+    const floodMiB = Math.ceil(EMBED_STDOUT_CAP / mib) + 8;
+    const stub =
+      `const b = Buffer.alloc(${String(mib)}, 121); ` +
+      `for (let i = 0; i < ${String(floodMiB)}; i += 1) process.stdout.write(b);`;
+    const error = await defaultRunEmbedding(process.execPath, ['-e', stub], {
+      timeoutMs: 10_000,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(EmbedRunError);
+    const runError = error as EmbedRunError;
+    expect(runError.timedOut).toBe(false);
+    expect(runError.cancelled).toBe(false);
+    expect(runError.message).toMatch(/stdout exceeded cap/i);
+  }, 15_000);
+
+  it('does NOT over-cap: a normal-size stdout still resolves and parses to N × 384 vectors', async () => {
+    const payload = JSON.stringify(envelope([vec(), vec(), vec()]));
+    const code = `process.stdout.write(${JSON.stringify(payload)})`;
+    const stdout = await defaultRunEmbedding(process.execPath, ['-e', code], {
+      timeoutMs: 5000,
+    });
+    const vectors = parseEmbeddingJson(stdout, 3, EMBED_DIM);
+    expect(vectors).toHaveLength(3);
+    for (const v of vectors) expect(v).toHaveLength(EMBED_DIM);
   });
 });
 
