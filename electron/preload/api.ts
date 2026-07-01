@@ -17,6 +17,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SMART_SEARCH_DOWNLOAD_MODEL,
+  SMART_SEARCH_MODEL_STATUS,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -28,6 +30,7 @@ import {
 } from '@shared/ipc/contract';
 import {
   IMPORT_PROGRESS,
+  SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_PROGRESS,
   type IpcEventChannel,
@@ -47,10 +50,7 @@ export type ValidatedSubscribe = <C extends IpcEventChannel>(
   listener: (payload: IpcEventPayload<C>) => void,
 ) => () => void;
 
-export function createKawsayApi(
-  invoke: ValidatedInvoke,
-  subscribe: ValidatedSubscribe,
-): KawsayAPI {
+export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSubscribe): KawsayAPI {
   return {
     async getAppVersion() {
       const { version } = await invoke(APP_GET_VERSION, {});
@@ -78,5 +78,9 @@ export function createKawsayApi(
     getTranscriptionStatus: () => invoke(TRANSCRIPTION_STATUS, {}),
     cancelTranscription: () => invoke(TRANSCRIPTION_CANCEL, {}),
     onTranscriptionProgress: (listener) => subscribe(TRANSCRIPTION_PROGRESS, listener),
+    getSmartSearchStatus: () => invoke(SMART_SEARCH_MODEL_STATUS, {}),
+    enableSmartSearch: () => invoke(SMART_SEARCH_DOWNLOAD_MODEL, {}),
+    onSmartSearchModelDownloadProgress: (listener) =>
+      subscribe(SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS, listener),
   };
 }

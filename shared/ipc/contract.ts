@@ -90,6 +90,27 @@ export const TRANSCRIPTION_STATUS = 'transcription:status';
 export const TRANSCRIPTION_CANCEL = 'transcription:cancel';
 
 /**
+ * IPC channel: start the opt-in SMART-SEARCH embedder-model download (M4-1b /
+ * ADR-0029). Caller-initiated only — the renderer must explicitly invoke it (the
+ * opt-in UI is a LATER slice); it is NEVER auto-triggered. Resolves immediately with
+ * the terminal `outcome`: `download-started` (a fetch is now in flight — watch the
+ * progress event), `already-present` (a verified model is on disk, nothing to do), or
+ * `unsupported-platform` (nowhere to install → smart search stays exact FTS). Byte
+ * progress and the terminal result stream over
+ * {@link SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS} — a channel SEPARATE from the
+ * transcription download so the two never cross-talk.
+ */
+export const SMART_SEARCH_DOWNLOAD_MODEL = 'smartSearch:downloadModel';
+/**
+ * IPC channel: query the smart-search capability snapshot the (opt-in) UI reads —
+ * whether the user `optedIn`, whether the embedder model is present-and-verified
+ * (`modelReady`), and whether the feature is even `offered` yet (a real model is
+ * published AND this platform can install it). Resolves
+ * `{ optedIn, modelReady, offered }`.
+ */
+export const SMART_SEARCH_MODEL_STATUS = 'smartSearch:modelStatus';
+
+/**
  * The renderer-controllable options for a native open dialog (W2). This is the
  * ENTIRE surface the sandboxed renderer may influence: a friendly title and an
  * optional starting directory — nothing else. `properties` (file vs directory),
@@ -208,6 +229,25 @@ export const ipcContract = {
   [TRANSCRIPTION_CANCEL]: {
     request: z.strictObject({}),
     response: z.strictObject({ cancelled: z.boolean() }),
+  },
+  [SMART_SEARCH_DOWNLOAD_MODEL]: {
+    request: z.strictObject({}),
+    // `download-started` ⇒ a fetch is now in flight (watch the progress event);
+    // `already-present` ⇒ a verified model is on disk, nothing to do;
+    // `unsupported-platform` ⇒ no install target here, so smart search stays FTS.
+    response: z.strictObject({
+      outcome: z.enum(['download-started', 'already-present', 'unsupported-platform']),
+    }),
+  },
+  [SMART_SEARCH_MODEL_STATUS]: {
+    request: z.strictObject({}),
+    // `offered` gates the whole opt-in UI: true ONLY when a real model is published
+    // AND this platform can install it (isEmbedModelPublished + a non-null downloader).
+    response: z.strictObject({
+      optedIn: z.boolean(),
+      modelReady: z.boolean(),
+      offered: z.boolean(),
+    }),
   },
 } as const;
 

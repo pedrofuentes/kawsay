@@ -76,6 +76,16 @@ export const modelDownloadProgressEventSchema = z.strictObject({
 export type ModelDownloadProgressEvent = z.infer<typeof modelDownloadProgressEventSchema>;
 
 /**
+ * IPC event: streamed progress for the opt-in SMART-SEARCH embedder-model download
+ * (M4-1b). Deliberately a SEPARATE channel from
+ * {@link TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS} — the two downloads must never
+ * cross-talk in the UI — yet it REUSES the identical
+ * {@link modelDownloadProgressEventSchema} payload, so the renderer branches on the
+ * same phases and typed error kinds for both. No new payload schema is defined.
+ */
+export const SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS = 'smartSearch:modelDownloadProgress';
+
+/**
  * IPC event: the polite per-item transcription progress stream (#157). Each tick
  * is a full {@link transcriptionSnapshotSchema} snapshot (state + counts + the
  * last settled item), so a late subscriber needs no replay — the latest event is
@@ -90,6 +100,7 @@ export type TranscriptionProgressEvent = z.infer<typeof transcriptionProgressEve
 export const ipcEventContract = {
   [IMPORT_PROGRESS]: importProgressEventSchema,
   [TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS]: modelDownloadProgressEventSchema,
+  [SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS]: modelDownloadProgressEventSchema,
   [TRANSCRIPTION_PROGRESS]: transcriptionProgressEventSchema,
 } as const;
 
