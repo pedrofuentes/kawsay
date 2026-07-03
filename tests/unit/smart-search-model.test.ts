@@ -215,10 +215,22 @@ describe('createSmartSearchController (consent-gated, main-process enable/status
 
   it('enable() records consent THEN kicks off the embed-model download', async () => {
     const consent = fakeConsent(false);
-    const downloader = fakeDownloader({ isModelReady: vi.fn().mockResolvedValue(false) });
+    // Capture the persisted opt-in state AT THE MOMENT downloadModel is invoked so
+    // a fetch-before-consent refactor (which would leave a download with no persisted
+    // opt-in on abort) fails this assertion rather than passing silently.
+    let consentAtDownloadTime: boolean | undefined;
+    const downloadModel = vi.fn().mockImplementation(() => {
+      consentAtDownloadTime = consent.isOptedIn();
+      return Promise.resolve({ status: 'done', path: PACKAGED_DEST });
+    });
+    const downloader = fakeDownloader({
+      isModelReady: vi.fn().mockResolvedValue(false),
+      downloadModel,
+    });
     const controller = createSmartSearchController({ consent, downloader });
 
     await expect(controller.enable()).resolves.toEqual({ outcome: 'download-started' });
+    expect(consentAtDownloadTime).toBe(true); // consent already persisted BEFORE download
     expect(consent.isOptedIn()).toBe(true);
     expect(downloader.downloadModel).toHaveBeenCalledTimes(1);
   });
