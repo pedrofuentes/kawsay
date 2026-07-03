@@ -13,7 +13,7 @@
 // URL/host WITHOUT pulling in any runtime surface — it stays trivially auditable and
 // unit-testable.
 //
-// The cofounder chose CONSENT-DOWNLOAD (not bundling) for the ~124 MB embedder
+// The cofounder chose CONSENT-DOWNLOAD (not bundling) for the ~119 MB embedder
 // GGUF: it is fetched once, on an explicit smart-search opt-in, into the exact path
 // resolveEmbedModelPath (search/embed-cli.ts, seam-1) already checks — at which
 // point the embedder becomes AVAILABLE and the merged live search (seam-3) lights
@@ -57,21 +57,23 @@ export const EMBED_MODEL_DOWNLOAD_REDIRECT_HOST = 'release-assets.githubusercont
  * model: the downloaded file is hashed + size-checked before it is renamed into the
  * `resolveEmbedModelPath` location.
  *
- * TODO(post-publish): all-zero sentinel. The real digest is printed by
- * publish-embed-model.yml when it converts + uploads the GGUF; until it is pinned here
- * this deliberately cannot match any real bytes, so an accidental fetch fails closed
- * (verification rejects, nothing is installed).
+ * FINALIZED: the real digest of the published `models-embed-v1` GGUF, emitted by
+ * publish-embed-model.yml when it converted + uploaded the asset. It replaces the
+ * former all-zero fail-closed sentinel; pinning it flips {@link isEmbedModelPublished}
+ * true and reveals the smart-search opt-in. A download whose bytes don't hash to this
+ * is still rejected before anything is installed.
  */
-export const EMBED_MODEL_SHA256 = '0'.repeat(64);
+export const EMBED_MODEL_SHA256 =
+  '0539137155820094fc7e966e8ea97e94e1cd4b8cd3e0a4f4933abab63bfd6019';
 
 /**
  * The expected byte size of the embedder GGUF (a cheap pre-hash integrity gate).
  *
- * TODO(post-publish): approximate (~124 MiB). The exact byte count is printed by
- * publish-embed-model.yml when it converts + uploads the GGUF, and pinned here in the
- * same follow-up as the SHA-256.
+ * FINALIZED: the exact byte count of the published `models-embed-v1` GGUF
+ * (124,837,280 bytes ≈ 119 MiB), emitted by publish-embed-model.yml alongside the
+ * SHA-256 above. Replaces the former ~124 MiB approximation.
  */
-export const EMBED_MODEL_SIZE_BYTES = 130_000_000;
+export const EMBED_MODEL_SIZE_BYTES = 124_837_280;
 
 /**
  * Whether a REAL embedder model has been published — i.e. {@link EMBED_MODEL_SHA256}
