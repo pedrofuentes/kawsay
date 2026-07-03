@@ -673,13 +673,9 @@ describe('embedder-model publish workflow pins its Python conversion deps (#233)
     // `huggingface-hub>=0.34.0,<1.0`. A 1.x pin therefore fails convert_hf_to_gguf.py at
     // import ("ImportError: huggingface-hub>=0.34.0,<1.0 is required ... found ==1.21.0").
     // Pin the LATEST compatible 0.x — a regression guard for exactly that 1.x-pin bug.
-    expect(publishEmbedModelYml).toMatch(
-      /pip install\s+['"]?huggingface_hub==0\.\d+(\.\d+)?['"]?/,
-    );
+    expect(publishEmbedModelYml).toMatch(/pip install\s+['"]?huggingface_hub==0\.\d+(\.\d+)?['"]?/);
     // A 1.x (or any >=1.0) pin breaks the pinned-transformers convert import.
-    expect(publishEmbedModelYml).not.toMatch(
-      /pip install\s+['"]?huggingface_hub\s*(==|>=)\s*1\./,
-    );
+    expect(publishEmbedModelYml).not.toMatch(/pip install\s+['"]?huggingface_hub\s*(==|>=)\s*1\./);
   });
 
   it('never installs huggingface_hub UNPINNED (no bare `pip install huggingface_hub`)', () => {
