@@ -31,14 +31,15 @@ export const EMBED_MODEL_FILE_NAME = 'multilingual-e5-small-q4_k_m.gguf';
 /**
  * The pinned origin URL the embedder download targets — Kawsay's OWN GitHub Release
  * asset (mirrors the M2 re-hosting model). Matched EXACTLY by the network-guard
- * allowlist (no path/host wildcards) once the pkg-egress slice adds it.
+ * allowlist (`electron/main/security/network-guard.ts`); no path/host wildcards.
  *
- * The release TAG (`models-embed-v1`) is FINAL: the maintainer-gated
- * `.github/workflows/publish-embed-model.yml` converts the model and uploads the GGUF
- * to this exact tag. {@link EMBED_MODEL_SHA256} and {@link EMBED_MODEL_SIZE_BYTES} stay
- * TODO(post-publish) — they are known only AFTER that workflow runs, then pinned in a
- * tiny follow-up that also allowlists this URL in the network guard. Until both land
- * the guard blocks the fetch, so this URL is NOT yet a live download endpoint.
+ * The release TAG (`models-embed-v1`) is FINAL and the asset is LIVE: the
+ * maintainer-gated `.github/workflows/publish-embed-model.yml` has converted and
+ * uploaded the GGUF to this tag, {@link EMBED_MODEL_SHA256} and
+ * {@link EMBED_MODEL_SIZE_BYTES} are pinned to the published asset, and this URL is
+ * already allowlisted in the network guard. The fetch is gated solely by the user's
+ * explicit smart-search opt-in and is fail-closed by SHA-256 + size verification
+ * before the model is ever used.
  */
 export const EMBED_MODEL_DOWNLOAD_URL =
   'https://github.com/pedrofuentes/kawsay/releases/download/models-embed-v1/multilingual-e5-small-q4_k_m.gguf';
