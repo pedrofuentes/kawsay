@@ -99,18 +99,20 @@ describe('smart-search model IPC handlers', () => {
 });
 
 describe('isEmbedModelPublished (the offered-gate predicate)', () => {
-  it('is false while the descriptor still holds the fail-closed sentinel', () => {
-    // The real constant stays the all-zero sentinel until the maintainer publishes
-    // the model, so the predicate reports the feature as not-yet-available.
-    expect(EMBED_MODEL_SHA256).toBe('0'.repeat(64));
-    expect(isEmbedModelPublished()).toBe(false);
+  it('reports the feature published now that a real (non-sentinel) digest is pinned', () => {
+    // The descriptor now carries the finalized digest of the published
+    // `models-embed-v1` GGUF, so the predicate reports smart search as available.
+    expect(EMBED_MODEL_SHA256).not.toBe('0'.repeat(64));
+    expect(EMBED_MODEL_SHA256).toMatch(/^[0-9a-f]{64}$/);
+    expect(isEmbedModelPublished()).toBe(true);
   });
 
-  it('flips true for a finalized (non-sentinel) SHA — the publish signal', () => {
-    // The real constant must never be mutated in a test; instead prove the exact
-    // comparison the predicate applies flips once a real digest replaces the sentinel.
-    const published = (sha: string): boolean => sha !== '0'.repeat(64);
-    expect(published('0'.repeat(64))).toBe(false);
-    expect(published('a'.repeat(64))).toBe(true);
+  it('exercises the REAL exported predicate returning true (resolves #241)', () => {
+    // #241: the earlier test asserted a LOCAL copy of the comparison, which never
+    // touched the real predicate. Pin the true branch on the exported function
+    // itself, now that a genuine digest replaces the fail-closed all-zero sentinel.
+    expect(isEmbedModelPublished()).toBe(true);
+    // Documented contrast: the all-zero sentinel is NOT what is pinned anymore.
+    expect(EMBED_MODEL_SHA256).not.toBe('0'.repeat(64));
   });
 });
