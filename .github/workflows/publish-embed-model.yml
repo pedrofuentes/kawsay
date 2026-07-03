@@ -94,13 +94,16 @@ jobs:
       - name: Install Python conversion deps
         # The canonical requirements for THIS pin (torch, transformers, sentencepiece,
         # gguf, protobuf, numpy) plus huggingface_hub for the model download, pinned to
-        # an EXACT version (==1.21.0) so the install is supply-chain reproducible (#233).
-        # The runner's setup-python pip is used as-is (no unpinned pip self-upgrade).
+        # an EXACT version (==0.36.2) so the install is supply-chain reproducible (#233).
+        # It MUST stay on the latest compatible 0.x: the pinned llama.cpp b9848 convert
+        # requirements bring a transformers that caps `huggingface-hub>=0.34.0,<1.0`, so a
+        # 1.x pin fails convert_hf_to_gguf.py at import. The runner's setup-python pip is
+        # used as-is (no unpinned pip self-upgrade).
         shell: bash
         run: |
           set -euo pipefail
           pip install -r .llama-cpp-src/requirements/requirements-convert_hf_to_gguf.txt
-          pip install 'huggingface_hub==1.21.0'
+          pip install 'huggingface_hub==0.36.2'
 
       - name: Convert + quantize + assert tokenizer == t5
         # The script patches BertModel.set_vocab → SentencePiece path, converts to f16,
