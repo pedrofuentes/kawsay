@@ -127,6 +127,41 @@ describe('EmbeddingsRepo (item_embeddings + embed_status drain, ADR-0029 · M4-1
     expect(count(db, 'SELECT COUNT(*) n FROM item_embeddings')).toBe(0);
   });
 
+  describe('negative-contract guards (FK, exact-duplicate, kind CHECK) — M4-1a coverage #216', () => {
+    it('throws a FK error for an unknown item — a vector can never precede its item', () => {
+      // The FK REFERENCES items(id) on item_embeddings makes the INSERT throw when
+      // the item does not exist; the transaction rolls back so NO row is written.
+      expect(() => repo.upsertEmbedding('ghost', MODEL, vec(1, 0))).toThrow();
+      expect(count(db, 'SELECT COUNT(*) n FROM item_embeddings')).toBe(0);
+    });
+
+    it('upserting the exact same (item_id, model_id, vector) is idempotent — row count stays 1', () => {
+      // ON CONFLICT(item_id, model_id) DO UPDATE must REPLACE, not duplicate, even
+      // when every column value is identical (exact-duplicate write).
+      seedItem('i1');
+      repo.upsertEmbedding('i1', MODEL, vec(1, 0, 0));
+      repo.upsertEmbedding('i1', MODEL, vec(1, 0, 0));
+      expect(count(db, "SELECT COUNT(*) n FROM item_embeddings WHERE item_id = 'i1'")).toBe(1);
+      expect(Array.from(repo.getEmbedding('i1', MODEL)?.vector ?? [])).toEqual([1, 0, 0]);
+    });
+
+    it("kind CHECK: 'text' and 'face' are accepted; any other value throws (003_embeddings.sql ~line 29)", () => {
+      // item_embeddings.kind has CHECK (kind IN ('text','face')); upsertEmbedding
+      // always defaults to 'text', so raw SQL is used here to reach the constraint.
+      seedItem('i1');
+      seedItem('i2');
+      const insert = db.prepare(
+        'INSERT INTO item_embeddings (item_id, kind, model_id, dim, vector) VALUES (?, ?, ?, ?, ?)',
+      );
+      const v = encodeVector(vec(1, 0));
+      // Both declared-valid kinds must succeed.
+      expect(() => insert.run('i1', 'text', MODEL, 2, v)).not.toThrow();
+      expect(() => insert.run('i2', 'face', MODEL, 2, v)).not.toThrow();
+      // Any value outside the CHECK set must be rejected by SQLite.
+      expect(() => insert.run('i1', 'image', MODEL + '-alt', 2, v)).toThrow();
+    });
+  });
+
   describe('listPendingEmbeddings (backfill drain)', () => {
     it('lists pending items in stable id order and excludes embedded ones', () => {
       for (const id of ['c', 'a', 'b']) seedItem(id);
