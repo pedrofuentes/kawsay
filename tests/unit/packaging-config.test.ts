@@ -70,6 +70,19 @@ const ciYml = readFileSync(repoRoot('.github/workflows/ci.yml'), 'utf8').replace
 // code is compiled into the shipped binary (AC-4 zero-egress).
 const embedBuildScript = readFileSync(repoRoot('scripts/build-embed-cli.sh'), 'utf8');
 
+// The maintainer-gated embedder-model publish workflow (.github/workflows/
+// publish-embed-model.yml) converts + uploads the M4 embedder GGUF. Its "Install
+// Python conversion deps" step must be supply-chain reproducible: the llama.cpp
+// requirements file it installs is already pinned, but huggingface_hub (the model
+// download) and the pip self-upgrade were UNPINNED (#233, from Sentinel PR #232 Dim
+// E) — a future compromised/regressed huggingface_hub or pip could silently change
+// the produced bytes (hence the SHA-256 the descriptor pins). Normalize CRLF→LF once
+// (Windows-checkout safe) as with the other workflow reads.
+const publishEmbedModelYml = readFileSync(
+  repoRoot('.github/workflows/publish-embed-model.yml'),
+  'utf8',
+).replace(/\r\n/g, '\n');
+
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
   const lines = releaseYml.split(/\r?\n/);
@@ -632,5 +645,38 @@ describe('embed-cli engine build + bundling contract (M4-1b, ADR-0029)', () => {
     expect(ciJobBlock('whisper-cli')).toMatch(/scripts\/build-whisper-cli\.sh/);
     expect(releaseBuild).toMatch(/scripts\/build-whisper-cli\.sh/);
     expect(extra).toMatch(assetPathRegex('resources', 'whisper', '${os}-${arch}'));
+  });
+});
+
+describe('embedder-model publish workflow pins its Python conversion deps (#233)', () => {
+  // #233 (from Sentinel PR #232, 🟡 Dim E): the convert job's "Install Python
+  // conversion deps" step installed huggingface_hub and self-upgraded pip UNPINNED.
+  // The llama.cpp requirements file it installs is already pinned, but a bare
+  // `pip install huggingface_hub` resolves to whatever is latest at run time —
+  // non-reproducible AND exposed to a future compromised/regressed release — and the
+  // produced model bytes (hence the SHA-256 the descriptor pins) must be reproducible.
+  // These assertions pin the exact-version install so the step cannot silently drift
+  // back to an unpinned resolve.
+
+  it('installs huggingface_hub at an EXACT version pin (== x.y[.z])', () => {
+    // The only huggingface_hub API the convert script uses (snapshot_download) is
+    // stable across the 0.x→1.x line, so an exact `==` pin is both safe and byte-
+    // reproducible for the one-off, revision-pinned model download.
+    expect(publishEmbedModelYml).toMatch(
+      /pip install\s+['"]?huggingface_hub==\d+\.\d+(\.\d+)?['"]?/,
+    );
+  });
+
+  it('never installs huggingface_hub UNPINNED (no bare `pip install huggingface_hub`)', () => {
+    // The exact regression #233 removed: a version-less install. Only the `==`-pinned
+    // form asserted above is allowed.
+    expect(publishEmbedModelYml).not.toMatch(/pip install\s+['"]?huggingface_hub['"]?\s*$/m);
+  });
+
+  it('drops the unpinned `pip install --upgrade pip` self-upgrade', () => {
+    // setup-python already ships a fine pip for `pip install`; an unpinned self-upgrade
+    // pulls a non-reproducible pip at run time. #233 drops it — if ever re-added it must
+    // be version-pinned, never a bare `--upgrade`.
+    expect(publishEmbedModelYml).not.toMatch(/pip install --upgrade pip\b/);
   });
 });
