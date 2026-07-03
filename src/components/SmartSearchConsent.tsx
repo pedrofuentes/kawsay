@@ -28,7 +28,7 @@ import type { SmartSearchModelError } from '@renderer/lib/use-smart-search-model
 
 const MIB = 1024 * 1024;
 
-/** Whole megabytes, the unit the ~124 MB model size is quoted in. */
+/** Whole megabytes, the unit the ~119 MB model size is quoted in. */
 function toMB(bytes: number): number {
   return Math.round(bytes / MIB);
 }
@@ -193,18 +193,18 @@ export function SmartSearchConsent(): ReactElement | null {
         return (
           <div className="flex flex-col gap-4">
             <p className="font-body text-base leading-relaxed text-text-primary">
-              Kawsay can help you find memories by what they&apos;re about — not just the exact words
-              in them. Search for a feeling or a place, and it can gently surface the right moments,
-              even ones that never say those words.
+              Kawsay can help you find memories by what they&apos;re about — not just the exact
+              words in them. Search for a feeling or a place, and it can gently surface the right
+              moments, even ones that never say those words.
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
               It all happens here, on this computer. A loved one&apos;s memories never leave this
               computer — there&apos;s no account, and nothing is ever uploaded.
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
-              To set it up, Kawsay makes a one-time download of about {toMB(SMART_SEARCH_MODEL_SIZE_BYTES)}{' '}
-              MB — the model that understands meaning. This is the only time the app uses the
-              internet.
+              To set it up, Kawsay makes a one-time download of about{' '}
+              {toMB(SMART_SEARCH_MODEL_SIZE_BYTES)} MB — the model that understands meaning. This is
+              the only time the app uses the internet.
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
               Nothing is searched by meaning until you turn it on, and you can turn it off again
@@ -294,8 +294,8 @@ export function SmartSearchConsent(): ReactElement | null {
               Smart search is ready
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
-              You can now find memories by what they mean, not just the exact words. Everything stays
-              on this computer.
+              You can now find memories by what they mean, not just the exact words. Everything
+              stays on this computer.
             </p>
             <p className="font-body text-sm leading-relaxed text-text-secondary">
               Turn it off again any time — a loved one&apos;s memories stay right here.

@@ -17,6 +17,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+## [0.4.0] - 2026-07-03
+
+### Added
+
+- **Find memories by what they mean — on-device smart search, now live** (M4-1b · ADR-0029): Kawsay
+  can now search a loved one's memories by **meaning**, not just the exact words in them — a private,
+  **on-device** understanding of what a memory is _about_. It is **entirely optional and off until you
+  choose it**: turning it on makes a **one-time ~119 MB download** of the local model that understands
+  meaning — **the only time the app ever uses the internet** — and that download is **verified and
+  stored locally** before it is ever used. Until you opt in, search stays **exact, full-text** as
+  before, and nothing is ever searched by meaning without your say-so. There's **no account, nothing is
+  uploaded, and a loved one's memories never leave this computer**; you can turn it off again whenever
+  you like.
+
+### Changed
+
+### Fixed
+
+### Security
+
+### Removed
+
 ## [0.3.0] - 2026-06-30
 
 ### Added

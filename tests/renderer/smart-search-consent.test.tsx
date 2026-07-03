@@ -63,8 +63,8 @@ describe('SmartSearchConsent — explains and asks before anything downloads (M4
     expect(screen.getByText(/not just the exact words/i)).toBeInTheDocument();
     // 100% on-device + memories never leave.
     expect(screen.getByText(/never leave this computer/i)).toBeInTheDocument();
-    // One-time ~124 MB download (derived from SMART_SEARCH_MODEL_SIZE_BYTES).
-    expect(screen.getByText(/124 MB/)).toBeInTheDocument();
+    // One-time ~119 MB download (derived from SMART_SEARCH_MODEL_SIZE_BYTES).
+    expect(screen.getByText(/119 MB/)).toBeInTheDocument();
     expect(screen.getByText(/only time .* uses the internet/i)).toBeInTheDocument();
   });
 
@@ -131,7 +131,9 @@ describe('SmartSearchConsent — calm progress while the model downloads', () =>
     const { user } = setup(api);
     await startDownloading(user);
 
-    api.emitSmartSearchModelDownloadProgress(makeModelDownloadProgressEvent({ phase: 'verifying' }));
+    api.emitSmartSearchModelDownloadProgress(
+      makeModelDownloadProgressEvent({ phase: 'verifying' }),
+    );
 
     expect(await screen.findByText(/almost there/i)).toBeInTheDocument();
     expect(screen.queryByText(/smart search is ready/i)).not.toBeInTheDocument();
@@ -247,6 +249,31 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
     expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
   });
 
+  it('falls back to calm GENERIC copy for any other retryable interruption (resolves #244)', async () => {
+    // Mirrors transcription-consent's generic-error test: a retryable HTTP failure
+    // (e.g. a transient 503) hits the `default` branch of errorMessage — reassuring,
+    // code-free copy with a retry offered, and never a raw status/reason phrase.
+    const api = offeredApi();
+    const { user } = setup(api);
+    await startDownloading(user);
+
+    api.emitSmartSearchModelDownloadProgress(
+      makeModelDownloadProgressEvent({
+        phase: 'error',
+        error: { kind: 'http', message: 'HTTP 503 Service Unavailable', retryable: true },
+      }),
+    );
+
+    expect(
+      await screen.findByText(/Something interrupted the download|Your memories are safe/i),
+    ).toBeInTheDocument();
+    // Retryable → the calm "Try again" affordance IS present.
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    // No raw HTTP status code or reason phrase leaks to a grieving user.
+    expect(screen.queryByText(/503/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Service Unavailable/)).not.toBeInTheDocument();
+  });
+
   it('does NOT offer an endless retry on a permanent stream failure — calm alternate guidance', async () => {
     const api = offeredApi();
     const { user } = setup(api);
@@ -260,7 +287,9 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
     );
 
     const alert = await screen.findByRole('alert');
-    expect(within(alert).getByText(/can't set up smart search on this computer/i)).toBeInTheDocument();
+    expect(
+      within(alert).getByText(/can't set up smart search on this computer/i),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/403/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Forbidden/)).not.toBeInTheDocument();
@@ -275,7 +304,9 @@ describe('SmartSearchConsent — the platform cannot install the model (unsuppor
     const { user } = setup(api);
     await startDownloading(user);
 
-    expect(await screen.findByText(/isn't available on this computer|can't be set up/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/isn't available on this computer|can't be set up/i),
+    ).toBeInTheDocument();
     // No dead-end retry loop for a platform that simply cannot install it.
     expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
     // Exact search still works — reassure, don't alarm.
