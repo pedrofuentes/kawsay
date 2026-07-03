@@ -86,11 +86,13 @@ The agent sorts every gated action into one of five **authorization tiers** and 
 | **auto-with-audit** | does it, records an ADR/audit note in `DECISIONS.md` | new **non-heavy** dependencies; data-model/schema changes; new config/env vars; new internal module boundaries |
 | **time-boxed** | proposes on the board and **auto-proceeds after the timeout** if you don't object | the **next milestone** *within the approved `ROADMAP.md`*; a non-heavy dep with a transitive-risk note; enabling an optional integration; a **built-UI design review** (the agent posts screenshots to a `DECISION:` issue and auto-proceeds after the window — raise to `human-required` to gate every design change) |
 | **human-required** | **blocks until you approve** (a `decision:approved` label / review from *your* identity) | mission / scope / pivots; auth · crypto · credential · privacy-data design; the **first** production deploy or package publish **of each release**; a **new backend / proxy / external origin**; **heavy or unusual** deps; **accepting** a high/critical security risk; sending user data off the §5 allowlist; a **harness-integrity** PR (the Sentinel config/prompt, `AGENTS.md`, CI workflows, branch protection, or scanner config); a **third-party / first-time-contributor** PR |
-| **never** | refuses | the §7 NEVER list; committing secrets; weakening/removing Sentinel, tests, branch protection, or the scanners (branch protection is **tighten-only**); force-push / history-rewrite of `main`; deleting branches, releases, tags, or data; changing `.github/workflows/**` security-relevant config without a `human-required` gate |
+| **never** | refuses | the §7 NEVER list; committing secrets; weakening/removing Sentinel, tests, branch protection, or the scanners (branch protection is **tighten-only**); force-push / history-rewrite of `main`; deleting branches, releases, tags, or data; changing `.github/workflows/**` security-relevant config without a `human-required` gate; **self-modifying the autonomy dial** (these §9/§10 tiers, time-boxes, budgets, caps, the kill switch, or the watchdog configuration — only the cofounder turns that dial) |
 
+- **Autonomy profile:** standard — the tier table as written (this is a local-only desktop app holding sensitive personal data, solo operator, so no `max-autonomy`; the dial shifts defaults only, never the `human-required` floor or `never`).
 - **Default time-box (auto-proceed window for the `time-boxed` tier):** 24h
 - **Risk tolerance:** conservative — sensitive personal data, solo operator; shifts borderline actions toward `human-required`.
 - **Production release gate:** human-required — the first production build/publish *of each release* (CI/build stays `auto`). Enforce it with a protected **Environment** (required reviewers) on the release job.
+- **Roadmap exhaustion:** stop (default) — no auto-extended maintenance milestones; propose the next milestone and wait.
 - **Project overrides** (move specific actions to a different tier): any action that would add **network egress, data upload/sync, telemetry, a backend, or an external origin** → **human-required** (or **never** for anything that would break the local-only guarantee), regardless of the default tier.
 - **Pre-authorized specifics** (kept for clarity; these are `auto`): the §3 stack + standard CI + the GitHub Releases packaging/distribution pipeline.
 
@@ -100,4 +102,10 @@ Caps the fleet so it can't runaway-spawn or overspend. The orchestrator and watc
 breach they **queue** new work and finish in-flight increments first; they never exceed a cap.
 - **Max concurrent workers / worktrees:** 4
 - **Per-watchdog-tick spawn cap:** 3
+- **Max recursion depth (spawn-tree levels; the Lead is 1 — at the cap, work inline instead of spawning):** 3
+- **Max spawn-tree size per milestone (total spawns, every level and channel combined):** 30
+- **Max Actions-minutes per day (Tier-2 ticks + CI combined; measured via `gh api` workflow-run durations / the billing API):** 240
+- **Max auto-proceeded `time-boxed` gates per milestone (past the cap, gates wait for you):** 5
+- **Max consecutive auto-proceeded milestones with zero cofounder interaction (past it, the next-milestone gate waits for you even under `auto-extend` / `max-autonomy`):** 2
+- **Dead-man switch (days with zero verified cofounder activity before degrading to security-maintenance-only and disabling the Tier-2 cron):** 7
 - **Per-milestone token/cost budget (soft — queue at the cap, raise a `needs:decision` to exceed):** no hard cap — queue at the concurrency caps; raise a `needs:decision` before any unusual spend.
