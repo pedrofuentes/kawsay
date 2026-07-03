@@ -667,6 +667,21 @@ describe('embedder-model publish workflow pins its Python conversion deps (#233)
     );
   });
 
+  it('pins huggingface_hub to a 0.x version (pinned llama.cpp transformers caps huggingface-hub<1.0)', () => {
+    // The convert job installs `transformers` from the IMMUTABLE llama.cpp b9848
+    // requirements-convert_hf_to_gguf.txt, and that transformers requires
+    // `huggingface-hub>=0.34.0,<1.0`. A 1.x pin therefore fails convert_hf_to_gguf.py at
+    // import ("ImportError: huggingface-hub>=0.34.0,<1.0 is required ... found ==1.21.0").
+    // Pin the LATEST compatible 0.x — a regression guard for exactly that 1.x-pin bug.
+    expect(publishEmbedModelYml).toMatch(
+      /pip install\s+['"]?huggingface_hub==0\.\d+(\.\d+)?['"]?/,
+    );
+    // A 1.x (or any >=1.0) pin breaks the pinned-transformers convert import.
+    expect(publishEmbedModelYml).not.toMatch(
+      /pip install\s+['"]?huggingface_hub\s*(==|>=)\s*1\./,
+    );
+  });
+
   it('never installs huggingface_hub UNPINNED (no bare `pip install huggingface_hub`)', () => {
     // The exact regression #233 removed: a version-less install. Only the `==`-pinned
     // form asserted above is allowed.
