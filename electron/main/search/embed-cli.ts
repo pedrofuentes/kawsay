@@ -269,7 +269,7 @@ interface EmbeddingEnvelope {
  * `array` output format), and is robust to stray log lines leaking around the JSON
  * (the object/array substring is extracted before parsing).
  */
-function extractRawVectors(raw: string): number[][] {
+function extractRawVectors(raw: string): unknown[][] {
   const parsed = parseJsonLoose(raw);
   const rows: unknown[] = Array.isArray(parsed)
     ? parsed
@@ -280,11 +280,21 @@ function extractRawVectors(raw: string): number[][] {
         })();
 
   return rows.map((row) => {
-    const candidate = Array.isArray(row) ? row : (row as EmbeddingEnvelopeEntry).embedding;
+    // Narrow each row BEFORE reading `.embedding`: a non-object/null row (e.g. the
+    // `{ data: [null] }` envelope, or a bare `null`) resolves to `undefined` and is
+    // rejected below — reading `.embedding` off `null` would otherwise throw a bare
+    // TypeError that escapes the typed EmbedParseError the FTS fallback relies on.
+    const candidate: unknown = Array.isArray(row)
+      ? row
+      : typeof row === 'object' && row !== null
+        ? (row as EmbeddingEnvelopeEntry).embedding
+        : undefined;
+    // Stay `unknown[]` here: the per-element numeric + Number.isFinite validation is
+    // parseEmbeddingJson's job, so never assert `number[]` before that check passes.
     if (!Array.isArray(candidate)) {
       throw new EmbedParseError('embedding entry has no numeric vector');
     }
-    return candidate as number[];
+    return candidate as unknown[];
   });
 }
 
