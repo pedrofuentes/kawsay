@@ -88,10 +88,10 @@ const securityYml = readFileSync(repoRoot('.github/workflows/security.yml'), 'ut
   '\n',
 );
 // The AC-4 egress harness (runs untrusted PR code under a network firewall). Normalize CRLF→LF.
-const ac4EgressYml = readFileSync(
-  repoRoot('.github/workflows/ac4-egress.yml'),
-  'utf8',
-).replace(/\r\n/g, '\n');
+const ac4EgressYml = readFileSync(repoRoot('.github/workflows/ac4-egress.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n',
+);
 
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
