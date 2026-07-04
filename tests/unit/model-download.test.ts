@@ -489,3 +489,106 @@ describe('createModelDownloader — install-commit failures emit a terminal erro
     expect(progress.at(-1)?.error?.kind).toBe('disk');
   });
 });
+
+describe('createModelDownloader — bounded stall deadline (terminal + clears single-flight)', () => {
+  let dir: string;
+  let modelPath: string;
+  let progress: ModelDownloadProgress[];
+  beforeEach(() => {
+    dir = makeTmpDir('model-dl-stall-');
+    modelPath = join(dir, 'ggml-small.bin');
+    progress = [];
+  });
+  afterEach(() => {
+    removeTmpDir(dir);
+  });
+
+  it('a stalled download (connection opens, no data, never ends) rejects with a terminal network error, cancels the response, clears single-flight, and lets a later call re-download', async () => {
+    // A response body that begins iterating (signalling `started`) then hangs
+    // forever: the connection opened but delivers no bytes and never ends — the
+    // exact non-terminal stall #242 🟢 2 flags (sits open until app restart).
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const stalledBody: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+        return {
+          next(): Promise<IteratorResult<Uint8Array>> {
+            signalStarted();
+            return new Promise<IteratorResult<Uint8Array>>(() => {
+              /* never settles — a pure stall */
+            });
+          },
+        };
+      },
+    };
+
+    const cancel = vi.fn();
+    const requests: ModelFetchRequest[] = [];
+    let call = 0;
+    const fetcher = (req: ModelFetchRequest): Promise<ModelFetchResponse> => {
+      requests.push(req);
+      const current = call;
+      call += 1;
+      if (current === 0) {
+        // First attempt: a 200 whose body stalls indefinitely.
+        return Promise.resolve({ statusCode: 200, headers: {}, body: stalledBody, cancel });
+      }
+      // A later, FRESH call gets a healthy body and completes — proving the
+      // single-flight lock was cleared by the terminal stall (the dead promise
+      // was not handed back).
+      return Promise.resolve(response(200, bytesBody([chunk(0, 33)])));
+    };
+
+    // A deterministic stall-deadline seam: capture the latest scheduled callback
+    // so the test fires the deadline itself (never wall-clock-flaky).
+    let fireStall: (() => void) | undefined;
+    const scheduleStallTimeout = (_ms: number, onStall: () => void): (() => void) => {
+      fireStall = onStall;
+      return () => {
+        if (fireStall === onStall) fireStall = undefined;
+      };
+    };
+
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: MODEL_BYTES.length,
+      stallTimeoutMs: 30_000,
+      scheduleStallTimeout,
+      onProgress: (p) => progress.push(p),
+    });
+
+    const first = downloader.downloadModel();
+    await started;
+    // The download must have armed a bounded stall deadline; if it never scheduled
+    // one, a stalled connection would sit non-terminal until app restart (the bug).
+    if (fireStall === undefined) {
+      throw new Error(
+        'expected the downloader to arm a bounded stall deadline, but none was scheduled',
+      );
+    }
+    fireStall();
+
+    const error = await first.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelDownloadError);
+    expect((error as ModelDownloadError).kind).toBe('network');
+    // Terminal: the stall ends the whole download (a terminal error progress tick),
+    // not a silent per-attempt retry that could loop.
+    expect(progress.at(-1)?.phase).toBe('error');
+    expect(progress.at(-1)?.error?.kind).toBe('network');
+    // The stalled response was cancelled so its socket is released.
+    expect(cancel).toHaveBeenCalled();
+    // Single-flight is cleared: nothing is in flight after the terminal error.
+    expect(downloader.isDownloading()).toBe(false);
+
+    // A subsequent call starts a FRESH download rather than returning the dead
+    // promise, and completes.
+    const second = await downloader.downloadModel();
+    expect(second.status).toBe('done');
+    expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
+    expect(requests).toHaveLength(2);
+  });
+});
