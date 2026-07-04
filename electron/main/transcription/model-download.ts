@@ -401,12 +401,13 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
 
       // Bounded idle-stall deadline. A connection that opens but then delivers no
       // bytes (and never ends) must not sit non-terminal. The timer is armed
-      // before the fetch and re-armed on every byte written; on expiry it aborts
-      // the in-flight request — through `abortController` so a request still
-      // awaiting its response headers (where `res` is undefined and `res.cancel()`
-      // is a no-op) is released too, and via `res.cancel()` once a response exists
-      // — then rejects THIS attempt with a TERMINAL network error, which unwinds
-      // run() and clears the single-flight lock so a later call starts fresh.
+      // before the fetch and re-armed on every byte written; on expiry it rejects
+      // THIS attempt with a TERMINAL network error FIRST — so the terminal error
+      // wins the stall race — then aborts the in-flight request through
+      // `abortController` so a request still awaiting its response headers (where
+      // `res` is undefined and `res.cancel()` is a no-op) is released too, and via
+      // `res.cancel()` once a response exists. The terminal rejection unwinds run()
+      // and clears the single-flight lock so a later call starts fresh.
       let res: ModelFetchResponse | undefined;
       let cancelStall: (() => void) | undefined;
       let rejectStalled: ((error: ModelDownloadError) => void) | undefined;
@@ -424,11 +425,12 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
       const armStall = (): void => {
         cancelStall?.();
         cancelStall = scheduleStallTimeout(stallTimeoutMs, () => {
-          // Release the underlying request first. Pre-response this is the ONLY
-          // effective lever (res is still undefined, so res?.cancel() is a no-op);
-          // post-response res.cancel() additionally tears down the streamed body.
-          abortController.abort();
-          res?.cancel();
+          // Reject the stall race with the TERMINAL error FIRST. Aborting the request
+          // synchronously drives the fetcher's abort seam to reject the in-flight fetch
+          // with a PLAIN Error; were that plain rejection to reach `raceStall` before
+          // this terminal one, Promise.race would surface it and the outer loop would
+          // reclassify it as retryable and retry a condition that must stay terminal
+          // (#262/#296). Settling the terminal error first makes it win the race.
           rejectStalled?.(
             new ModelDownloadError(
               'network',
@@ -436,12 +438,20 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
               { retryable: false },
             ),
           );
+          // Now release the underlying request. Pre-response this abort is the ONLY
+          // effective lever (res is still undefined, so res?.cancel() is a no-op) and
+          // still releases the socket both before and after headers (#274); once a
+          // response exists res.cancel() additionally tears down the streamed body.
+          // raceStall() swallows the resulting late plain-Error rejection.
+          abortController.abort();
+          res?.cancel();
         });
       };
 
-      // Race a pending step against the stall deadline. If the stall wins, swallow
-      // the step's own late settlement so an abort-driven rejection never surfaces
-      // as unhandled.
+      // Race a pending step against the stall deadline. The stall callback settles the
+      // terminal error BEFORE aborting, so on a stall the terminal error wins this race;
+      // swallow the step's own late, abort-driven rejection so it never surfaces as
+      // unhandled.
       const raceStall = <T>(step: Promise<T>): Promise<T> => {
         void step.catch(() => undefined);
         return Promise.race([step, stallSignal]);
