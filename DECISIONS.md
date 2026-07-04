@@ -38,7 +38,7 @@ ADR-0029's sketch into buildable detail and seeds the M4-2/M4-3 board. Every gat
 names still blocks at build time (see **Gates for the build cycle** below). It does NOT edit `PRD.md`,
 `ROADMAP.md`, `AGENTS.md`, or `docs/SENTINEL.md` — the proposed AC wording is for a later PRD PR (the
 same discipline ADR-0029 used for AC-29…AC-33).
-**Tier**: **human-required** (authoring **migration 004** — AGENTS Boundaries / ADR-0008) **+ ⚠️
+**Tier**: **human-required** (authoring **migration 005** — AGENTS Boundaries / ADR-0008) **+ ⚠️
 ask-first** (bundling an **offline gazetteer** asset — heavy-dep + packaging + third-party license).
 Crucially, M4-2/M4-3 **as specified add NO new network egress**: the gazetteer is **bundled** (offline),
 and themes **reuse the M4-1 embedder** already gated by ADR-0029 — so, unlike M4-1's model download,
@@ -55,7 +55,7 @@ ADR-0027/0029 and the "no new dependency — hand-roll it" ethos of ADR-0014/001
 v0.4.0 shipped **M4-1** (on-device semantic smart search). M4-2/M4-3 **reuse every one of its seams**
 rather than invent new ones:
 
-- **Migration mechanics** — `electron/main/db/migrate.ts`: append the next file `004_*.sql` to
+- **Migration mechanics** — `electron/main/db/migrate.ts`: append the next file `005_*.sql` to
   `MIGRATIONS`; forward-only, one-transaction-per-step, `PRAGMA user_version` gate (so an
   `ALTER TABLE … ADD COLUMN` runs exactly once); `.sql` imported via Vite `?raw`. Idempotent
   `IF NOT EXISTS`, named-param binding (`@name`), and the LEARNINGS **boolean → 0/1** rule (a JS boolean
@@ -86,7 +86,7 @@ Binding constraints carried from ADR-0029 (all must stay green — cumulative re
 - **AC-4 / AC-31 zero-egress** — categorization moves NO user data (pixels, text, GPS, vectors, derived
   labels) off-device. Reverse-geocoding is **offline only** (MISSION §7: "no online maps") via a
   **bundled** gazetteer — no tile server, no Nominatim, no request of any kind.
-- **AC-7 / AC-29 search never regresses** — migration 004 changes **no `items_fts` column**, so there is
+- **AC-7 / AC-29 search never regresses** — migration 005 changes **no `items_fts` column**, so there is
   **no destructive FTS drop+rebuild** (unlike the transcript case, ADR-0027 §5) and exact/semantic search
   are byte-identical before and after it.
 - **AC-14 / AC-33 non-destructive** — categories, assignments, labels, and derived collections are
@@ -99,16 +99,18 @@ Binding constraints carried from ADR-0029 (all must stay green — cumulative re
 
 ---
 
-**Decision 1 — Migration 004 schema (SPECIFIED here; authoring the `.sql` is 🚨 HUMAN-REQUIRED).**
+**Decision 1 — Migration 005 schema (SPECIFIED here; authoring the `.sql` is 🚨 HUMAN-REQUIRED).**
+
+_(004 was consumed by #215 — `004_item_embeddings_model_dim_index.sql`.)_
 
 Following `002`/`003` verbatim in style (leading rationale comment, `IF NOT EXISTS`, `CHECK`-pinned
 vocabularies, canonical ISO-8601 `strftime('%Y-%m-%dT%H:%M:%fZ','now')` defaults, ON DELETE CASCADE for
-derived rows). The file is `electron/main/db/migrations/004_categories.sql`, appended to `MIGRATIONS`
-after `003_embeddings`. **This is the DDL specification, not the authored file** — authoring it is the
+derived rows). The file is `electron/main/db/migrations/005_categories.sql`, appended to `MIGRATIONS`
+after `004_item_embeddings_model_dim_index`. **This is the DDL specification, not the authored file** — authoring it is the
 DB-migration gate (ADR-0008). No FTS column changes ⇒ **no** `items_fts` rebuild.
 
 ```sql
--- 004_categories.sql — M4-2/M4-3 categorization + suggested-collection provenance
+-- 005_categories.sql — M4-2/M4-3 categorization + suggested-collection provenance
 -- (ADR-0030). Purely ADDITIVE: two new tables, provenance columns on the EXISTING
 -- collections table, and a per-item category_status drain — NO items_fts change, so
 -- exact/semantic search (AC-7/AC-29) is byte-identical before and after.
@@ -187,7 +189,7 @@ Notes that make it buildable:
 - **`category_status`** is the categorization drain (new); themes additionally **consume** `item_embeddings`
   (already produced via the `embed_status` drain), so the two drains compose: embed first, categorize
   second.
-- Migration `004` deliberately does **not** feed category names into `search_meta` — so `items_fts` is
+- Migration `005` deliberately does **not** feed category names into `search_meta` — so `items_fts` is
   untouched and AC-7/AC-29 stay byte-identical. Making place/theme names full-text searchable is a
   deferred enhancement that WOULD require an FTS rebuild (out of scope here).
 
@@ -342,10 +344,10 @@ that must clear before the card lands.
 
 M4-2 · Categorization
 
-- **M4-2a · Migration 004 schema.** *Scope:* the Decision-1 DDL (`categories`, `item_categories`,
+- **M4-2a · Migration 005 schema.** *Scope:* the Decision-1 DDL (`categories`, `item_categories`,
   `collections` provenance ALTERs, `category_status` drain + indexes). *Acceptance:* runner applies once,
   forward-only + idempotent, CHECKs enforced, and `db-migrate.test.ts` proves `search()` is byte-identical
-  before/after (AC-7/AC-29). *Risk:* schema. *Gate:* **🚨 HUMAN-REQUIRED** (authoring migration 004).
+  before/after (AC-7/AC-29). *Risk:* schema. *Gate:* **🚨 HUMAN-REQUIRED** (authoring migration 005).
 - **M4-2b · Categories + assignments repo.** *Scope:* `categories-repo.ts` — category upsert by
   `source_key`; `item_categories` writes with `source/state/signal/confidence/explanation`; the read-time
   "user wins / auto retained / removed tombstone" resolver; guarantee an auto re-write never touches user
@@ -391,7 +393,7 @@ M4-3 · Suggested collections
 
 **Gates for the build cycle (enumerated).**
 
-- **Migration 004 authoring (M4-2a) → 🚨 HUMAN-REQUIRED** (DB migration — AGENTS Boundaries / ADR-0008).
+- **Migration 005 authoring (M4-2a) → 🚨 HUMAN-REQUIRED** (DB migration — AGENTS Boundaries / ADR-0008).
 - **Offline gazetteer bundling (M4-2d) → ⚠️ ASK FIRST** — a new bundled third-party asset (heavy-dep
   class) + an `electron-builder.yml` packaging change + a CC BY attribution obligation. (It is **not** a
   network-egress gate: the asset is bundled and offline.)
@@ -424,7 +426,7 @@ M4-3 · Suggested collections
 - **Enables** on-device auto **places + themes** categorization (explainable + correctable) and
   user-curated **suggested collections** — the M4-2/M4-3 vision — with **zero new egress** and **no
   destructive FTS rebuild**.
-- **Two authorization gates only** for the whole build cycle: migration 004 (human-required) and the
+- **Two authorization gates only** for the whole build cycle: migration 005 (human-required) and the
   gazetteer asset (ask-first). Faces (M4-4) and the AC-4 harness edit (M4-5) stay out of scope.
 - **+installer size** by the single-digit-MB gazetteer (arch-independent, bundled once) — the only
   packaging impact; no new native binary, no new npm dependency.
