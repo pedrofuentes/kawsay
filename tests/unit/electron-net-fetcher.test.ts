@@ -124,6 +124,30 @@ describe('createElectronModelFetcher — routes through net.request on the guard
     expect(request.aborted).toBe(true);
   });
 
+  it('aborts the in-flight request (pre-response) when its AbortSignal fires, before any response headers arrive', async () => {
+    const { net, request } = makeNet();
+    const fetcher = createElectronModelFetcher(net, SESSION);
+    const controller = new AbortController();
+    // Build the request as a variable so the optional `signal` (added to the
+    // ModelFetcher seam in #274) rides along even before the field exists on the
+    // exported type. Crucially, NO 'response' is ever emitted — the pre-headers
+    // path where a post-response cancel() cannot help.
+    const req = {
+      url: 'https://example/x',
+      method: 'GET' as const,
+      headers: {},
+      signal: controller.signal,
+    };
+    const promise = fetcher(req);
+
+    controller.abort();
+
+    // The pending Electron request is aborted even though no response arrived…
+    expect(request.aborted).toBe(true);
+    // …and the fetcher promise rejects so the downloader's stall path unwinds.
+    await expect(promise).rejects.toThrow();
+  });
+
   it('queues body chunks (and end) that arrive before the consumer starts iterating', async () => {
     const { net, request } = makeNet();
     const fetcher = createElectronModelFetcher(net, SESSION);

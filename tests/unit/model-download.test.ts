@@ -591,4 +591,81 @@ describe('createModelDownloader — bounded stall deadline (terminal + clears si
     expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
     expect(requests).toHaveLength(2);
   });
+
+  it('a stall DURING the initial fetch (no response headers yet) aborts the in-flight request via its AbortSignal, is terminal, and clears single-flight', async () => {
+    // The PRE-HEADERS variant of the stall (#275): the server accepts the socket
+    // but sends NO response for `stallTimeoutMs`, so `fetcher()` never resolves and
+    // the downloader's `res` stays undefined. A bare `res?.cancel()` is a no-op
+    // there, so to actually release the in-flight `net.request`/socket the
+    // downloader must abort it through the AbortSignal it hands the fetcher (#274).
+    let capturedSignal: AbortSignal | undefined;
+    const requests: ModelFetchRequest[] = [];
+    let call = 0;
+    // Resolves once the first fetch is in flight; the stall deadline is armed by
+    // then (armStall() runs synchronously just before fetcher() is invoked).
+    let markInFlight!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      markInFlight = resolve;
+    });
+    // The param is widened to read the optional `signal` the production seam adds
+    // in #274 while this RED test still compiles against the current type.
+    const fetcher = (
+      req: ModelFetchRequest & { signal?: AbortSignal },
+    ): Promise<ModelFetchResponse> => {
+      requests.push(req);
+      const current = call;
+      call += 1;
+      if (current === 0) {
+        capturedSignal = req.signal;
+        markInFlight();
+        // Never resolves — no status line, no body: a pure pre-headers stall.
+        return new Promise<ModelFetchResponse>(() => undefined);
+      }
+      // A later FRESH call succeeds — proving single-flight was cleared.
+      return Promise.resolve(response(200, bytesBody([chunk(0, 33)])));
+    };
+
+    let fireStall: (() => void) | undefined;
+    const scheduleStallTimeout = (_ms: number, onStall: () => void): (() => void) => {
+      fireStall = onStall;
+      return () => {
+        if (fireStall === onStall) fireStall = undefined;
+      };
+    };
+
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: MODEL_BYTES.length,
+      stallTimeoutMs: 30_000,
+      scheduleStallTimeout,
+      onProgress: (p) => progress.push(p),
+    });
+
+    const first = downloader.downloadModel();
+    await inFlight;
+    if (fireStall === undefined) {
+      throw new Error('expected a stall deadline to be armed before the fetch resolved');
+    }
+    fireStall();
+
+    const error = await first.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelDownloadError);
+    expect((error as ModelDownloadError).kind).toBe('network');
+    // The pre-headers request was proactively aborted through its AbortSignal so
+    // the underlying socket is released even though no response ever arrived.
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(true);
+    // Terminal: a single error tick, not a silent per-attempt retry.
+    expect(progress.at(-1)?.phase).toBe('error');
+    expect(progress.at(-1)?.error?.kind).toBe('network');
+    // Single-flight is cleared: nothing is in flight after the terminal error.
+    expect(downloader.isDownloading()).toBe(false);
+    // A subsequent call starts a FRESH download and completes.
+    const second = await downloader.downloadModel();
+    expect(second.status).toBe('done');
+    expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
+    expect(requests).toHaveLength(2);
+  });
 });
