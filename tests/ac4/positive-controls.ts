@@ -42,7 +42,14 @@ export type EgressVerdict = 'blocked' | 'escaped' | 'errored';
 export interface ControlOutcome {
   readonly source: EgressSource;
   readonly api: string;
-  /** True when the attempt was caught (error/throw/timeout); false if it escaped. */
+  /**
+   * True when the attempt was denied without establishing a connection. For most
+   * sources this is set when the attempt was caught (error/throw/timeout). The
+   * worker source is stricter — it mirrors `verdict === 'blocked'` (see
+   * `positive-controls.ts` `attemptEgressFromWorker`), so a pre-attempt `errored`
+   * outcome is `blocked: false` even though it threw (a bare error proves
+   * nothing; see `verdict` and #40 item 3).
+   */
   readonly blocked: boolean;
   readonly detail: string;
   /**

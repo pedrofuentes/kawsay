@@ -742,7 +742,7 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
 
   /** Assert a checkout-step block carries persist-credentials: false on an uncommented line. */
   function assertPersistCredentialsFalse(block: string): void {
-    expect(block.replace(/^\s*#.*$/gm, '')).toMatch(/persist-credentials:\s*false/);
+    expect(stripYamlComments(block)).toMatch(/persist-credentials:\s*false/);
   }
 
   it('commented-out persist-credentials: false does not satisfy the assertion (#281)', () => {
@@ -755,6 +755,18 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
     ].join('\n');
     const effective = commentedBlock.replace(/^\s*#.*$/gm, '');
     expect(effective).not.toMatch(/persist-credentials:\s*false/);
+  });
+
+  it('inline-comment persist-credentials: false does not satisfy the assertion (#286)', () => {
+    // Regression guard: a trailing inline comment on another key must NOT count
+    // as the actual setting. Under the old whole-line-only strip the comment text
+    // survived and assertPersistCredentialsFalse falsely passed (#286).
+    const inlineBlock = [
+      '        uses: actions/checkout@abc123',
+      '        with:',
+      '          fetch-depth: 0  # persist-credentials: false',
+    ].join('\n');
+    expect(() => assertPersistCredentialsFalse(inlineBlock)).toThrow();
   });
 
   it('every actions/checkout step in ci.yml has persist-credentials: false', () => {
@@ -775,9 +787,9 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
 
   it('every actions/checkout step in ac4-egress.yml has persist-credentials: false', () => {
     // ac4-egress runs pnpm install on untrusted PR code (same risk surface as ci.yml).
-    // All 3 jobs (test-egress, build-test, verify) each have a checkout step.
+    // All 4 jobs (os-deny, os-deny-macos, os-deny-windows, renderer-egress) each have a checkout step.
     const blocks = checkoutStepBlocks(ac4EgressYml);
-    expect(blocks.length).toBeGreaterThanOrEqual(3); // test-egress + build-test + verify
+    expect(blocks.length).toBeGreaterThanOrEqual(3); // os-deny + os-deny-macos + os-deny-windows + renderer-egress
     for (const block of blocks) {
       assertPersistCredentialsFalse(block);
     }

@@ -15,6 +15,16 @@
  * refused by the app's OWN Content-Security-Policy (`connect-src 'none'`,
  * `img-src 'self' data:`). If any control regressed so the renderer COULD egress,
  * these assertions fail.
+ *
+ * Two properties keep it honest:
+ *   - Boot-time coverage (#291): egress is observed at the BrowserContext level with
+ *     the listeners attached BEFORE the first window navigates, and a deterministic
+ *     re-navigation replays the full `index.html` request graph under those active
+ *     observers — so a remote resource pulled during the INITIAL load (a future
+ *     regression relaxing a non-fetch/img CSP directive such as `script-src` or
+ *     `font-src`) is caught, not missed in the gap before a page-level hook attaches.
+ *   - A committed positive control (#292): a `data:` image DOES load under the same
+ *     launch + CSP, proving the "image blocked" assertions are not vacuously true.
  */
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -74,10 +84,19 @@ interface ProbeResult {
 test.describe.serial('AC-4 renderer network egress is blocked', () => {
   let app: ElectronApplication;
   let page: Page;
-  // Requests that reached Chromium's network layer / completed, bucketed to external
-  // egress — both MUST stay empty (nothing leaves the machine).
+  // Belt-and-suspenders backstops. In this app the in-process network guard cancels
+  // every remote request BEFORE Playwright's Fetch/route interception sees it (a
+  // renderer egress surfaces as `net::ERR_BLOCKED_BY_CLIENT`), so these stay empty
+  // unless BOTH the CSP and that guard regressed — they are the last-line failsafe,
+  // not the primary renderer-egress signal (see `observedRequests`).
   const externalDispatched: string[] = [];
   const externalFinished: string[] = [];
+  // PRIMARY renderer-egress signal (#291): every request the renderer ISSUED from
+  // boot onward. `context.on('request')` (requestWillBeSent) fires for ANY request
+  // the renderer makes — including a remote one a downstream control then blocks —
+  // so it catches an off-machine reference in the boot graph that the network-
+  // dispatch backstops above never observe.
+  const observedRequests: string[] = [];
 
   test.beforeAll(async () => {
     // A throwaway, per-run user-data dir keeps the probe hermetic and never touches
@@ -89,13 +108,28 @@ test.describe.serial('AC-4 renderer network egress is blocked', () => {
       args: [mainEntry, `--user-data-dir=${userDataDir}`],
       env: packagedEnv(),
     });
-    page = await app.firstWindow();
 
-    // Observe the network at the dispatch layer: any external request that reaches
-    // here is real egress, so record it AND abort it (belt-and-suspenders: the test
-    // itself never lets a byte leave, even if an app-side control had regressed).
-    // Local file:// app resources continue untouched.
-    await page.route('**/*', async (route) => {
+    // #291: observe egress at the BrowserContext level and attach BEFORE the first
+    // window navigates, so the INITIAL `index.html` load is covered too. The
+    // `context.on('request')` listener attaches synchronously (no protocol
+    // round-trip) and records EVERY request the renderer issues from boot onward,
+    // including a remote one a downstream control then blocks — closing the gap the
+    // old page-level hooks left between first-window resolution and registration.
+    const context = app.context();
+    context.on('request', (request) => {
+      observedRequests.push(request.url());
+    });
+    context.on('requestfinished', (request) => {
+      const url = request.url();
+      if (isExternalEgress(url)) externalFinished.push(url);
+    });
+    // Last-line failsafe at the network-dispatch layer: if BOTH the CSP and the
+    // app's own network guard ever regressed, an external request would reach the
+    // route handler — record it AND abort it so the test process itself still never
+    // lets a byte leave. Local `file://` app resources continue untouched. (Healthy,
+    // the network guard cancels remote requests upstream, so this never fires — it
+    // is a backstop, not the primary check; see `observedRequests`.)
+    await context.route('**/*', async (route) => {
       const url = route.request().url();
       if (isExternalEgress(url)) {
         externalDispatched.push(url);
@@ -104,10 +138,9 @@ test.describe.serial('AC-4 renderer network egress is blocked', () => {
       }
       await route.continue();
     });
-    page.on('requestfinished', (request) => {
-      const url = request.url();
-      if (isExternalEgress(url)) externalFinished.push(url);
-    });
+
+    page = await app.firstWindow();
+    await page.waitForLoadState('load');
   });
 
   test.afterAll(async () => {
@@ -122,6 +155,63 @@ test.describe.serial('AC-4 renderer network egress is blocked', () => {
     await expect(page.locator('main')).toBeVisible();
     const rootHtml = await page.locator('#root').innerHTML();
     expect(rootHtml.length).toBeGreaterThan(0);
+  });
+
+  test('loads a data: image under the same CSP (positive control — egress asserts are not vacuous)', async () => {
+    // #292 item 1: prove the <img> pipeline WORKS under the identical launch +
+    // production CSP (`img-src 'self' data:`), so the "external <img> blocked"
+    // assertion below is a real refusal — not an image path that never loads
+    // anything. A 1x1 PNG data: URL is permitted by `data:` and MUST load.
+    const dataUri =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const outcome = await page.evaluate(
+      (src): Promise<string> =>
+        new Promise((resolve) => {
+          const image = new Image();
+          const timer = setTimeout(() => resolve('TIMEOUT'), 5000);
+          image.onload = (): void => {
+            clearTimeout(timer);
+            resolve('LOADED');
+          };
+          image.onerror = (): void => {
+            clearTimeout(timer);
+            resolve('ERROR');
+          };
+          image.src = src;
+        }),
+      dataUri,
+    );
+    console.log('[ac4] data-image positive control ->', outcome);
+    expect(outcome).toBe('LOADED');
+  });
+
+  test('issues zero external requests across the full boot navigation (boot-time egress coverage)', async () => {
+    // #291: prove the renderer makes NO off-machine request across its ENTIRE
+    // lifetime, the INITIAL index.html load included — not just after a page-level
+    // hook could attach. The context observer (live from before the first window
+    // navigated) recorded every request since boot; re-navigating deterministically
+    // replays the full index.html request graph under it, so a boot-time regression
+    // (a relaxed non-fetch/img CSP directive pulling a remote script / font / etc.
+    // during index.html load) is caught here — even though a downstream control
+    // would still block the byte, the renderer must never even ASK.
+    const seenBefore = observedRequests.length;
+    await page.reload({ waitUntil: 'load' });
+    await expect(page).toHaveTitle('Kawsay');
+    await page.waitForTimeout(250);
+    // The re-navigation re-requested the root document itself — proof the observer
+    // is live for a COMPLETE navigation, initial load included, not merely
+    // post-load activity (a blank/failed reload would trivially observe nothing).
+    const replay = observedRequests.slice(seenBefore);
+    console.log('[ac4] boot-nav replay ->', JSON.stringify(replay));
+    expect(replay.some((url) => /\/out\/renderer\/index\.html$/u.test(url))).toBe(true);
+    // From launch THROUGH this re-navigation, NOT ONE external request was issued by
+    // the renderer — the strong boot-time guarantee.
+    const externalObserved = observedRequests.filter((url) => isExternalEgress(url));
+    console.log('[ac4] external observed (boot) ->', JSON.stringify(externalObserved));
+    expect(externalObserved).toEqual([]);
+    // Backstops: nothing reached the network-dispatch layer or completed off-machine.
+    expect(externalDispatched).toEqual([]);
+    expect(externalFinished).toEqual([]);
   });
 
   test('refuses fetch(), WebSocket and <img> to an external host, dispatching nothing', async () => {

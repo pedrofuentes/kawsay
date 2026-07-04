@@ -68,6 +68,35 @@ function parsePermissions(section: string): Record<string, string> {
   return result;
 }
 
+/**
+ * Parse the `permissions:` block anchored strictly to indent 0 (workflow-level only).
+ * Returns null if the block is absent, in non-block scalar/inline-map form, or if the
+ * first `permissions:` in the file is not at column 0 — never falls through to
+ * job-level blocks.
+ */
+function parseTopLevelPermissions(yaml: string): Record<string, string> | null {
+  const lines = yaml.split('\n');
+  let permIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^permissions:/.test(lines[i])) {
+      permIdx = i;
+      break;
+    }
+  }
+  if (permIdx === -1) return null;
+  if (!/^permissions:\s*$/.test(lines[permIdx])) return null; // scalar or inline-map form
+  const result: Record<string, string> = {};
+  for (let i = permIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent === 0) break; // back to a top-level key
+    const m = line.match(/^\s*([\w-]+):\s*(\S+)/);
+    if (m) result[m[1]] = m[2];
+  }
+  return result;
+}
+
 describe('publish-embed-model workflow exists and is workflow_dispatch-only (M4-1b, ADR-0029)', () => {
   it('exists as its own workflow file', () => {
     expect(publishYml).not.toBe('');
@@ -99,7 +128,8 @@ describe('publish-embed-model gates the upload behind the protected release envi
 
   it('locks the FULL per-job permissions to the exact least-privilege set — any added scope fails (issue #234)', () => {
     // Top-level: read-only so jobs without an explicit block can never write by default.
-    expect(parsePermissions(publishYml)).toEqual({ contents: 'read' });
+    // Uses parseTopLevelPermissions (indent-0 anchor) — never falls through to a job block.
+    expect(parseTopLevelPermissions(publishYml)).toEqual({ contents: 'read' });
     // convert job: read-only — conversion + quantization never needs a write scope.
     expect(parsePermissions(convert)).toEqual({ contents: 'read' });
     // publish job: EXACTLY contents:write — the one scope the upload step requires.
@@ -214,5 +244,63 @@ describe('publish-embed-model is additive — it does not weaken existing publis
   it('leaves ci.yml building the embed-cli engine from the pinned source', () => {
     expect(ciYml).toMatch(/scripts\/build-embed-cli\.sh/);
     expect(ciYml).toContain(LLAMA_CPP_COMMIT);
+  });
+});
+
+describe('parseTopLevelPermissions anchors to indent 0 — fail-open regression (#277)', () => {
+  // Synthetic workflow YAML: the top-level `permissions:` block is absent or replaced
+  // with a non-block form, but a job block with `permissions:\n      contents: read`
+  // still exists. This is the exact pattern that causes the original parsePermissions
+  // helper to fall through and silently pass the least-privilege lock.
+  const withJobPermsOnly = [
+    'on:',
+    '  workflow_dispatch:',
+    '',
+    'jobs:',
+    '  convert:',
+    '    permissions:',
+    '      contents: read',
+    '    steps:',
+    '      - run: echo hi',
+  ].join('\n');
+
+  const withTopLevelWriteAll = [
+    'permissions: write-all',
+    '',
+    'on:',
+    '  workflow_dispatch:',
+    '',
+    'jobs:',
+    '  convert:',
+    '    permissions:',
+    '      contents: read',
+    '    steps:',
+    '      - run: echo hi',
+  ].join('\n');
+
+  const withTopLevelInlineMap = [
+    'permissions: { contents: read, id-token: write }',
+    '',
+    'on:',
+    '  workflow_dispatch:',
+    '',
+    'jobs:',
+    '  convert:',
+    '    permissions:',
+    '      contents: read',
+    '    steps:',
+    '      - run: echo hi',
+  ].join('\n');
+
+  it('returns null when top-level permissions block is absent — never falls through to a job block', () => {
+    expect(parseTopLevelPermissions(withJobPermsOnly)).toBeNull();
+  });
+
+  it('returns null for `permissions: write-all` (scalar — not a least-privilege block)', () => {
+    expect(parseTopLevelPermissions(withTopLevelWriteAll)).toBeNull();
+  });
+
+  it('returns null for inline-map top-level permissions (not a block — not least-privilege)', () => {
+    expect(parseTopLevelPermissions(withTopLevelInlineMap)).toBeNull();
   });
 });
