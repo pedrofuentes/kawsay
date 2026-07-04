@@ -333,6 +333,15 @@ describe('parseEmbeddingJson', () => {
     expect(() => parseEmbeddingJson(raw, 1)).toThrow(EmbedParseError);
   });
 
+  it('rejects a non-finite NUMERIC element (1e999 → Infinity), not just a non-number (#219)', () => {
+    // `1e999` is valid JSON that JSON.parse yields as `Infinity` — it passes a bare
+    // `typeof === "number"` check, so ONLY the Number.isFinite arm rejects it. Guards
+    // against a regression that keeps the number check but drops the finiteness one,
+    // which would let ±Infinity reach the persistence layer.
+    const raw = JSON.stringify(envelope([vec()])).replace('0.0125', '1e999');
+    expect(() => parseEmbeddingJson(raw, 1)).toThrow(EmbedParseError);
+  });
+
   it('defaults the expected dimension to EMBED_DIM (384)', () => {
     const raw = JSON.stringify(envelope([vec()]));
     expect(parseEmbeddingJson(raw, 1)[0].length).toBe(384);
@@ -489,6 +498,20 @@ function fakeWriter(): EmbedderConfig['writeInputFile'] & { texts: readonly stri
   return write;
 }
 
+/**
+ * A fake input writer whose `cleanup` REJECTS — models a scratch-dir removal that
+ * fails (e.g. the directory already vanished). The embedder must SWALLOW this so a
+ * cleanup failure never masks the embed outcome (`await cleanup().catch(...)`).
+ */
+function rejectingCleanupWriter(): NonNullable<EmbedderConfig['writeInputFile']> {
+  return async () => ({
+    inputPath: '/scratch/input.txt',
+    cleanup: async (): Promise<void> => {
+      throw new Error('cleanup failed: scratch dir vanished');
+    },
+  });
+}
+
 function baseConfig(over: Partial<EmbedderConfig> = {}): EmbedderConfig {
   return {
     isPackaged: true,
@@ -637,6 +660,42 @@ describe('createEmbedder (graceful UNAVAILABLE + happy/error embed paths)', () =
     await embedder.embed(['passage: x']).catch(() => undefined);
     const inputPath = run.calls[0].args[run.calls[0].args.indexOf('-f') + 1];
     expect(existsSync(inputPath)).toBe(false);
+  });
+
+  it('resolves with the vectors even when the input cleanup REJECTS (#219)', async () => {
+    // A failing scratch cleanup must never mask a SUCCESSFUL embed — the OS reclaims
+    // the temp dir regardless, so the swallowed rejection is invisible to the caller.
+    const run = fakeRun({ json: envelope([vec()]) });
+    const embedder = createEmbedder(
+      baseConfig({ runEmbedding: run, writeInputFile: rejectingCleanupWriter() }),
+    );
+    if (!embedder.available) throw new Error('expected available');
+    const vectors = await embedder.embed(['passage: x']);
+    expect(vectors).toHaveLength(1);
+    expect(vectors[0]).toBeInstanceOf(Float32Array);
+    expect(vectors[0].length).toBe(EMBED_DIM);
+  });
+
+  it('surfaces the run failure (not the swallowed cleanup rejection) when both fail (#219)', async () => {
+    // When the run rejects AND cleanup also rejects, the caller must see the RUN
+    // error (the true cause) — the cleanup rejection is swallowed, never surfaced in
+    // its place, so the FTS fallback keys off the real failure.
+    const runError = new EmbedRunError('llama-embedding exited', {
+      code: 2,
+      signal: null,
+      timedOut: false,
+      cancelled: false,
+      stderr: 'boom',
+    });
+    const embedder = createEmbedder(
+      baseConfig({
+        runEmbedding: fakeRun({ error: runError }),
+        writeInputFile: rejectingCleanupWriter(),
+      }),
+    );
+    if (!embedder.available) throw new Error('expected available');
+    const thrown = await embedder.embed(['passage: x']).catch((e: unknown) => e);
+    expect(thrown).toBe(runError);
   });
 });
 
