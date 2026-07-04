@@ -30,6 +30,8 @@ import { hashFileSha256, verifyModelFile } from './model-integrity';
  *  - **progress** + typed terminal states reported via {@link ModelDownloadProgress};
  *  - **offline / disk-full / bad-status** surface a typed, calm
  *    {@link ModelDownloadError} (never a crash);
+ *  - **bounded** — an idle-stall deadline aborts a connection that stops making
+ *    forward progress, so a stalled download can never sit non-terminal;
  *  - **single-flight** — concurrent calls coalesce to one download;
  *  - **skip** when a verified model already exists;
  *  - **atomic install** — verify the temp file's SHA-256 + size, then `rename()`
@@ -101,6 +103,15 @@ export interface ModelFetchResponse {
  */
 export type ModelFetcher = (request: ModelFetchRequest) => Promise<ModelFetchResponse>;
 
+/**
+ * Schedule the idle-stall deadline and return a canceller. Given a delay (ms) and
+ * a callback, it arranges for the callback to run once after the delay and returns
+ * a function that cancels it. Injectable so tests drive the deadline
+ * deterministically (a captured callback fired on demand) instead of on the wall
+ * clock. Production defaults to an unref'd `setTimeout`.
+ */
+export type StallTimeoutScheduler = (ms: number, onStall: () => void) => () => void;
+
 /** A write sink for the temp `.part` file (production: `fs.createWriteStream`). */
 export interface ModelWriteSink {
   write(chunk: Uint8Array): Promise<void>;
@@ -152,6 +163,17 @@ export interface ModelDownloaderOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Backoff schedule (ms) for attempt N (1-based). */
   backoffMs?: (attempt: number) => number;
+  /**
+   * Idle-stall deadline (ms): abort a download that makes NO forward progress —
+   * no byte written — within this window. A stalled connection (opens, delivers
+   * nothing, and never ends) would otherwise sit non-terminal until app restart
+   * (#242 🟢 2). The timer re-arms on every byte written, so a healthy — even
+   * slow — download is never cut off. Defaults to {@link DEFAULT_STALL_TIMEOUT_MS}.
+   */
+  stallTimeoutMs?: number;
+  /** Idle-stall deadline scheduler (injectable for deterministic tests); see
+   *  {@link StallTimeoutScheduler}. Defaults to an unref'd `setTimeout`. */
+  scheduleStallTimeout?: StallTimeoutScheduler;
 }
 
 export interface ModelDownloader {
@@ -164,6 +186,15 @@ export interface ModelDownloader {
 }
 
 const DEFAULT_MAX_ATTEMPTS = 5;
+
+/**
+ * Default idle-stall deadline: 60s without a single byte written aborts the
+ * attempt. Generous enough that connect + TLS + redirect resolution + first byte
+ * on a slow link never trips it, yet bounded so a truly stalled connection can't
+ * sit non-terminal. Re-armed on every byte, so a slow-but-progressing download is
+ * never cut off.
+ */
+const DEFAULT_STALL_TIMEOUT_MS = 60_000;
 
 /** Node fs error codes that mean "the disk write failed" (not a network problem). */
 const DISK_ERROR_CODES: ReadonlySet<string> = new Set([
@@ -184,6 +215,14 @@ function defaultSleep(ms: number): Promise<void> {
     timer.unref?.();
   });
 }
+
+const defaultScheduleStallTimeout: StallTimeoutScheduler = (ms, onStall) => {
+  const timer = setTimeout(onStall, ms);
+  timer.unref?.();
+  return () => {
+    clearTimeout(timer);
+  };
+};
 
 function defaultBackoff(attempt: number): number {
   // 0.5s, 1s, 2s, 4s … capped at 15s — gentle, calm, never a tight retry loop.
@@ -294,6 +333,8 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
     sleep = defaultSleep,
     backoffMs = defaultBackoff,
+    stallTimeoutMs = DEFAULT_STALL_TIMEOUT_MS,
+    scheduleStallTimeout = defaultScheduleStallTimeout,
   } = options;
 
   let active: Promise<ModelDownloadResult> | undefined;
@@ -346,56 +387,108 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
       if (requestedOffset > 0) {
         headers.Range = `bytes=${requestedOffset}-`;
       }
-      const res = await fetcher({ url: sourceUrl, method: 'GET', headers });
-      const code = res.statusCode;
 
-      if (code === 416) {
-        // Range Not Satisfiable: our offset is at/after EOF. If the partial is
-        // already complete, accept it; otherwise it is bogus — discard + restart.
-        res.cancel();
-        const size = (await sizeOf(partPath)) ?? 0;
-        if (size >= expectedSize) {
-          bytesDownloaded = size;
-          return size;
-        }
-        await rm(partPath, { force: true });
-        throw new ModelDownloadError('http', 'range not satisfiable (HTTP 416)', {
-          retryable: true,
-        });
-      }
-      if (code !== 200 && code !== 206) {
-        res.cancel();
-        const retryable = code >= 500 || code === 429 || code === 408;
-        throw new ModelDownloadError('http', `unexpected HTTP status ${String(code)}`, {
-          retryable,
-        });
-      }
+      // Bounded idle-stall deadline. A connection that opens but then delivers no
+      // bytes (and never ends) must not sit non-terminal. The timer is armed
+      // before the fetch and re-armed on every byte written; on expiry it cancels
+      // the response and rejects THIS attempt with a TERMINAL network error, which
+      // unwinds run() and clears the single-flight lock so a later call starts fresh.
+      let res: ModelFetchResponse | undefined;
+      let cancelStall: (() => void) | undefined;
+      let rejectStalled: ((error: ModelDownloadError) => void) | undefined;
+      const stallSignal = new Promise<never>((_resolve, reject) => {
+        rejectStalled = reject;
+      });
+      // A late stall firing after the attempt settles must never be an unhandled
+      // rejection: keep an idle handler on the signal itself.
+      void stallSignal.catch(() => undefined);
 
-      // Append only when we asked to resume AND the server honoured it (206).
-      // A 200 to a ranged request means the server ignored the Range, so restart.
-      const append = requestedOffset > 0 && code === 206;
-      let written = append ? requestedOffset : 0;
-      bytesDownloaded = written;
-      const writer = sink(partPath, { append });
+      const armStall = (): void => {
+        cancelStall?.();
+        cancelStall = scheduleStallTimeout(stallTimeoutMs, () => {
+          res?.cancel();
+          rejectStalled?.(
+            new ModelDownloadError(
+              'network',
+              `download stalled: no data received for ${String(stallTimeoutMs)}ms`,
+              { retryable: false },
+            ),
+          );
+        });
+      };
+
+      // Race a pending step against the stall deadline. If the stall wins, swallow
+      // the step's own late settlement so an abort-driven rejection never surfaces
+      // as unhandled.
+      const raceStall = <T>(step: Promise<T>): Promise<T> => {
+        void step.catch(() => undefined);
+        return Promise.race([step, stallSignal]);
+      };
+
+      armStall();
       try {
-        for await (const piece of res.body) {
-          if (written + piece.length > expectedSize) {
-            // The stream delivered more than the pinned size — refuse it outright.
-            throw new ModelDownloadError('integrity', 'stream exceeds expected model size', {
-              retryable: true,
-            });
+        res = await raceStall(fetcher({ url: sourceUrl, method: 'GET', headers }));
+        const code = res.statusCode;
+
+        if (code === 416) {
+          // Range Not Satisfiable: our offset is at/after EOF. If the partial is
+          // already complete, accept it; otherwise it is bogus — discard + restart.
+          res.cancel();
+          const size = (await sizeOf(partPath)) ?? 0;
+          if (size >= expectedSize) {
+            bytesDownloaded = size;
+            return size;
           }
-          await writer.write(piece);
-          written += piece.length;
-          bytesDownloaded = written;
-          emit({ phase: 'downloading', bytesDownloaded: written, totalBytes: expectedSize, error: null });
+          await rm(partPath, { force: true });
+          throw new ModelDownloadError('http', 'range not satisfiable (HTTP 416)', {
+            retryable: true,
+          });
         }
-        await writer.close();
-        return written;
-      } catch (err) {
-        res.cancel();
-        await writer.abort().catch(() => undefined);
-        throw classifyStreamError(err);
+        if (code !== 200 && code !== 206) {
+          res.cancel();
+          const retryable = code >= 500 || code === 429 || code === 408;
+          throw new ModelDownloadError('http', `unexpected HTTP status ${String(code)}`, {
+            retryable,
+          });
+        }
+
+        // Append only when we asked to resume AND the server honoured it (206).
+        // A 200 to a ranged request means the server ignored the Range, so restart.
+        const append = requestedOffset > 0 && code === 206;
+        let written = append ? requestedOffset : 0;
+        bytesDownloaded = written;
+        const writer = sink(partPath, { append });
+        try {
+          // Drive the iterator by hand so each read can race the stall deadline —
+          // a plain `for await` cannot be bounded per-step.
+          const iterator = res.body[Symbol.asyncIterator]();
+          for (;;) {
+            const step = await raceStall(iterator.next());
+            if (step.done === true) {
+              break;
+            }
+            const piece = step.value;
+            if (written + piece.length > expectedSize) {
+              // The stream delivered more than the pinned size — refuse it outright.
+              throw new ModelDownloadError('integrity', 'stream exceeds expected model size', {
+                retryable: true,
+              });
+            }
+            await writer.write(piece);
+            written += piece.length;
+            bytesDownloaded = written;
+            armStall(); // forward progress — reset the idle-stall deadline
+            emit({ phase: 'downloading', bytesDownloaded: written, totalBytes: expectedSize, error: null });
+          }
+          await writer.close();
+          return written;
+        } catch (err) {
+          res.cancel();
+          await writer.abort().catch(() => undefined);
+          throw classifyStreamError(err);
+        }
+      } finally {
+        cancelStall?.();
       }
     };
 
