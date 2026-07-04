@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Hardened the publish-embed-model workflow least-privilege lock: the top-level `permissions:` assertion now uses an indent-0–anchored helper (`parseTopLevelPermissions`) so absent, scalar (`write-all`), or inline-map forms are detected as policy violations rather than silently falling through to a job-level block (fixes #277).
+
 ### Security
 
 ### Removed
