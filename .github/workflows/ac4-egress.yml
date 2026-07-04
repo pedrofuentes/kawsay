@@ -341,7 +341,7 @@ jobs:
   # fetch / WebSocket / <img> to a routable host and asserting each is refused by the
   # app's own Content-Security-Policy (`connect-src 'none'`, `img-src 'self' data:`)
   # with ZERO external requests dispatched. Defense-in-depth: it needs no firewall —
-  # the app's OWN guard + CSP are the thing under test — so it stays a focused
+  # the app's OWN CSP is the thing under test — so it stays a focused
   # build + virtual-display + Playwright run.
   renderer-egress:
     name: Chromium renderer-egress (Playwright)
