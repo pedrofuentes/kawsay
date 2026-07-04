@@ -757,6 +757,18 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
     expect(effective).not.toMatch(/persist-credentials:\s*false/);
   });
 
+  it('inline-comment persist-credentials: false does not satisfy the assertion (#286)', () => {
+    // Regression guard: a trailing inline comment on another key must NOT count
+    // as the actual setting. Under the old whole-line-only strip the comment text
+    // survived and assertPersistCredentialsFalse falsely passed (#286).
+    const inlineBlock = [
+      '        uses: actions/checkout@abc123',
+      '        with:',
+      '          fetch-depth: 0  # persist-credentials: false',
+    ].join('\n');
+    expect(() => assertPersistCredentialsFalse(inlineBlock)).toThrow();
+  });
+
   it('every actions/checkout step in ci.yml has persist-credentials: false', () => {
     const blocks = checkoutStepBlocks(ciYml);
     expect(blocks.length).toBeGreaterThanOrEqual(3); // verify + whisper-cli + embed-cli
