@@ -245,27 +245,27 @@ describe('toEmbeddingInputLine / buildEmbedInput (newline-collapse safety)', () 
 
 describe('buildEmbedArgs (the validated llama-embedding argv)', () => {
   it('builds the exact spike-validated array argv (model, input file, json, mean, L2)', () => {
-    expect(buildEmbedArgs({ modelPath: '/m/model.gguf', inputPath: '/scratch/input.txt' })).toEqual([
-      '-m',
-      '/m/model.gguf',
-      '-f',
-      '/scratch/input.txt',
-      '--embd-output-format',
-      'json',
-      '--pooling',
-      'mean',
-      '--embd-normalize',
-      '2',
-    ]);
+    expect(buildEmbedArgs({ modelPath: '/m/model.gguf', inputPath: '/scratch/input.txt' })).toEqual(
+      [
+        '-m',
+        '/m/model.gguf',
+        '-f',
+        '/scratch/input.txt',
+        '--embd-output-format',
+        'json',
+        '--pooling',
+        'mean',
+        '--embd-normalize',
+        '2',
+      ],
+    );
   });
 
   it('refuses a path that could be misread as a flag (defense-in-depth)', () => {
     // Our own resolved/temp paths never begin with "-", but the exported builder
     // guards the argv boundary so no path can ever inject a flag.
     expect(() => buildEmbedArgs({ modelPath: '-m', inputPath: '/scratch/input.txt' })).toThrow();
-    expect(() =>
-      buildEmbedArgs({ modelPath: '/m/model.gguf', inputPath: '--evil' }),
-    ).toThrow();
+    expect(() => buildEmbedArgs({ modelPath: '/m/model.gguf', inputPath: '--evil' })).toThrow();
     expect(() => buildEmbedArgs({ modelPath: '', inputPath: '/scratch/input.txt' })).toThrow();
   });
 });
@@ -306,6 +306,15 @@ describe('parseEmbeddingJson', () => {
       EmbedParseError,
     );
     expect(() => parseEmbeddingJson(JSON.stringify([123]), 1)).toThrow(EmbedParseError);
+  });
+
+  it('throws EmbedParseError (never a bare TypeError) on a null envelope entry (#221)', () => {
+    // A `null` row — the `{ data: [null] }` envelope, or a bare `[null]` array — must
+    // be narrowed BEFORE `.embedding` is read. Reading a property off `null` otherwise
+    // throws a bare TypeError that escapes the typed EmbedParseError contract the
+    // caller's FTS fallback relies on to degrade gracefully.
+    expect(() => parseEmbeddingJson(JSON.stringify({ data: [null] }), 1)).toThrow(EmbedParseError);
+    expect(() => parseEmbeddingJson(JSON.stringify([null]), 1)).toThrow(EmbedParseError);
   });
 
   it('throws when the returned count does not match the expected count', () => {
@@ -637,7 +646,9 @@ describe('AC-4 — embedding performs no in-process network egress', () => {
   it('records zero outbound attempts across a full embed call', async () => {
     const spies = installEgressSpies();
     try {
-      const embedder = createEmbedder(baseConfig({ runEmbedding: fakeRun({ json: envelope([vec()]) }) }));
+      const embedder = createEmbedder(
+        baseConfig({ runEmbedding: fakeRun({ json: envelope([vec()]) }) }),
+      );
       if (!embedder.available) throw new Error('expected available');
       await embedder.embed([withQueryPrefix('recuerdos')]);
       spies.assertNoEgress();
