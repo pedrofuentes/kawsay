@@ -68,6 +68,18 @@ function parsePermissions(section: string): Record<string, string> {
   return result;
 }
 
+/**
+ * Parse the `permissions:` block anchored strictly to indent 0 (workflow-level only).
+ * Returns null if the block is absent, in non-block scalar/inline-map form, or if the
+ * first `permissions:` in the file is not at column 0 — never falls through to
+ * job-level blocks.
+ *
+ * Stub — indent-0 anchor not yet enforced; demonstrates the fail-open (#277).
+ */
+function parseTopLevelPermissions(yaml: string): Record<string, string> | null {
+  return parsePermissions(yaml); // stub: no indent-0 anchor → fail-open
+}
+
 describe('publish-embed-model workflow exists and is workflow_dispatch-only (M4-1b, ADR-0029)', () => {
   it('exists as its own workflow file', () => {
     expect(publishYml).not.toBe('');
@@ -214,5 +226,63 @@ describe('publish-embed-model is additive — it does not weaken existing publis
   it('leaves ci.yml building the embed-cli engine from the pinned source', () => {
     expect(ciYml).toMatch(/scripts\/build-embed-cli\.sh/);
     expect(ciYml).toContain(LLAMA_CPP_COMMIT);
+  });
+});
+
+describe('parseTopLevelPermissions anchors to indent 0 — fail-open regression (#277)', () => {
+  // Synthetic workflow YAML: the top-level `permissions:` block is absent or replaced
+  // with a non-block form, but a job block with `permissions:\n      contents: read`
+  // still exists. This is the exact pattern that causes the original parsePermissions
+  // helper to fall through and silently pass the least-privilege lock.
+  const withJobPermsOnly = [
+    'on:',
+    '  workflow_dispatch:',
+    '',
+    'jobs:',
+    '  convert:',
+    '    permissions:',
+    '      contents: read',
+    '    steps:',
+    '      - run: echo hi',
+  ].join('\n');
+
+  const withTopLevelWriteAll = [
+    'permissions: write-all',
+    '',
+    'on:',
+    '  workflow_dispatch:',
+    '',
+    'jobs:',
+    '  convert:',
+    '    permissions:',
+    '      contents: read',
+    '    steps:',
+    '      - run: echo hi',
+  ].join('\n');
+
+  const withTopLevelInlineMap = [
+    'permissions: { contents: read, id-token: write }',
+    '',
+    'on:',
+    '  workflow_dispatch:',
+    '',
+    'jobs:',
+    '  convert:',
+    '    permissions:',
+    '      contents: read',
+    '    steps:',
+    '      - run: echo hi',
+  ].join('\n');
+
+  it('returns null when top-level permissions block is absent — never falls through to a job block', () => {
+    expect(parseTopLevelPermissions(withJobPermsOnly)).toBeNull();
+  });
+
+  it('returns null for `permissions: write-all` (scalar — not a least-privilege block)', () => {
+    expect(parseTopLevelPermissions(withTopLevelWriteAll)).toBeNull();
+  });
+
+  it('returns null for inline-map top-level permissions (not a block — not least-privilege)', () => {
+    expect(parseTopLevelPermissions(withTopLevelInlineMap)).toBeNull();
   });
 });
