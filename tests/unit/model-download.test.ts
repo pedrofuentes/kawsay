@@ -312,6 +312,31 @@ describe('createModelDownloader — typed, calm failures (no crash)', () => {
     expect(progress.at(-1)?.error?.kind).toBe('integrity');
   });
 
+  it('a stream that delivers MORE bytes than expectedSize is refused as an integrity error mid-stream, before install', async () => {
+    // Deliver the full 33-byte payload but pin a SMALLER expected size: the
+    // rewritten for-await iterator must refuse the over-long stream the instant a
+    // chunk would push the running total past expectedSize — before verify/install.
+    const { fetcher } = makeFetcher(() =>
+      response(200, bytesBody([chunk(0, 11), chunk(11, 22), chunk(22, 33)])),
+    );
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: 24, // < 33: the third chunk (22 -> 33) overshoots and is refused
+      onProgress: (p) => progress.push(p),
+    });
+
+    const error = await downloader.downloadModel().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelDownloadError);
+    expect((error as ModelDownloadError).kind).toBe('integrity');
+    expect((error as ModelDownloadError).message).toContain('exceeds expected model size');
+    // Never install an over-long file; the temp .part is cleaned up for a fresh refetch.
+    expect(existsSync(modelPath)).toBe(false);
+    expect(existsSync(`${modelPath}.part`)).toBe(false);
+    expect(progress.at(-1)?.error?.kind).toBe('integrity');
+  });
+
   it('an unexpected HTTP status (404) → typed http error', async () => {
     const { fetcher } = makeFetcher(() => response(404, bytesBody([])));
     const downloader = createModelDownloader({
