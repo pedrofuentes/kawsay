@@ -459,27 +459,25 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
         bytesDownloaded = written;
         const writer = sink(partPath, { append });
         try {
-          // Drive the iterator by hand so each read can race the stall deadline —
-          // a plain `for await` cannot be bounded per-step.
-          const iterator = res.body[Symbol.asyncIterator]();
-          for (;;) {
-            const step = await raceStall(iterator.next());
-            if (step.done === true) {
-              break;
+          // Consume via `for await` (no computed `[Symbol.asyncIterator]()` call —
+          // SAST-clean), racing the WHOLE consumption loop against the idle-stall
+          // deadline; `armStall()` re-arms the deadline on every byte written.
+          const consume = (async (): Promise<void> => {
+            for await (const piece of res.body) {
+              if (written + piece.length > expectedSize) {
+                // The stream delivered more than the pinned size — refuse it outright.
+                throw new ModelDownloadError('integrity', 'stream exceeds expected model size', {
+                  retryable: true,
+                });
+              }
+              await writer.write(piece);
+              written += piece.length;
+              bytesDownloaded = written;
+              armStall(); // forward progress — reset the idle-stall deadline
+              emit({ phase: 'downloading', bytesDownloaded: written, totalBytes: expectedSize, error: null });
             }
-            const piece = step.value;
-            if (written + piece.length > expectedSize) {
-              // The stream delivered more than the pinned size — refuse it outright.
-              throw new ModelDownloadError('integrity', 'stream exceeds expected model size', {
-                retryable: true,
-              });
-            }
-            await writer.write(piece);
-            written += piece.length;
-            bytesDownloaded = written;
-            armStall(); // forward progress — reset the idle-stall deadline
-            emit({ phase: 'downloading', bytesDownloaded: written, totalBytes: expectedSize, error: null });
-          }
+          })();
+          await raceStall(consume);
           await writer.close();
           return written;
         } catch (err) {
