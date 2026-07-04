@@ -90,6 +90,10 @@ describe('isLocalOnlyRequest — deny-by-default (ARCHITECTURE §6.1 / AC-4)', (
 });
 
 describe('isLocalOnlyRequest — a file: URL carrying a remote authority is denied (X1/#16)', () => {
+  // #40 item 1 — CONFIRMED covered: file://<remote-host>/… (a UNC/SMB egress
+  // vector) is denied in both packaged and dev builds, while host-less file:///
+  // stays local. This is the pure-logic layer; the guard-fire + spy layer is in
+  // no-egress.node.test.ts. No gap.
   it.each(REMOTE_AUTHORITY_FILE_URLS)(
     'cancels remote-authority file URL %s in a packaged build (UNC → SMB egress)',
     (url) => {
