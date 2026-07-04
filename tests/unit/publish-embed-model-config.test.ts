@@ -45,6 +45,29 @@ function jobBlock(yaml: string, jobId: string): string {
   return body.join('\n');
 }
 
+/**
+ * Parse the first `permissions:` block in a YAML section into a key→value record.
+ * Handles any indent level (top-level 0, job-level 4 spaces, etc.) by comparing
+ * relative indentation — no YAML parser required.
+ */
+function parsePermissions(section: string): Record<string, string> {
+  const lines = section.split('\n');
+  const permIdx = lines.findIndex((l) => /^\s*permissions:\s*$/.test(l));
+  if (permIdx === -1) return {};
+  const permLine = lines[permIdx];
+  const baseIndent = permLine.length - permLine.trimStart().length;
+  const result: Record<string, string> = {};
+  for (let i = permIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent <= baseIndent) break; // back to same or shallower indent → done
+    const m = line.match(/^\s*([\w-]+):\s*(\S+)/);
+    if (m) result[m[1]] = m[2];
+  }
+  return result;
+}
+
 describe('publish-embed-model workflow exists and is workflow_dispatch-only (M4-1b, ADR-0029)', () => {
   it('exists as its own workflow file', () => {
     expect(publishYml).not.toBe('');
@@ -74,11 +97,14 @@ describe('publish-embed-model gates the upload behind the protected release envi
     expect(publishYml.match(/^\s*environment:\s*release\s*$/gm)).toHaveLength(1);
   });
 
-  it('grants contents: write ONLY to the publish job; top-level + convert stay read-only', () => {
-    expect(publishYml).toMatch(/^permissions:\n {2}contents: read/m); // top-level least privilege
-    expect(publish).toMatch(/contents:\s*write/);
-    expect(convert).not.toMatch(/contents:\s*write/);
-    expect(convert).toMatch(/contents:\s*read/);
+  it('locks the FULL per-job permissions to the exact least-privilege set — any added scope fails (issue #234)', () => {
+    // Top-level: read-only so jobs without an explicit block can never write by default.
+    expect(parsePermissions(publishYml)).toEqual({ contents: 'read' });
+    // convert job: read-only — conversion + quantization never needs a write scope.
+    expect(parsePermissions(convert)).toEqual({ contents: 'read' });
+    // publish job: EXACTLY contents:write — the one scope the upload step requires.
+    // toEqual checks the FULL key set; id-token, packages, actions, … are all absent.
+    expect(parsePermissions(publish)).toEqual({ contents: 'write' });
   });
 
   it('skips the upload (and the environment approval) on a dry run', () => {
@@ -87,7 +113,9 @@ describe('publish-embed-model gates the upload behind the protected release envi
   });
 
   it('publishes to the models-embed-v1 tag via a SHA-pinned softprops/action-gh-release', () => {
-    expect(publish).toMatch(/uses:\s*softprops\/action-gh-release@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/);
+    expect(publish).toMatch(
+      /uses:\s*softprops\/action-gh-release@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/,
+    );
     expect(publishYml).toMatch(/RELEASE_TAG:\s*models-embed-v1\b/);
     expect(publish).toMatch(/tag_name:\s*\$\{\{\s*env\.RELEASE_TAG\s*\}\}/);
     // The one publisher creates exactly one release — no matrix fan-out.
