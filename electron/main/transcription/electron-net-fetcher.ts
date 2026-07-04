@@ -213,11 +213,34 @@ export function createElectronModelFetcher<TSession = unknown>(
         credentials: 'omit',
       });
 
+      // Pre-response abort seam (#274): the idle-stall deadline can fire while the
+      // request is still pending — the server accepted the socket but has sent NO
+      // response headers — where a post-'response' `cancel()` cannot help (there is
+      // no response yet). Honour an optional AbortSignal by aborting the in-flight
+      // `net.request` directly; `abort()` releases the underlying socket both before
+      // and after 'response'. `settled` guards resolve/reject so a late abort (or a
+      // response that arrives after an abort) never double-settles this promise.
+      const { signal } = request;
+      let settled = false;
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        clientRequest.abort();
+        reject(new Error('the model download request was aborted'));
+      };
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
+
       for (const [name, value] of Object.entries(request.headers)) {
         clientRequest.setHeader(name, value);
       }
 
       clientRequest.on('response', (response) => {
+        if (settled) return;
+        settled = true;
         resolve({
           statusCode: response.statusCode,
           headers: response.headers,
@@ -235,6 +258,8 @@ export function createElectronModelFetcher<TSession = unknown>(
         });
       });
       clientRequest.on('error', (error) => {
+        if (settled) return;
+        settled = true;
         reject(error instanceof Error ? error : new Error(String(error)));
       });
       clientRequest.end();

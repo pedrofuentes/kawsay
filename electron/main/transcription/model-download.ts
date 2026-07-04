@@ -31,7 +31,9 @@ import { hashFileSha256, verifyModelFile } from './model-integrity';
  *  - **offline / disk-full / bad-status** surface a typed, calm
  *    {@link ModelDownloadError} (never a crash);
  *  - **bounded** — an idle-stall deadline aborts a connection that stops making
- *    forward progress, so a stalled download can never sit non-terminal;
+ *    forward progress — through an `AbortSignal`, so even a request still awaiting
+ *    its response headers is released — so a stalled download can never sit
+ *    non-terminal;
  *  - **single-flight** — concurrent calls coalesce to one download;
  *  - **skip** when a verified model already exists;
  *  - **atomic install** — verify the temp file's SHA-256 + size, then `rename()`
@@ -82,6 +84,15 @@ export interface ModelFetchRequest {
   readonly url: string;
   readonly method: 'GET';
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * Optional pre-response abort handle. The idle-stall deadline can fire while the
+   * fetch is still pending — the server accepted the socket but has sent NO
+   * response headers — when no {@link ModelFetchResponse} (and thus no `cancel()`)
+   * exists yet. Aborting this signal lets the adapter release the in-flight request
+   * on that pre-headers path too (see `electron-net-fetcher.ts`). Optional so
+   * existing callers/fetchers stay source-compatible.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** The fetcher's response — a status line plus a streamed body. The body is an
@@ -390,12 +401,20 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
 
       // Bounded idle-stall deadline. A connection that opens but then delivers no
       // bytes (and never ends) must not sit non-terminal. The timer is armed
-      // before the fetch and re-armed on every byte written; on expiry it cancels
-      // the response and rejects THIS attempt with a TERMINAL network error, which
-      // unwinds run() and clears the single-flight lock so a later call starts fresh.
+      // before the fetch and re-armed on every byte written; on expiry it rejects
+      // THIS attempt with a TERMINAL network error FIRST — so the terminal error
+      // wins the stall race — then aborts the in-flight request through
+      // `abortController` so a request still awaiting its response headers (where
+      // `res` is undefined and `res.cancel()` is a no-op) is released too, and via
+      // `res.cancel()` once a response exists. The terminal rejection unwinds run()
+      // and clears the single-flight lock so a later call starts fresh.
       let res: ModelFetchResponse | undefined;
       let cancelStall: (() => void) | undefined;
       let rejectStalled: ((error: ModelDownloadError) => void) | undefined;
+      // Pre-response abort handle: the ONLY lever that can release a request which
+      // has not yet produced a response (`res` still undefined) when the stall
+      // fires. The adapter maps this to `net.request.abort()` (pre- and post-headers).
+      const abortController = new AbortController();
       const stallSignal = new Promise<never>((_resolve, reject) => {
         rejectStalled = reject;
       });
@@ -406,7 +425,12 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
       const armStall = (): void => {
         cancelStall?.();
         cancelStall = scheduleStallTimeout(stallTimeoutMs, () => {
-          res?.cancel();
+          // Reject the stall race with the TERMINAL error FIRST. Aborting the request
+          // synchronously drives the fetcher's abort seam to reject the in-flight fetch
+          // with a PLAIN Error; were that plain rejection to reach `raceStall` before
+          // this terminal one, Promise.race would surface it and the outer loop would
+          // reclassify it as retryable and retry a condition that must stay terminal
+          // (#262/#296). Settling the terminal error first makes it win the race.
           rejectStalled?.(
             new ModelDownloadError(
               'network',
@@ -414,12 +438,20 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
               { retryable: false },
             ),
           );
+          // Now release the underlying request. Pre-response this abort is the ONLY
+          // effective lever (res is still undefined, so res?.cancel() is a no-op) and
+          // still releases the socket both before and after headers (#274); once a
+          // response exists res.cancel() additionally tears down the streamed body.
+          // raceStall() swallows the resulting late plain-Error rejection.
+          abortController.abort();
+          res?.cancel();
         });
       };
 
-      // Race a pending step against the stall deadline. If the stall wins, swallow
-      // the step's own late settlement so an abort-driven rejection never surfaces
-      // as unhandled.
+      // Race a pending step against the stall deadline. The stall callback settles the
+      // terminal error BEFORE aborting, so on a stall the terminal error wins this race;
+      // swallow the step's own late, abort-driven rejection so it never surfaces as
+      // unhandled.
       const raceStall = <T>(step: Promise<T>): Promise<T> => {
         void step.catch(() => undefined);
         return Promise.race([step, stallSignal]);
@@ -427,7 +459,9 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
 
       armStall();
       try {
-        res = await raceStall(fetcher({ url: sourceUrl, method: 'GET', headers }));
+        res = await raceStall(
+          fetcher({ url: sourceUrl, method: 'GET', headers, signal: abortController.signal }),
+        );
         const code = res.statusCode;
 
         if (code === 416) {
@@ -470,6 +504,12 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
                   retryable: true,
                 });
               }
+              // Scope note (#276a): there is deliberately NO dedicated disk-write
+              // deadline. The idle-stall deadline is a NETWORK-idleness guard,
+              // re-armed on each write COMPLETION; because raceStall() wraps the
+              // whole loop, a write that hangs is only *incidentally* bounded by it
+              // and surfaces as a `network` stall. A first-class disk-write timeout
+              // is intentionally out of scope for this network-idle deadline.
               await writer.write(piece);
               written += piece.length;
               bytesDownloaded = written;

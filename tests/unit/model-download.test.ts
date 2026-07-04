@@ -312,6 +312,31 @@ describe('createModelDownloader — typed, calm failures (no crash)', () => {
     expect(progress.at(-1)?.error?.kind).toBe('integrity');
   });
 
+  it('a stream that delivers MORE bytes than expectedSize is refused as an integrity error mid-stream, before install', async () => {
+    // Deliver the full 33-byte payload but pin a SMALLER expected size: the
+    // rewritten for-await iterator must refuse the over-long stream the instant a
+    // chunk would push the running total past expectedSize — before verify/install.
+    const { fetcher } = makeFetcher(() =>
+      response(200, bytesBody([chunk(0, 11), chunk(11, 22), chunk(22, 33)])),
+    );
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: 24, // < 33: the third chunk (22 -> 33) overshoots and is refused
+      onProgress: (p) => progress.push(p),
+    });
+
+    const error = await downloader.downloadModel().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ModelDownloadError);
+    expect((error as ModelDownloadError).kind).toBe('integrity');
+    expect((error as ModelDownloadError).message).toContain('exceeds expected model size');
+    // Never install an over-long file; the temp .part is cleaned up for a fresh refetch.
+    expect(existsSync(modelPath)).toBe(false);
+    expect(existsSync(`${modelPath}.part`)).toBe(false);
+    expect(progress.at(-1)?.error?.kind).toBe('integrity');
+  });
+
   it('an unexpected HTTP status (404) → typed http error', async () => {
     const { fetcher } = makeFetcher(() => response(404, bytesBody([])));
     const downloader = createModelDownloader({
@@ -586,6 +611,107 @@ describe('createModelDownloader — bounded stall deadline (terminal + clears si
 
     // A subsequent call starts a FRESH download rather than returning the dead
     // promise, and completes.
+    const second = await downloader.downloadModel();
+    expect(second.status).toBe('done');
+    expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('a stall DURING the initial fetch (no response headers yet) aborts the in-flight request via its AbortSignal, is terminal, and clears single-flight', async () => {
+    // The PRE-HEADERS variant of the stall (#275): the server accepts the socket
+    // but sends NO response for `stallTimeoutMs`, so `fetcher()` never resolves and
+    // the downloader's `res` stays undefined. A bare `res?.cancel()` is a no-op
+    // there, so to actually release the in-flight `net.request`/socket the
+    // downloader must abort it through the AbortSignal it hands the fetcher (#274).
+    let capturedSignal: AbortSignal | undefined;
+    const requests: ModelFetchRequest[] = [];
+    let call = 0;
+    // Resolves once the first fetch is in flight; the stall deadline is armed by
+    // then (armStall() runs synchronously just before fetcher() is invoked).
+    let markInFlight!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      markInFlight = resolve;
+    });
+    // The param is widened to read the optional `signal` the production seam adds
+    // in #274 while this RED test still compiles against the current type.
+    const fetcher = (
+      req: ModelFetchRequest & { signal?: AbortSignal },
+    ): Promise<ModelFetchResponse> => {
+      requests.push(req);
+      const current = call;
+      call += 1;
+      if (current === 0) {
+        capturedSignal = req.signal;
+        markInFlight();
+        // A pure pre-headers stall: no status line, no body ever arrives. Mirror the
+        // REAL fetcher (electron-net-fetcher.ts): the ONLY way an in-flight request
+        // settles here is its AbortSignal — when it fires, reject SYNCHRONOUSLY with a
+        // plain Error (exactly as `net.request`'s abort seam does). A fake that never
+        // settled on abort would let the stall signal win the race unconditionally and
+        // hide whether the abort-driven rejection loses to the terminal stall error.
+        return new Promise<ModelFetchResponse>((_resolve, reject) => {
+          const onAbort = (): void => {
+            reject(new Error('the model download request was aborted'));
+          };
+          if (req.signal?.aborted) {
+            onAbort();
+            return;
+          }
+          req.signal?.addEventListener('abort', onAbort, { once: true });
+        });
+      }
+      // A later FRESH call succeeds — proving single-flight was cleared.
+      return Promise.resolve(response(200, bytesBody([chunk(0, 33)])));
+    };
+
+    let fireStall: (() => void) | undefined;
+    const scheduleStallTimeout = (_ms: number, onStall: () => void): (() => void) => {
+      fireStall = onStall;
+      return () => {
+        if (fireStall === onStall) fireStall = undefined;
+      };
+    };
+
+    const downloader = createModelDownloader({
+      fetcher,
+      modelPath,
+      expectedSha256: MODEL_SHA,
+      expectedSize: MODEL_BYTES.length,
+      stallTimeoutMs: 30_000,
+      scheduleStallTimeout,
+      onProgress: (p) => progress.push(p),
+    });
+
+    const first = downloader.downloadModel();
+    await inFlight;
+    if (fireStall === undefined) {
+      throw new Error('expected a stall deadline to be armed before the fetch resolved');
+    }
+    fireStall();
+
+    const error = await first.catch((e: unknown) => e);
+    // A pure pre-headers stall is TERMINAL after exactly ONE attempt (#262/#296): it
+    // must NOT be retried. When the stall aborts the in-flight request the fetcher
+    // rejects with a PLAIN Error; if that plain rejection were to win the stall race it
+    // would be reclassified as retryable:true and retried up to maxAttempts (5) — the
+    // #296 regression that lets the consent UI offer a retry for a terminal condition.
+    // Pin exactly ONE fetch attempt so a retry regresses right here.
+    expect(requests).toHaveLength(1);
+    expect(error).toBeInstanceOf(ModelDownloadError);
+    expect((error as ModelDownloadError).kind).toBe('network');
+    // The terminal stall is NON-retryable: the consent UIs read `error.retryable` and
+    // must not surface a retry affordance for a condition that would only stall again.
+    expect((error as ModelDownloadError).retryable).toBe(false);
+    // The pre-headers request was proactively aborted through its AbortSignal so
+    // the underlying socket is released even though no response ever arrived.
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(true);
+    // Terminal: a single error tick, not a silent per-attempt retry.
+    expect(progress.at(-1)?.phase).toBe('error');
+    expect(progress.at(-1)?.error?.kind).toBe('network');
+    // Single-flight is cleared: nothing is in flight after the terminal error.
+    expect(downloader.isDownloading()).toBe(false);
+    // A subsequent call starts a FRESH download and completes.
     const second = await downloader.downloadModel();
     expect(second.status).toBe('done');
     expect(readFileSync(modelPath)).toEqual(MODEL_BYTES);
