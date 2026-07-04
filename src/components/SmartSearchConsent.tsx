@@ -204,7 +204,7 @@ export function SmartSearchConsent(): ReactElement | null {
             <p className="font-body text-base leading-relaxed text-text-secondary">
               To set it up, Kawsay makes a one-time download of about{' '}
               {toMB(SMART_SEARCH_MODEL_SIZE_BYTES)} MB — the model that understands meaning. This is
-              the only time the app uses the internet.
+              the only time smart search uses the internet.
             </p>
             <p className="font-body text-base leading-relaxed text-text-secondary">
               Nothing is searched by meaning until you turn it on, and you can turn it off again

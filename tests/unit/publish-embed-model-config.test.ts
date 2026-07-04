@@ -87,7 +87,9 @@ describe('publish-embed-model gates the upload behind the protected release envi
   });
 
   it('publishes to the models-embed-v1 tag via a SHA-pinned softprops/action-gh-release', () => {
-    expect(publish).toMatch(/uses:\s*softprops\/action-gh-release@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/);
+    expect(publish).toMatch(
+      /uses:\s*softprops\/action-gh-release@[0-9a-f]{40}\s*#\s*v\d+\.\d+\.\d+/,
+    );
     expect(publishYml).toMatch(/RELEASE_TAG:\s*models-embed-v1\b/);
     expect(publish).toMatch(/tag_name:\s*\$\{\{\s*env\.RELEASE_TAG\s*\}\}/);
     // The one publisher creates exactly one release — no matrix fan-out.
@@ -160,9 +162,20 @@ describe('embed-model-source.ts finalizes the release tag (no placeholder left)'
     );
   });
 
-  it('keeps SHA-256 + size as post-publish TODOs (finalized after the workflow runs)', () => {
-    expect(descriptor).toMatch(/TODO\(post-publish\)/);
-    expect(descriptor).toMatch(/'0'\.repeat\(64\)/); // SHA-256 still the all-zero sentinel
+  it('pins the FINALIZED SHA-256 + byte size — the post-publish TODO/sentinel is gone', () => {
+    // publish-embed-model.yml has run: the descriptor no longer carries the
+    // pre-publish TODO(post-publish) marker, and both integrity constants are pinned
+    // to the real published `models-embed-v1` asset (not the all-zero fail-closed
+    // sentinel that keeps isEmbedModelPublished() false).
+    expect(descriptor).not.toMatch(/TODO\(post-publish\)/);
+    // EMBED_MODEL_SHA256 is the exact 64-hex digest of the published GGUF...
+    expect(descriptor).toMatch(
+      /export const EMBED_MODEL_SHA256 =\s*'0539137155820094fc7e966e8ea97e94e1cd4b8cd3e0a4f4933abab63bfd6019'/,
+    );
+    // ...and never the all-zero sentinel.
+    expect(descriptor).not.toMatch(/export const EMBED_MODEL_SHA256 =\s*'0{64}'/);
+    // EMBED_MODEL_SIZE_BYTES is the concrete published byte count, not a 0/approx placeholder.
+    expect(descriptor).toMatch(/export const EMBED_MODEL_SIZE_BYTES = 124_837_280;/);
   });
 });
 
