@@ -12,7 +12,9 @@ import { EgressBlockedError, installEgressSpies } from './egress-spies';
 import {
   attemptEgressFromSubprocess,
   attemptEgressFromWorker,
+  attemptHttp2FromMain,
   attemptHttpFromMain,
+  attemptTlsFromMain,
   mainProcessControls,
 } from './positive-controls';
 
@@ -34,6 +36,44 @@ describe('AC-4 in-process spies — positive controls catch every main-process p
       expect(apis.has('dns.lookup')).toBe(true);
       expect(apis.has('dns.resolve')).toBe(true);
       expect(apis.has('dns.promises.lookup')).toBe(true);
+    } finally {
+      spies.restore();
+    }
+  });
+});
+
+// #40 item 4 — tls.connect and http2.connect cannot be patched independently via
+// their ESM namespace import, but BOTH funnel their TCP layer through
+// net.Socket.prototype.connect, so the shared-prototype spy intercepts them.
+// The aggregate test above only proves *some* control hit net.Socket.connect
+// (the raw-TCP one already does), so it would NOT catch a regression that let
+// tls/http2 slip the spy. Running each control in ISOLATION attributes the
+// recorded net.Socket.connect attempt — and the `[ac4] blocked …` detail — to
+// that specific API, proving the spy (not a real loopback refusal) caught it.
+describe('AC-4 in-process spies — tls.connect & http2.connect are each caught by the spy (#40 item 4)', () => {
+  it('records and blocks a deliberate tls.connect via the net.Socket.connect funnel', async () => {
+    const spies = installEgressSpies();
+    try {
+      const outcome = await attemptTlsFromMain();
+      expect(outcome.api).toBe('tls.connect');
+      expect(outcome.blocked, `tls escaped: ${outcome.detail}`).toBe(true);
+      // In isolation this attempt can only have come from tls.connect, so the
+      // spy — not a real ECONNREFUSED — is what blocked it.
+      expect(spies.attempts.map((attempt) => attempt.api)).toContain('net.Socket.connect');
+      expect(outcome.detail).toMatch(/\[ac4\] blocked outbound net\.Socket\.connect/u);
+    } finally {
+      spies.restore();
+    }
+  });
+
+  it('records and blocks a deliberate http2.connect via the net.Socket.connect funnel', async () => {
+    const spies = installEgressSpies();
+    try {
+      const outcome = await attemptHttp2FromMain();
+      expect(outcome.api).toBe('http2.connect');
+      expect(outcome.blocked, `http2 escaped: ${outcome.detail}`).toBe(true);
+      expect(spies.attempts.map((attempt) => attempt.api)).toContain('net.Socket.connect');
+      expect(outcome.detail).toMatch(/\[ac4\] blocked outbound net\.Socket\.connect/u);
     } finally {
       spies.restore();
     }
@@ -156,6 +196,9 @@ describe('AC-4 representative use flow records ZERO egress', () => {
 });
 
 describe('AC-4 file:// UNC authority is cancelled by the guard (X1/#16)', () => {
+  // #40 item 1 — CONFIRMED covered: a file:// URL carrying a remote authority is
+  // cancelled by the guard here (spy asserts zero egress), and at the pure-logic
+  // layer in network-guard.test.ts; host-less file:/// stays local. No gap.
   it('cancels a remote-authority file URL (no SMB/UNC egress) while host-less file:/// proceeds', () => {
     const spies = installEgressSpies();
     try {
