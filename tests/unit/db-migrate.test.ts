@@ -54,22 +54,27 @@ describe('catalog connection + migration runner (ARCHITECTURE §4.1/§4.3)', () 
     expect(userVersion(db)).toBe(0);
     runMigrations(db);
     expect(userVersion(db)).toBe(MIGRATIONS.length);
-    expect(userVersion(db)).toBe(3);
+    expect(userVersion(db)).toBe(4);
   });
 
   it('records every applied migration by name in the migrations table', () => {
     runMigrations(db);
     const names = db.prepare('SELECT name FROM migrations ORDER BY id').all<{ name: string }>();
-    expect(names.map((r) => r.name)).toEqual(['001_initial', '002_transcripts', '003_embeddings']);
+    expect(names.map((r) => r.name)).toEqual([
+      '001_initial',
+      '002_transcripts',
+      '003_embeddings',
+      '004_item_embeddings_model_dim_index',
+    ]);
   });
 
   it('is idempotent: re-running applies nothing and never duplicates bookkeeping', () => {
     runMigrations(db);
     runMigrations(db);
     runMigrations(db);
-    expect(userVersion(db)).toBe(3);
+    expect(userVersion(db)).toBe(4);
     const count = db.prepare('SELECT COUNT(*) AS n FROM migrations').get<{ n: number }>();
-    expect(count?.n).toBe(3);
+    expect(count?.n).toBe(4);
   });
 
   it('creates the full dedup-with-provenance schema and the timeline index', () => {
@@ -277,7 +282,7 @@ describe('migration 003 — item_embeddings + embed_status drain (ADR-0029)', ()
   });
 
   it('brings the catalog to schema version 3 and records 003_embeddings', () => {
-    runMigrations(db);
+    runMigrations(db, MIGRATIONS.slice(0, 3));
     expect(userVersion(db)).toBe(3);
     const names = db.prepare('SELECT name FROM migrations ORDER BY id').all<{ name: string }>();
     expect(names.map((r) => r.name)).toContain('003_embeddings');
@@ -373,7 +378,7 @@ describe('migration 003 — item_embeddings + embed_status drain (ADR-0029)', ()
     expect(ftsMatch(db, 'AUD_0001')).toEqual(['a1']);
 
     runMigrations(db);
-    expect(userVersion(db)).toBe(3);
+    expect(userVersion(db)).toBe(MIGRATIONS.length);
 
     // The pre-existing row survives and is backfilled to embed_status = pending.
     const row = db
@@ -404,11 +409,91 @@ describe('migration 003 — item_embeddings + embed_status drain (ADR-0029)', ()
     const before = queries.map((query) => repo.search({ query, limit: 10, offset: 0 }));
 
     // Apply migration 003 — additive infrastructure that never touches items_fts.
-    runMigrations(db);
+    runMigrations(db, MIGRATIONS.slice(0, 3));
     expect(userVersion(db)).toBe(3);
     const after = queries.map((query) => repo.search({ query, limit: 10, offset: 0 }));
 
     // AC-7 preserved byte-for-byte: 003 does not change what the live path returns.
     expect(after).toEqual(before);
+  });
+});
+
+// ── Migration 004: item_embeddings(model_id, dim) composite index (#215) ─────
+
+describe('migration 004 — item_embeddings(model_id, dim) composite index (#215)', () => {
+  let dir: string;
+  let db: Database;
+
+  beforeEach(() => {
+    dir = makeTmpDir('db-');
+    db = openCatalog(join(dir, 'catalog.sqlite3'));
+  });
+  afterEach(() => {
+    db.close();
+    removeTmpDir(dir);
+  });
+
+  it('brings the catalog to version 4 and records the 004 migration', () => {
+    runMigrations(db);
+    expect(userVersion(db)).toBe(4);
+    const names = db.prepare('SELECT name FROM migrations ORDER BY id').all<{ name: string }>();
+    expect(names.map((r) => r.name)).toContain('004_item_embeddings_model_dim_index');
+  });
+
+  it('creates idx_item_embeddings_model_dim on (model_id, dim)', () => {
+    runMigrations(db);
+    const idx = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_item_embeddings_model_dim'",
+      )
+      .get<{ name: string }>();
+    expect(idx?.name).toBe('idx_item_embeddings_model_dim');
+
+    // The index columns are exactly (model_id, dim), in that order — the
+    // semanticSearch `WHERE model_id = @modelId AND dim = @dim` scan predicate.
+    const cols = db
+      .prepare("PRAGMA index_info('idx_item_embeddings_model_dim')")
+      .all<{ seqno: number; name: string }>()
+      .sort((a, b) => a.seqno - b.seqno)
+      .map((r) => r.name);
+    expect(cols).toEqual(['model_id', 'dim']);
+  });
+
+  it('is idempotent: re-running keeps version 4 and one model_dim index', () => {
+    runMigrations(db);
+    runMigrations(db);
+    expect(userVersion(db)).toBe(4);
+    const n = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'idx_item_embeddings_model_dim'",
+      )
+      .get<{ n: number }>();
+    expect(n?.n).toBe(1);
+  });
+
+  it('forward-migrates a v3 catalog, adding the index without data loss', () => {
+    // Bring the catalog to v3 only, then write an embedding the way 003 shipped.
+    runMigrations(db, MIGRATIONS.slice(0, 3));
+    expect(userVersion(db)).toBe(3);
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();
+    db.prepare(
+      'INSERT INTO item_embeddings (item_id, model_id, dim, vector) VALUES (?, ?, ?, ?)',
+    ).run('i1', 'model-a', 2, Buffer.alloc(8));
+
+    // Forward-migrate to the latest schema — 004 only adds the composite index.
+    runMigrations(db);
+    expect(userVersion(db)).toBe(MIGRATIONS.length);
+    const idx = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_item_embeddings_model_dim'",
+      )
+      .get<{ name: string }>();
+    expect(idx?.name).toBe('idx_item_embeddings_model_dim');
+
+    // The pre-existing embedding row is untouched by the additive index.
+    const row = db
+      .prepare("SELECT model_id, dim FROM item_embeddings WHERE item_id = 'i1'")
+      .get<{ model_id: string; dim: number }>();
+    expect(row).toMatchObject({ model_id: 'model-a', dim: 2 });
   });
 });
