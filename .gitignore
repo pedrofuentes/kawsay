@@ -47,6 +47,13 @@ ggml-*.bin
 # Test coverage reports
 coverage/
 
+# Playwright renderer-egress e2e (tests/e2e): the runner's HTML report, trace
+# artifacts, and the throwaway Electron user-data dir are all ephemeral run
+# output, never committed.
+test-results/
+playwright-report/
+.playwright/
+
 # Local tool state
 .impeccable/
 .worktrees/

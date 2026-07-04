@@ -11,5 +11,6 @@
     "electron.vite.config.ts",
     "vitest.config.ts",
     "playwright.config.ts"
-  ]
+  ],
+  "exclude": ["tests/e2e/**"]
 }
