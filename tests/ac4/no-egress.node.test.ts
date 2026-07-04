@@ -55,11 +55,34 @@ describe('AC-4 http(s) layer is denied by nock.disableNetConnect()', () => {
 
 describe('AC-4 positive controls — worker thread & subprocess egress is caught', () => {
   it(
-    'a worker-thread outbound attempt is blocked',
+    'a worker-thread outbound attempt is blocked (a genuine denied attempt)',
     async () => {
       const outcome = await attemptEgressFromWorker();
       expect(outcome.source).toBe('worker');
       expect(outcome.blocked, `worker escaped: ${outcome.detail}`).toBe(true);
+      // #40 item 3 — a legitimately-denied worker (it DID attempt an outbound
+      // connection, which was refused/dropped) is a genuine `blocked` verdict.
+      expect(outcome.verdict, `worker escaped: ${outcome.detail}`).toBe('blocked');
+    },
+    PROCESS_CONTROL_TIMEOUT_MS,
+  );
+
+  it(
+    'a worker that ERRORS before attempting a connection is NOT a false-pass "blocked" (#40 item 3)',
+    async () => {
+      // The worker positive control used to count ANY error/throw/timeout as
+      // "blocked", so a worker that crashes BEFORE it ever attempts (and is
+      // denied) an outbound connection would FALSE-PASS as blocked — masking a
+      // broken harness. A verdict of `blocked` MUST require a real denied
+      // attempt; a pre-attempt failure is a DISTINCT `errored` outcome that must
+      // NOT count as blocked.
+      const outcome = await attemptEgressFromWorker({ simulateErrorBeforeAttempt: true });
+      expect(outcome.source).toBe('worker');
+      expect(outcome.verdict, `unexpected verdict; detail: ${outcome.detail}`).toBe('errored');
+      expect(
+        outcome.blocked,
+        `an errored worker must not count as blocked; detail: ${outcome.detail}`,
+      ).toBe(false);
     },
     PROCESS_CONTROL_TIMEOUT_MS,
   );
