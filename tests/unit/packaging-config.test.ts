@@ -82,6 +82,11 @@ const publishEmbedModelYml = readFileSync(
   repoRoot('.github/workflows/publish-embed-model.yml'),
   'utf8',
 ).replace(/\r\n/g, '\n');
+// The security workflow (gitleaks + semgrep). Normalize CRLF→LF once (Windows-checkout safe).
+const securityYml = readFileSync(repoRoot('.github/workflows/security.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n',
+);
 
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
@@ -119,6 +124,34 @@ const ciUsesLines = ciYml.split(/\r?\n/).filter((l) => /^\s*uses:/.test(l));
 
 function escapedRegexLiteral(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Extract checkout step blocks from a workflow YAML string.
+ * Returns one text fragment per `uses: actions/checkout@` step found —
+ * from that line to (but not including) the next step boundary
+ * (`^\s+-\s` at the same or shallower indent level), or end-of-file.
+ * CRLF-safe: pass in `.replace(/\r\n/g, '\n')` content.
+ */
+function checkoutStepBlocks(yml: string): string[] {
+  const lines = yml.split('\n');
+  const blocks: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s+uses:\s+actions\/checkout@/.test(lines[i])) continue;
+    // `uses:` is 2 spaces deeper than the `- name:` step header.
+    const usesIndent = (lines[i].match(/^( *)/) ?? ['', ''])[1].length;
+    const stepIndent = usesIndent - 2;
+    const block: string[] = [lines[i]];
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      const lineIndent = (line.match(/^( *)/) ?? ['', ''])[1].length;
+      // A new step starts at `stepIndent` depth (e.g. `      - name: …`).
+      if (line.trim().startsWith('- ') && lineIndent <= stepIndent) break;
+      block.push(line);
+    }
+    blocks.push(block.join('\n'));
+  }
+  return blocks;
 }
 
 function assetPathRegex(...parts: string[]): RegExp {
@@ -689,5 +722,29 @@ describe('embedder-model publish workflow pins its Python conversion deps (#233)
     // pulls a non-reproducible pip at run time. #233 drops it — if ever re-added it must
     // be version-pinned, never a bare `--upgrade`.
     expect(publishEmbedModelYml).not.toMatch(/pip install --upgrade pip\b/);
+  });
+});
+
+describe('workflow checkout steps carry persist-credentials: false (defense-in-depth, #36)', () => {
+  // GITHUB_TOKEN is persisted in `.git/config` by actions/checkout by default.
+  // CI runs untrusted PR code via pnpm lifecycle scripts; any lifecycle script can
+  // read `.git/config` and exfiltrate the token. Setting persist-credentials: false
+  // prevents the token from ever landing on disk, removing that attack surface.
+  // These assertions ratchet the guarantee: a future checkout added without it fails.
+
+  it('every actions/checkout step in ci.yml has persist-credentials: false', () => {
+    const blocks = checkoutStepBlocks(ciYml);
+    expect(blocks.length).toBeGreaterThanOrEqual(3); // verify + whisper-cli + embed-cli
+    for (const block of blocks) {
+      expect(block).toMatch(/persist-credentials:\s*false/);
+    }
+  });
+
+  it('every actions/checkout step in security.yml has persist-credentials: false', () => {
+    const blocks = checkoutStepBlocks(securityYml);
+    expect(blocks.length).toBeGreaterThanOrEqual(2); // gitleaks + semgrep
+    for (const block of blocks) {
+      expect(block).toMatch(/persist-credentials:\s*false/);
+    }
   });
 });
