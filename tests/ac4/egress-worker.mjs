@@ -10,11 +10,22 @@ import { parentPort, workerData } from 'node:worker_threads';
 
 const ATTEMPT_TIMEOUT_MS = 2_500;
 
-function attempt(host, port) {
+function messageOf(error) {
+  return error?.message ?? String(error);
+}
+
+// #40 item 3 — a `blocked` verdict REQUIRES that an outbound connection was
+// actually INITIATED and then DENIED (refused/dropped, no connection
+// established). A worker that errors BEFORE it ever attempts a connection never
+// proved the guard blocked anything, so treating that as `blocked` is a
+// false-pass that masks a broken harness. Such a pre-attempt failure is a
+// DISTINCT `errored` verdict; only `escaped` means a connection was established.
+function attempt(host, port, { simulateErrorBeforeAttempt = false } = {}) {
   return new Promise((resolve) => {
     let settled = false;
+    let attempted = false;
     let socket;
-    const finish = (blocked, detail) => {
+    const finish = (verdict, detail) => {
       if (settled) {
         return;
       }
@@ -25,26 +36,40 @@ function attempt(host, port) {
       } catch {
         /* best-effort cleanup */
       }
-      resolve({ blocked, detail });
+      // `verdict` is the authoritative outcome; `blocked` is derived from it for
+      // the CI e2e runner (egress-e2e.mjs), which keys on the boolean.
+      resolve({ verdict, blocked: verdict === 'blocked', attempted, detail });
     };
     const timer = setTimeout(() => {
-      finish(true, 'timed out — blocked');
+      // A timeout is `blocked` only if the attempt was actually initiated (a
+      // dropped SYN); a timeout with no attempt is an `errored` harness.
+      finish(attempted ? 'blocked' : 'errored', 'timed out — blocked');
     }, ATTEMPT_TIMEOUT_MS);
     try {
+      if (simulateErrorBeforeAttempt) {
+        // Models a worker that fails BEFORE touching the network — the exact
+        // false-pass class #40 item 3 closes: it must be `errored`, not blocked.
+        throw new Error('worker failed before attempting any outbound connection');
+      }
       socket = net.createConnection({ host, port });
+      attempted = true;
       socket.once('connect', () => {
-        finish(false, 'connection established — ESCAPED');
+        finish('escaped', 'connection established — ESCAPED');
       });
       socket.once('error', (error) => {
-        finish(true, error?.message ?? String(error));
+        // An error AFTER the attempt was initiated is a genuine denial.
+        finish(attempted ? 'blocked' : 'errored', messageOf(error));
       });
     } catch (error) {
-      finish(true, error?.message ?? String(error));
+      // A throw only counts as a denial if the attempt was already initiated; a
+      // throw before initiating (e.g. the injected crash) is `errored`.
+      finish(attempted ? 'blocked' : 'errored', messageOf(error));
     }
   });
 }
 
 const host = typeof workerData?.host === 'string' ? workerData.host : '127.0.0.1';
 const port = Number(workerData?.port ?? 49231);
-const result = await attempt(host, port);
+const simulateErrorBeforeAttempt = workerData?.simulateErrorBeforeAttempt === true;
+const result = await attempt(host, port, { simulateErrorBeforeAttempt });
 parentPort?.postMessage({ source: 'worker', api: 'net.createConnection', ...result });

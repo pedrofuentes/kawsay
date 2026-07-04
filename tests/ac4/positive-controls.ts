@@ -30,12 +30,26 @@ const SUBPROCESS_TIMEOUT_MS = 12_000;
 
 export type EgressSource = 'main' | 'worker' | 'subprocess';
 
+/**
+ * The fine-grained outcome of an outbound attempt (#40 item 3):
+ * - `blocked`  — the attempt was INITIATED and then DENIED (no connection made);
+ * - `escaped`  — a connection was actually established (the failure case);
+ * - `errored`  — the control failed BEFORE a genuine outbound attempt, so it
+ *   proves nothing and must NOT be counted as `blocked`.
+ */
+export type EgressVerdict = 'blocked' | 'escaped' | 'errored';
+
 export interface ControlOutcome {
   readonly source: EgressSource;
   readonly api: string;
   /** True when the attempt was caught (error/throw/timeout); false if it escaped. */
   readonly blocked: boolean;
   readonly detail: string;
+  /**
+   * The fine-grained verdict when the source distinguishes a genuine denied
+   * attempt from a bare error (currently the worker control — #40 item 3).
+   */
+  readonly verdict?: EgressVerdict;
 }
 
 interface EgressTarget {
@@ -286,25 +300,45 @@ export function mainProcessControls(): ReadonlyArray<() => Promise<ControlOutcom
   ];
 }
 
-export function attemptEgressFromWorker(): Promise<ControlOutcome> {
+/** Overrides for the worker positive control — the only recognized hook is a
+ *  deterministic pre-attempt failure used to prove `errored` is not a false-pass
+ *  `blocked` (#40 item 3). */
+export interface WorkerControlOverrides {
+  readonly simulateErrorBeforeAttempt?: boolean;
+}
+
+export function attemptEgressFromWorker(
+  overrides: WorkerControlOverrides = {},
+): Promise<ControlOutcome> {
   const workerUrl = new URL('./egress-worker.mjs', import.meta.url);
   const { host, port } = egressTarget();
   return new Promise<ControlOutcome>((resolve, reject) => {
-    const worker = new Worker(workerUrl, { workerData: { host, port } });
+    const worker = new Worker(workerUrl, { workerData: { host, port, ...overrides } });
     const timer = setTimeout(() => {
       void worker.terminate();
       reject(new Error('worker positive control timed out'));
     }, WORKER_TIMEOUT_MS);
-    worker.once('message', (message: { blocked?: unknown; detail?: unknown; api?: unknown }) => {
-      clearTimeout(timer);
-      void worker.terminate();
-      resolve({
-        source: 'worker',
-        api: typeof message.api === 'string' ? message.api : 'net.createConnection',
-        blocked: message.blocked === true,
-        detail: typeof message.detail === 'string' ? message.detail : '',
-      });
-    });
+    worker.once(
+      'message',
+      (message: { verdict?: unknown; detail?: unknown; api?: unknown }) => {
+        clearTimeout(timer);
+        void worker.terminate();
+        // A genuine denied attempt is `blocked`; a connection is `escaped`;
+        // anything else (incl. a missing/unknown verdict) is `errored` and must
+        // NOT be a false-pass `blocked` (#40 item 3).
+        const verdict: EgressVerdict =
+          message.verdict === 'blocked' || message.verdict === 'escaped'
+            ? message.verdict
+            : 'errored';
+        resolve({
+          source: 'worker',
+          api: typeof message.api === 'string' ? message.api : 'net.createConnection',
+          blocked: verdict === 'blocked',
+          verdict,
+          detail: typeof message.detail === 'string' ? message.detail : '',
+        });
+      },
+    );
     worker.once('error', (error) => {
       clearTimeout(timer);
       reject(error);
