@@ -643,8 +643,22 @@ describe('createModelDownloader — bounded stall deadline (terminal + clears si
       if (current === 0) {
         capturedSignal = req.signal;
         markInFlight();
-        // Never resolves — no status line, no body: a pure pre-headers stall.
-        return new Promise<ModelFetchResponse>(() => undefined);
+        // A pure pre-headers stall: no status line, no body ever arrives. Mirror the
+        // REAL fetcher (electron-net-fetcher.ts): the ONLY way an in-flight request
+        // settles here is its AbortSignal — when it fires, reject SYNCHRONOUSLY with a
+        // plain Error (exactly as `net.request`'s abort seam does). A fake that never
+        // settled on abort would let the stall signal win the race unconditionally and
+        // hide whether the abort-driven rejection loses to the terminal stall error.
+        return new Promise<ModelFetchResponse>((_resolve, reject) => {
+          const onAbort = (): void => {
+            reject(new Error('the model download request was aborted'));
+          };
+          if (req.signal?.aborted) {
+            onAbort();
+            return;
+          }
+          req.signal?.addEventListener('abort', onAbort, { once: true });
+        });
       }
       // A later FRESH call succeeds — proving single-flight was cleared.
       return Promise.resolve(response(200, bytesBody([chunk(0, 33)])));
@@ -676,8 +690,18 @@ describe('createModelDownloader — bounded stall deadline (terminal + clears si
     fireStall();
 
     const error = await first.catch((e: unknown) => e);
+    // A pure pre-headers stall is TERMINAL after exactly ONE attempt (#262/#296): it
+    // must NOT be retried. When the stall aborts the in-flight request the fetcher
+    // rejects with a PLAIN Error; if that plain rejection were to win the stall race it
+    // would be reclassified as retryable:true and retried up to maxAttempts (5) — the
+    // #296 regression that lets the consent UI offer a retry for a terminal condition.
+    // Pin exactly ONE fetch attempt so a retry regresses right here.
+    expect(requests).toHaveLength(1);
     expect(error).toBeInstanceOf(ModelDownloadError);
     expect((error as ModelDownloadError).kind).toBe('network');
+    // The terminal stall is NON-retryable: the consent UIs read `error.retryable` and
+    // must not surface a retry affordance for a condition that would only stall again.
+    expect((error as ModelDownloadError).retryable).toBe(false);
     // The pre-headers request was proactively aborted through its AbortSignal so
     // the underlying socket is released even though no response ever arrived.
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
