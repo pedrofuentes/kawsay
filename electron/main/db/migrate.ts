@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 import initial001 from './migrations/001_initial.sql?raw';
 import transcripts002 from './migrations/002_transcripts.sql?raw';
 import embeddings003 from './migrations/003_embeddings.sql?raw';
+import modelDimIndex004 from './migrations/004_item_embeddings_model_dim_index.sql?raw';
 
 export interface Migration {
   /** Stable, ordered name recorded in the `migrations` table for provenance. */
@@ -20,6 +21,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { name: '001_initial', sql: initial001 },
   { name: '002_transcripts', sql: transcripts002 },
   { name: '003_embeddings', sql: embeddings003 },
+  { name: '004_item_embeddings_model_dim_index', sql: modelDimIndex004 },
 ];
 
 /**
