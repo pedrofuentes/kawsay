@@ -87,6 +87,11 @@ const securityYml = readFileSync(repoRoot('.github/workflows/security.yml'), 'ut
   /\r\n/g,
   '\n',
 );
+// The AC-4 egress harness (runs untrusted PR code under a network firewall). Normalize CRLF→LF.
+const ac4EgressYml = readFileSync(repoRoot('.github/workflows/ac4-egress.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n',
+);
 
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
@@ -731,12 +736,32 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
   // read `.git/config` and exfiltrate the token. Setting persist-credentials: false
   // prevents the token from ever landing on disk, removing that attack surface.
   // These assertions ratchet the guarantee: a future checkout added without it fails.
+  //
+  // #281: comment lines are stripped before matching so a commented-out
+  // `# persist-credentials: false` cannot false-pass the check.
+
+  /** Assert a checkout-step block carries persist-credentials: false on an uncommented line. */
+  function assertPersistCredentialsFalse(block: string): void {
+    expect(block.replace(/^\s*#.*$/gm, '')).toMatch(/persist-credentials:\s*false/);
+  }
+
+  it('commented-out persist-credentials: false does not satisfy the assertion (#281)', () => {
+    // Regression guard: ensures the comment-strip is actually in effect.
+    const commentedBlock = [
+      '        uses: actions/checkout@abc123',
+      '        with:',
+      '          # persist-credentials: false',
+      '          fetch-depth: 0',
+    ].join('\n');
+    const effective = commentedBlock.replace(/^\s*#.*$/gm, '');
+    expect(effective).not.toMatch(/persist-credentials:\s*false/);
+  });
 
   it('every actions/checkout step in ci.yml has persist-credentials: false', () => {
     const blocks = checkoutStepBlocks(ciYml);
     expect(blocks.length).toBeGreaterThanOrEqual(3); // verify + whisper-cli + embed-cli
     for (const block of blocks) {
-      expect(block).toMatch(/persist-credentials:\s*false/);
+      assertPersistCredentialsFalse(block);
     }
   });
 
@@ -744,7 +769,17 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
     const blocks = checkoutStepBlocks(securityYml);
     expect(blocks.length).toBeGreaterThanOrEqual(2); // gitleaks + semgrep
     for (const block of blocks) {
-      expect(block).toMatch(/persist-credentials:\s*false/);
+      assertPersistCredentialsFalse(block);
+    }
+  });
+
+  it('every actions/checkout step in ac4-egress.yml has persist-credentials: false', () => {
+    // ac4-egress runs pnpm install on untrusted PR code (same risk surface as ci.yml).
+    // All 3 jobs (test-egress, build-test, verify) each have a checkout step.
+    const blocks = checkoutStepBlocks(ac4EgressYml);
+    expect(blocks.length).toBeGreaterThanOrEqual(3); // test-egress + build-test + verify
+    for (const block of blocks) {
+      assertPersistCredentialsFalse(block);
     }
   });
 });
