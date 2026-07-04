@@ -73,11 +73,28 @@ function parsePermissions(section: string): Record<string, string> {
  * Returns null if the block is absent, in non-block scalar/inline-map form, or if the
  * first `permissions:` in the file is not at column 0 — never falls through to
  * job-level blocks.
- *
- * Stub — indent-0 anchor not yet enforced; demonstrates the fail-open (#277).
  */
 function parseTopLevelPermissions(yaml: string): Record<string, string> | null {
-  return parsePermissions(yaml); // stub: no indent-0 anchor → fail-open
+  const lines = yaml.split('\n');
+  let permIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^permissions:/.test(lines[i])) {
+      permIdx = i;
+      break;
+    }
+  }
+  if (permIdx === -1) return null;
+  if (!/^permissions:\s*$/.test(lines[permIdx])) return null; // scalar or inline-map form
+  const result: Record<string, string> = {};
+  for (let i = permIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    const lineIndent = line.length - line.trimStart().length;
+    if (lineIndent === 0) break; // back to a top-level key
+    const m = line.match(/^\s*([\w-]+):\s*(\S+)/);
+    if (m) result[m[1]] = m[2];
+  }
+  return result;
 }
 
 describe('publish-embed-model workflow exists and is workflow_dispatch-only (M4-1b, ADR-0029)', () => {
@@ -111,7 +128,8 @@ describe('publish-embed-model gates the upload behind the protected release envi
 
   it('locks the FULL per-job permissions to the exact least-privilege set — any added scope fails (issue #234)', () => {
     // Top-level: read-only so jobs without an explicit block can never write by default.
-    expect(parsePermissions(publishYml)).toEqual({ contents: 'read' });
+    // Uses parseTopLevelPermissions (indent-0 anchor) — never falls through to a job block.
+    expect(parseTopLevelPermissions(publishYml)).toEqual({ contents: 'read' });
     // convert job: read-only — conversion + quantization never needs a write scope.
     expect(parsePermissions(convert)).toEqual({ contents: 'read' });
     // publish job: EXACTLY contents:write — the one scope the upload step requires.
