@@ -318,27 +318,24 @@ export function attemptEgressFromWorker(
       void worker.terminate();
       reject(new Error('worker positive control timed out'));
     }, WORKER_TIMEOUT_MS);
-    worker.once(
-      'message',
-      (message: { verdict?: unknown; detail?: unknown; api?: unknown }) => {
-        clearTimeout(timer);
-        void worker.terminate();
-        // A genuine denied attempt is `blocked`; a connection is `escaped`;
-        // anything else (incl. a missing/unknown verdict) is `errored` and must
-        // NOT be a false-pass `blocked` (#40 item 3).
-        const verdict: EgressVerdict =
-          message.verdict === 'blocked' || message.verdict === 'escaped'
-            ? message.verdict
-            : 'errored';
-        resolve({
-          source: 'worker',
-          api: typeof message.api === 'string' ? message.api : 'net.createConnection',
-          blocked: verdict === 'blocked',
-          verdict,
-          detail: typeof message.detail === 'string' ? message.detail : '',
-        });
-      },
-    );
+    worker.once('message', (message: { verdict?: unknown; detail?: unknown; api?: unknown }) => {
+      clearTimeout(timer);
+      void worker.terminate();
+      // A genuine denied attempt is `blocked`; a connection is `escaped`;
+      // anything else (incl. a missing/unknown verdict) is `errored` and must
+      // NOT be a false-pass `blocked` (#40 item 3).
+      const verdict: EgressVerdict =
+        message.verdict === 'blocked' || message.verdict === 'escaped'
+          ? message.verdict
+          : 'errored';
+      resolve({
+        source: 'worker',
+        api: typeof message.api === 'string' ? message.api : 'net.createConnection',
+        blocked: verdict === 'blocked',
+        verdict,
+        detail: typeof message.detail === 'string' ? message.detail : '',
+      });
+    });
     worker.once('error', (error) => {
       clearTimeout(timer);
       reject(error);
