@@ -54,7 +54,7 @@ describe('catalog connection + migration runner (ARCHITECTURE §4.1/§4.3)', () 
     expect(userVersion(db)).toBe(0);
     runMigrations(db);
     expect(userVersion(db)).toBe(MIGRATIONS.length);
-    expect(userVersion(db)).toBe(4);
+    expect(userVersion(db)).toBe(5);
   });
 
   it('records every applied migration by name in the migrations table', () => {
@@ -65,6 +65,7 @@ describe('catalog connection + migration runner (ARCHITECTURE §4.1/§4.3)', () 
       '002_transcripts',
       '003_embeddings',
       '004_item_embeddings_model_dim_index',
+      '005_categories',
     ]);
   });
 
@@ -72,9 +73,9 @@ describe('catalog connection + migration runner (ARCHITECTURE §4.1/§4.3)', () 
     runMigrations(db);
     runMigrations(db);
     runMigrations(db);
-    expect(userVersion(db)).toBe(4);
+    expect(userVersion(db)).toBe(5);
     const count = db.prepare('SELECT COUNT(*) AS n FROM migrations').get<{ n: number }>();
-    expect(count?.n).toBe(4);
+    expect(count?.n).toBe(5);
   });
 
   it('creates the full dedup-with-provenance schema and the timeline index', () => {
@@ -434,7 +435,7 @@ describe('migration 004 — item_embeddings(model_id, dim) composite index (#215
   });
 
   it('brings the catalog to version 4 and records the 004 migration', () => {
-    runMigrations(db);
+    runMigrations(db, MIGRATIONS.slice(0, 4));
     expect(userVersion(db)).toBe(4);
     const names = db.prepare('SELECT name FROM migrations ORDER BY id').all<{ name: string }>();
     expect(names.map((r) => r.name)).toContain('004_item_embeddings_model_dim_index');
@@ -460,8 +461,8 @@ describe('migration 004 — item_embeddings(model_id, dim) composite index (#215
   });
 
   it('is idempotent: re-running keeps version 4 and one model_dim index', () => {
-    runMigrations(db);
-    runMigrations(db);
+    runMigrations(db, MIGRATIONS.slice(0, 4));
+    runMigrations(db, MIGRATIONS.slice(0, 4));
     expect(userVersion(db)).toBe(4);
     const n = db
       .prepare(
@@ -495,5 +496,329 @@ describe('migration 004 — item_embeddings(model_id, dim) composite index (#215
       .prepare("SELECT model_id, dim FROM item_embeddings WHERE item_id = 'i1'")
       .get<{ model_id: string; dim: number }>();
     expect(row).toMatchObject({ model_id: 'model-a', dim: 2 });
+  });
+});
+
+// ── Migration 005: categories + item_categories + collections provenance + a
+//    per-item category_status drain (ADR-0030, M4-2/M4-3). Purely ADDITIVE — no
+//    items_fts column change, so exact/semantic search stays byte-identical. ────
+
+describe('migration 005 — categories, item_categories, collections provenance, category_status (ADR-0030)', () => {
+  let dir: string;
+  let db: Database;
+
+  beforeEach(() => {
+    dir = makeTmpDir('db-');
+    db = openCatalog(join(dir, 'catalog.sqlite3'));
+  });
+  afterEach(() => {
+    db.close();
+    removeTmpDir(dir);
+  });
+
+  it('brings the catalog to schema version 5 and records 005_categories', () => {
+    runMigrations(db);
+    expect(userVersion(db)).toBe(5);
+    const names = db.prepare('SELECT name FROM migrations ORDER BY id').all<{ name: string }>();
+    expect(names.map((r) => r.name)).toContain('005_categories');
+  });
+
+  it('adds the categories and item_categories tables with exactly the specified columns', () => {
+    runMigrations(db);
+    expect(tableNames(db).has('categories')).toBe(true);
+    expect(tableNames(db).has('item_categories')).toBe(true);
+    expect(columnNames(db, 'categories')).toEqual(
+      new Set(['id', 'kind', 'name', 'source_key', 'created_at']),
+    );
+    expect(columnNames(db, 'item_categories')).toEqual(
+      new Set([
+        'item_id',
+        'category_id',
+        'source',
+        'state',
+        'signal',
+        'confidence',
+        'explanation',
+        'created_at',
+      ]),
+    );
+  });
+
+  it('adds the origin + category_id provenance columns on collections and category_status on items', () => {
+    runMigrations(db);
+    for (const col of ['origin', 'category_id']) {
+      expect(columnNames(db, 'collections').has(col)).toBe(true);
+    }
+    expect(columnNames(db, 'items').has('category_status')).toBe(true);
+  });
+
+  it('creates the source_key partial-unique, kind, category, collections, and drain indexes', () => {
+    runMigrations(db);
+    for (const idx of [
+      'idx_categories_source_key',
+      'idx_categories_kind',
+      'idx_item_categories_category',
+      'idx_collections_category',
+      'idx_items_category_queue',
+    ]) {
+      const row = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+        .get<{ name: string }>(idx);
+      expect(row?.name).toBe(idx);
+    }
+  });
+
+  it('enforces the categories.kind CHECK (person|place|theme)', () => {
+    runMigrations(db);
+    const ins = db.prepare("INSERT INTO categories (id, kind, name) VALUES (?, ?, 'X')");
+    for (const kind of ['person', 'place', 'theme']) {
+      expect(() => ins.run(`c-${kind}`, kind)).not.toThrow();
+    }
+    expect(() => ins.run('c-bad', 'foo')).toThrow();
+  });
+
+  it('keeps auto categories idempotent via the partial-UNIQUE source_key index, exempting NULLs', () => {
+    runMigrations(db);
+    const ins = db.prepare(
+      "INSERT INTO categories (id, kind, name, source_key) VALUES (?, 'place', ?, ?)",
+    );
+    ins.run('c1', 'Cusco', 'gaz:cusco');
+    // The same stable signal ⇒ a re-cluster can NOT duplicate the auto category.
+    expect(() => ins.run('c2', 'Cusco (dup)', 'gaz:cusco')).toThrow();
+    // A user-created category (NULL source_key) is exempt — many may coexist.
+    const insNull = db.prepare(
+      "INSERT INTO categories (id, kind, name, source_key) VALUES (?, 'theme', ?, NULL)",
+    );
+    insNull.run('u1', 'Beach days');
+    insNull.run('u2', 'Birthdays');
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM categories WHERE source_key IS NULL').get<{
+        n: number;
+      }>()?.n,
+    ).toBe(2);
+  });
+
+  it('defaults item_categories to source=auto/state=assigned, stamps created_at, and bounds confidence to [0,1] or NULL', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();
+    db.prepare("INSERT INTO categories (id, kind, name) VALUES ('c1', 'place', 'Cusco')").run();
+    db.prepare(
+      "INSERT INTO item_categories (item_id, category_id, signal, confidence, explanation) VALUES ('i1', 'c1', 'gps', 0.9, 'Near Cusco, Perú')",
+    ).run();
+    const row = db
+      .prepare(
+        "SELECT source, state, created_at FROM item_categories WHERE item_id = 'i1' AND category_id = 'c1' AND source = 'auto'",
+      )
+      .get<{ source: string; state: string; created_at: string }>();
+    expect(row?.source).toBe('auto');
+    expect(row?.state).toBe('assigned');
+    expect(row?.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
+    // confidence: NULL (a certain, user-made assignment) and the [0,1] boundaries are accepted…
+    const upd = db.prepare(
+      "UPDATE item_categories SET confidence = ? WHERE item_id = 'i1' AND category_id = 'c1' AND source = 'auto'",
+    );
+    for (const c of [null, 0, 1, 0.42]) {
+      expect(() => upd.run(c)).not.toThrow();
+    }
+    // …anything outside [0,1] is rejected by the CHECK.
+    expect(() => upd.run(2)).toThrow();
+    expect(() => upd.run(-0.5)).toThrow();
+  });
+
+  it('enforces the item_categories source / state / signal CHECK vocabularies', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();
+    db.prepare("INSERT INTO categories (id, kind, name) VALUES ('c1', 'place', 'Cusco')").run();
+    // Each bad row is rejected by its own CHECK — none persists, so the PK never masks it.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO item_categories (item_id, category_id, source) VALUES ('i1', 'c1', 'bogus')",
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO item_categories (item_id, category_id, source, state) VALUES ('i1', 'c1', 'user', 'x')",
+        )
+        .run(),
+    ).toThrow();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO item_categories (item_id, category_id, signal) VALUES ('i1', 'c1', 'nonsense')",
+        )
+        .run(),
+    ).toThrow();
+    // A valid user 'removed' tombstone (source=user, state=removed, signal=user) is accepted.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO item_categories (item_id, category_id, source, state, signal) VALUES ('i1', 'c1', 'user', 'removed', 'user')",
+        )
+        .run(),
+    ).not.toThrow();
+  });
+
+  it('allows one auto + one user row per (item, category) but rejects a duplicate source (PK)', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();
+    db.prepare("INSERT INTO categories (id, kind, name) VALUES ('c1', 'place', 'Cusco')").run();
+    const ins = db.prepare(
+      'INSERT INTO item_categories (item_id, category_id, source, state) VALUES (?, ?, ?, ?)',
+    );
+    ins.run('i1', 'c1', 'auto', 'assigned');
+    // The user row COEXISTS with the auto row (dedup-with-provenance; user wins at read time).
+    ins.run('i1', 'c1', 'user', 'removed');
+    // A second 'auto' row for the same (item, category) violates the composite PK.
+    expect(() => ins.run('i1', 'c1', 'auto', 'assigned')).toThrow();
+    expect(
+      db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM item_categories WHERE item_id = 'i1' AND category_id = 'c1'",
+        )
+        .get<{ n: number }>()?.n,
+    ).toBe(2);
+  });
+
+  it('defaults collections.origin=user and enforces the origin CHECK (user|suggested|dismissed)', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO collections (id, name) VALUES ('col1', 'My album')").run();
+    const row = db
+      .prepare("SELECT origin, category_id FROM collections WHERE id = 'col1'")
+      .get<{ origin: string; category_id: string | null }>();
+    expect(row?.origin).toBe('user');
+    expect(row?.category_id).toBeNull();
+    expect(() =>
+      db.prepare("UPDATE collections SET origin = 'x' WHERE id = 'col1'").run(),
+    ).toThrow();
+    for (const origin of ['user', 'suggested', 'dismissed']) {
+      expect(() =>
+        db.prepare('UPDATE collections SET origin = ? WHERE id = ?').run(origin, 'col1'),
+      ).not.toThrow();
+    }
+  });
+
+  it('defaults items.category_status=pending and enforces its CHECK (pending|done|skipped|error)', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();
+    expect(
+      db.prepare("SELECT category_status FROM items WHERE id = 'i1'").get<{
+        category_status: string;
+      }>()?.category_status,
+    ).toBe('pending');
+    expect(() =>
+      db.prepare("UPDATE items SET category_status = 'x' WHERE id = 'i1'").run(),
+    ).toThrow();
+    for (const status of ['pending', 'done', 'skipped', 'error']) {
+      expect(() =>
+        db.prepare('UPDATE items SET category_status = ? WHERE id = ?').run(status, 'i1'),
+      ).not.toThrow();
+    }
+  });
+
+  it('cascades item_categories when its item is deleted, and when its category is deleted', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i1', 'photo')").run();
+    db.prepare("INSERT INTO categories (id, kind, name) VALUES ('c1', 'place', 'Cusco')").run();
+    db.prepare(
+      "INSERT INTO item_categories (item_id, category_id, source) VALUES ('i1', 'c1', 'auto')",
+    ).run();
+    // Deleting the item removes its derived assignment (ON DELETE CASCADE).
+    db.prepare("DELETE FROM items WHERE id = 'i1'").run();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM item_categories').get<{ n: number }>()?.n).toBe(0);
+
+    // Deleting the category also cascades its assignments.
+    db.prepare("INSERT INTO items (id, media_type) VALUES ('i2', 'photo')").run();
+    db.prepare(
+      "INSERT INTO item_categories (item_id, category_id, source) VALUES ('i2', 'c1', 'auto')",
+    ).run();
+    db.prepare("DELETE FROM categories WHERE id = 'c1'").run();
+    expect(db.prepare('SELECT COUNT(*) AS n FROM item_categories').get<{ n: number }>()?.n).toBe(0);
+  });
+
+  it('sets collections.category_id NULL when its category is deleted (link orphaned, collection kept)', () => {
+    runMigrations(db);
+    db.prepare("INSERT INTO categories (id, kind, name) VALUES ('c1', 'place', 'Cusco')").run();
+    db.prepare(
+      "INSERT INTO collections (id, name, origin, category_id) VALUES ('col1', 'Cusco trip', 'suggested', 'c1')",
+    ).run();
+    db.prepare("DELETE FROM categories WHERE id = 'c1'").run();
+    const row = db
+      .prepare("SELECT origin, category_id FROM collections WHERE id = 'col1'")
+      .get<{ origin: string; category_id: string | null }>();
+    // The provenance link is orphaned (SET NULL)…
+    expect(row?.category_id).toBeNull();
+    // …but the collection itself survives.
+    expect(row?.origin).toBe('suggested');
+  });
+
+  it('is idempotent: re-running keeps version 5 and does not duplicate the new tables', () => {
+    runMigrations(db);
+    runMigrations(db);
+    expect(userVersion(db)).toBe(5);
+    const n = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('categories', 'item_categories')",
+      )
+      .get<{ n: number }>();
+    expect(n?.n).toBe(2);
+  });
+
+  it('forward-migrates a v4 catalog with NO data loss and a still-searchable items_fts', () => {
+    // Bring the catalog to v4 only, then write data the way 004 shipped.
+    runMigrations(db, MIGRATIONS.slice(0, 4));
+    expect(userVersion(db)).toBe(4);
+    db.prepare(
+      "INSERT INTO items (id, media_type, description, search_meta) VALUES ('a1', 'audio', 'voice note', 'AUD_0001')",
+    ).run();
+    db.prepare("INSERT INTO collections (id, name) VALUES ('col1', 'Album')").run();
+    expect(ftsMatch(db, 'AUD_0001')).toEqual(['a1']);
+
+    // Forward-migrate to the latest schema — 005 is additive.
+    runMigrations(db);
+    expect(userVersion(db)).toBe(MIGRATIONS.length);
+
+    // The pre-existing rows survive and are backfilled to the new defaults.
+    const item = db
+      .prepare("SELECT description, search_meta, category_status FROM items WHERE id = 'a1'")
+      .get<{ description: string; search_meta: string; category_status: string }>();
+    expect(item).toMatchObject({
+      description: 'voice note',
+      search_meta: 'AUD_0001',
+      category_status: 'pending',
+    });
+    const col = db
+      .prepare("SELECT origin, category_id FROM collections WHERE id = 'col1'")
+      .get<{ origin: string; category_id: string | null }>();
+    expect(col).toMatchObject({ origin: 'user', category_id: null });
+    // items_fts is untouched by 005 — the existing content stays searchable.
+    expect(ftsMatch(db, 'AUD_0001')).toEqual(['a1']);
+  });
+
+  it('AC-29: the live FTS search() path returns identical results before and after migration 005', () => {
+    // A v4 catalog seeded with known text; capture exact-search output BEFORE 005.
+    runMigrations(db, MIGRATIONS.slice(0, 4));
+    const repo = createCatalogRepo(db);
+    const seed: [string, string, string][] = [
+      ['m1', 'feliz cumpleaños en la playa', 'mateo familia'],
+      ['m2', 'almuerzo familiar con la abuela', 'abuela familia'],
+      ['m3', 'la playa al atardecer', 'mateo'],
+    ];
+    for (const [id, description, searchMeta] of seed) {
+      repo.insertItem({ id, mediaType: 'message', description, searchMeta });
+    }
+    const queries = ['playa', 'familia', 'cumple', 'abuela'];
+    const before = queries.map((query) => repo.search({ query, limit: 10, offset: 0 }));
+
+    // Apply migration 005 — additive schema that never touches items_fts.
+    runMigrations(db);
+    expect(userVersion(db)).toBe(5);
+    const after = queries.map((query) => repo.search({ query, limit: 10, offset: 0 }));
+
+    // AC-7 preserved byte-for-byte: 005 does not change what the live path returns.
+    expect(after).toEqual(before);
   });
 });
