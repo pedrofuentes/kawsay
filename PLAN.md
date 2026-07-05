@@ -19,7 +19,7 @@ capabilities: full
 - **Watchdog:** **Tier-1 ARMED** — 20-minute recurring heartbeat (`manage_schedule`) running the
   canonical steps 0–8, adapted for **Method A** (Sentinel sub-agent review). **Tier-2 unattended
   operation is DISABLED** — no bot identity / no model API key. This is a deliberate choice per
-  `docs/CONTINUOUS-OPERATION.md` v2.9.1: an always-on machine prefers persistent Tier-1.
+  `docs/CONTINUOUS-OPERATION.md` v2.9.2: an always-on machine prefers persistent Tier-1.
 - **Review method:** **Method A** — the coordinator invokes Sentinel as an independent non-author
   sub-agent per PR. There is **no `sentinel` CI check**.
 - **Board sync:** **labels-only** — the PAT lacks `project` scope, so labels + issue open/closed
@@ -44,7 +44,7 @@ agent):
 | PR | Producer | Reviewer | Summary |
 |---|---|---|---|
 | #300 | delegated implementer (sub-agent) | Sentinel — Method A non-author sub-agent | template sync v2.9.2 |
-| #299 | delegated implementer (sub-agent) | Sentinel — Method A non-author sub-agent | template sync v2.9.1 |
+| #299 | delegated implementer (sub-agent) | Sentinel — Method A non-author sub-agent | agents-template v0.22.0 |
 | #296 | delegated implementer (sub-agent) | Sentinel — Method A non-author sub-agent | model-download AbortSignal |
 | #295 | delegated implementer (sub-agent) | Sentinel — Method A non-author sub-agent | renderer-egress safeguard |
 | #294 | delegated implementer (sub-agent) | Sentinel — Method A non-author sub-agent | permissions indent-0 anchor |
@@ -64,7 +64,7 @@ agent):
 
 ## HANDOFF
 
-> For a cold successor who reads `docs/KICKOFF.md` + `docs/MISSION.md` + this block.
+> For a cold successor who reads `docs/KICKOFF.md` + `MISSION.md` + this block.
 
 ### Runtime & Capabilities
 
@@ -79,7 +79,7 @@ agent):
 
 - **Tier-1 watchdog:** 20-minute recurring (`manage_schedule`) running canonical steps 0–8,
   adapted for Method A Sentinel review. Tier-2 unattended operation DISABLED (no bot identity /
-  no model API key — per `docs/CONTINUOUS-OPERATION.md` v2.9.1, an always-on machine prefers
+  no model API key — per `docs/CONTINUOUS-OPERATION.md` v2.9.2, an always-on machine prefers
   persistent Tier-1).
 
 ### In-Flight Increments
