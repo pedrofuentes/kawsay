@@ -106,6 +106,18 @@ function categoryStatusOf(db: Db, id: string): string {
   );
 }
 
+/**
+ * Reset the given items' `category_status` back to `'pending'` so the next
+ * `port.start()` call genuinely re-runs the clustering pass (drains them
+ * through `assignAuto`) rather than being a no-op idle run.  Used by the
+ * re-cluster durability tests to make them discriminating: a clobber mutation
+ * that deletes `source='user'` rows would flip the assertions.
+ */
+function resetToPending(db: Db, ids: string[]): void {
+  const stmt = db.prepare("UPDATE items SET category_status = 'pending' WHERE id = ?");
+  for (const id of ids) stmt.run(id);
+}
+
 describe('AC-30 — explainable place + theme assignments (inline transport, no worker thread)', () => {
   it('produces a place chip with concrete GPS provenance (signal / confidence / explanation)', async () => {
     const db = freshCatalog();
@@ -167,6 +179,15 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
       categoryId: place.categoryId,
     });
 
+    // Reset ALL place items to 'pending' so the second start() genuinely re-runs
+    // the cluster pass (minPts=2 needs ≥2 GPS points in the pending corpus).
+    // Without this reset, start() is an idle no-op and assignAuto is never called,
+    // making the test non-discriminating for user-row clobber regressions.
+    resetToPending(
+      db,
+      PLACE_ITEMS.map((p) => p.id),
+    );
+
     // A second full run (re-cluster) must not resurrect the removed membership.
     await port.start();
 
@@ -189,6 +210,13 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
       itemId: PLACE_ITEMS[0].id,
       categoryId: place.categoryId,
     });
+
+    // Reset ALL place items to 'pending' so the relaunched port's start() genuinely
+    // re-runs assignAuto on PLACE_ITEMS[0] (needs ≥2 GPS points for minPts=2).
+    resetToPending(
+      db,
+      PLACE_ITEMS.map((p) => p.id),
+    );
 
     // "Relaunch": a brand-new port instance over the SAME on-disk catalog, then re-run.
     const relaunched = makePort(db, true);
@@ -220,6 +248,13 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
       fromCategoryId: place.categoryId,
       toCategoryId: targetId,
     });
+
+    // Reset ALL place items to 'pending' so start() re-runs assignAuto for
+    // PLACE_ITEMS[0] and we can verify the user reassignment survives.
+    resetToPending(
+      db,
+      PLACE_ITEMS.map((p) => p.id),
+    );
 
     await port.start();
 
