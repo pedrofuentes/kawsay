@@ -4,9 +4,6 @@
 import { vi } from 'vitest';
 import type {
   CategorizationProgressEvent,
-  CategorizationStartResultDTO,
-  CategorizationStatusDTO,
-  CategorizationCorrectionDTO,
   ImportProgressEvent,
   ImportSummaryDTO,
   ItemCardDTO,

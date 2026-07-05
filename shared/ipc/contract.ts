@@ -6,6 +6,10 @@ import {
   QUERY_MAX_LENGTH,
   THUMBNAIL_MAX_SIZE,
   THUMBNAIL_MIN_SIZE,
+  categorizationCorrectionSchema,
+  categorizationStartResultSchema,
+  categorizationStatusSchema,
+  itemCategoriesSchema,
   librarySummarySchema,
   pathSchema,
   searchResultSchema,
@@ -109,6 +113,25 @@ export const SMART_SEARCH_DOWNLOAD_MODEL = 'smartSearch:downloadModel';
  * `{ optedIn, modelReady, offered }`.
  */
 export const SMART_SEARCH_MODEL_STATUS = 'smartSearch:modelStatus';
+
+/**
+ * IPC channels for the opt-in EXPLAINABLE CATEGORIZATION surface (M4-2h, #270 —
+ * ADR-0030). All ADDITIVE — no existing channel or the contextBridge exposure model
+ * changes. Each request/response is a strict zod schema, so a malformed payload is
+ * rejected in either direction (AC-4).
+ */
+/** IPC channel: the opt-in gate snapshot `{ optedIn, offered }` the UI reads. */
+export const CATEGORIZE_STATUS = 'categorize:status';
+/** IPC channel: persist the categorization opt-in; echoes the resolved `{ optedIn }`. */
+export const CATEGORIZE_SET_CONSENT = 'categorize:setConsent';
+/** IPC channel: list ONE item's explainable category chips by its opaque id. */
+export const CATEGORIZE_LIST_FOR_ITEM = 'categorize:listForItem';
+/** IPC channel: apply a user correction (confirm/remove/reassign/rename); returns the refreshed chips. */
+export const CATEGORIZE_APPLY_CORRECTION = 'categorize:applyCorrection';
+/** IPC channel: start the gated categorization run; resolves the run result. Progress streams over the event. */
+export const CATEGORIZE_START = 'categorize:start';
+/** IPC channel: cooperatively cancel an in-flight categorization run; resolves `{ cancelled }`. */
+export const CATEGORIZE_CANCEL = 'categorize:cancel';
 
 /**
  * The renderer-controllable options for a native open dialog (W2). This is the
@@ -248,6 +271,32 @@ export const ipcContract = {
       modelReady: z.boolean(),
       offered: z.boolean(),
     }),
+  },
+  [CATEGORIZE_STATUS]: {
+    request: z.strictObject({}),
+    response: categorizationStatusSchema,
+  },
+  [CATEGORIZE_SET_CONSENT]: {
+    request: z.strictObject({ optedIn: z.boolean() }),
+    response: z.strictObject({ optedIn: z.boolean() }),
+  },
+  [CATEGORIZE_LIST_FOR_ITEM]: {
+    // The renderer names only an opaque catalog id — never a path — so a traversal
+    // string can never validate, mirroring catalog:getTranscript.
+    request: z.strictObject({ itemId: z.uuid() }),
+    response: itemCategoriesSchema,
+  },
+  [CATEGORIZE_APPLY_CORRECTION]: {
+    request: categorizationCorrectionSchema,
+    response: itemCategoriesSchema,
+  },
+  [CATEGORIZE_START]: {
+    request: z.strictObject({}),
+    response: categorizationStartResultSchema,
+  },
+  [CATEGORIZE_CANCEL]: {
+    request: z.strictObject({}),
+    response: z.strictObject({ cancelled: z.boolean() }),
   },
 } as const;
 

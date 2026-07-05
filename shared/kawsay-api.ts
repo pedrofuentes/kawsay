@@ -6,6 +6,10 @@
  * filesystem, the database, or the network.
  */
 import type {
+  CategorizationStartResultDTO,
+  CategorizationStatusDTO,
+  CategorizationCorrectionDTO,
+  ItemCategoriesDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
   TimelinePageDTO,
@@ -14,6 +18,7 @@ import type {
   TranscriptViewDTO,
 } from '@shared/ipc/schemas';
 import type {
+  CategorizationProgressEvent,
   ImportProgressEvent,
   ModelDownloadProgressEvent,
   TranscriptionProgressEvent,
@@ -160,6 +165,62 @@ export interface KawsayAPI {
   onSmartSearchModelDownloadProgress(
     listener: (event: ModelDownloadProgressEvent) => void,
   ): () => void;
+
+  /**
+   * The opt-in categorization gate snapshot the UI reads (M4-2h / ADR-0030):
+   * whether the user `optedIn`, and whether the feature is even `offered` yet —
+   * true ONLY when the gazetteer asset is bundled. While `offered` is false the
+   * whole opt-in surface stays hidden; while `optedIn` is false NO chips show and
+   * no category_status ever transitions (default-off, AC-33).
+   */
+  getCategorizationStatus(): Promise<CategorizationStatusDTO>;
+
+  /**
+   * Persist the categorization opt-in (M4-2h). CALLER-INITIATED from the consent
+   * toggle only — never auto-set. Echoes the resolved `{ optedIn }` so the UI can
+   * reflect the durable state. Turning it off stops all future chip rendering and
+   * status transitions; existing user corrections stay on disk (AC-30).
+   */
+  setCategorizationConsent(input: { optedIn: boolean }): Promise<{ optedIn: boolean }>;
+
+  /**
+   * List ONE item's explainable category chips by its opaque catalog id (#270).
+   * Resolves the place/theme groupings with their provenance (source/signal/
+   * confidence/explanation), USER decisions winning over AUTO. The renderer passes
+   * only the id (never a path); returns `[]` when the feature is off or the item is
+   * uncategorized. No path or vector crosses back (AC-4).
+   */
+  listItemCategories(input: { itemId: string }): Promise<ItemCategoriesDTO>;
+
+  /**
+   * Apply a user correction — confirm, remove, reassign, or rename — and resolve
+   * the item's REFRESHED chips (#270). The user's decision is written as a `user`
+   * assignment that a later re-cluster can never clobber (provenance durability,
+   * AC-30). Ids are opaque; a malformed correction is rejected at the boundary.
+   */
+  applyCategoryCorrection(input: CategorizationCorrectionDTO): Promise<ItemCategoriesDTO>;
+
+  /**
+   * Start the gated categorization run over the library (#270 / ADR-0030). This is
+   * the CALLER-INITIATED capability only — it refuses unless the user opted in AND
+   * there is a place/theme signal, and it never auto-runs. Idempotent. Resolves the
+   * run result (`completed`/`idle`/`cancelled`/`busy`/`refused` + counts); per-item
+   * progress arrives via {@link onCategorizationProgress}. Originals are never
+   * touched and the run makes no network call (AC-4).
+   */
+  startCategorization(): Promise<CategorizationStartResultDTO>;
+
+  /**
+   * Cooperatively cancel the in-flight categorization run; resolves whether one was
+   * running. Whatever already settled stays persisted.
+   */
+  cancelCategorization(): Promise<{ cancelled: boolean }>;
+
+  /**
+   * Subscribe to the per-item categorization progress stream; returns an
+   * unsubscribe function. Mirrors {@link onImportProgress}.
+   */
+  onCategorizationProgress(listener: (event: CategorizationProgressEvent) => void): () => void;
 }
 
 /**
@@ -175,6 +236,17 @@ export interface DialogOpenOptions {
 // Re-exported for the renderer (U1/U2/U3), which imports these DTOs by name.
 export type {
   ItemCardDTO,
+  ItemCategoryDTO,
+  ItemCategoriesDTO,
+  CategoryKindDTO,
+  AssignmentSourceDTO,
+  AssignmentSignalDTO,
+  CategorizationCorrectionDTO,
+  CategorizationStatusDTO,
+  CategorizationCountsDTO,
+  CategorizationSnapshotDTO,
+  CategorizationStartResultDTO,
+  CategorizationRefusalReasonDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
   TimelinePageDTO,
@@ -192,4 +264,5 @@ export type {
 export type { ImportProgressEvent } from '@shared/ipc/events';
 export type { ModelDownloadProgressEvent } from '@shared/ipc/events';
 export type { TranscriptionProgressEvent } from '@shared/ipc/events';
+export type { CategorizationProgressEvent } from '@shared/ipc/events';
 export type { SourceType, MediaType } from '@shared/catalog';

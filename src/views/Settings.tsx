@@ -6,6 +6,7 @@
 // card stays hidden until its model is published (offered), so pre-publish this
 // view is unchanged.
 import type { ReactElement } from 'react';
+import { CategorizationConsent } from '@renderer/components/CategorizationConsent';
 import { SmartSearchConsent } from '@renderer/components/SmartSearchConsent';
 import { TranscriptionConsent } from '@renderer/components/TranscriptionConsent';
 import { TranscriptionRun } from '@renderer/components/TranscriptionRun';
@@ -30,6 +31,7 @@ export function Settings(): ReactElement {
       <TranscriptionConsent />
       <TranscriptionRun />
       <SmartSearchConsent />
+      <CategorizationConsent />
       <footer className="font-body text-sm text-text-secondary">
         Place names © GeoNames, licensed under CC BY 4.0.
       </footer>

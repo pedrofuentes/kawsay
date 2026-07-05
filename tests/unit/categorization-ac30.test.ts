@@ -25,6 +25,14 @@ import { createInlineClusterTransport } from '../../electron/main/categorize/cat
 import { resolveCategorizationStatus } from '../../electron/main/categorize/categorization-orchestrator';
 import { createCategorizationLibraryPort } from '../../electron/main/categorize/categorization-library';
 
+/** Narrow a `.find()` result without a non-null assertion (lint-clean, and a miss fails loudly). */
+function requireDefined<T>(value: T | undefined): T {
+  if (value === undefined) {
+    throw new Error('expected value to be defined');
+  }
+  return value;
+}
+
 const openDbs: Db[] = [];
 
 afterEach(() => {
@@ -92,8 +100,9 @@ function makePort(db: Db, optedIn: boolean) {
 
 function categoryStatusOf(db: Db, id: string): string {
   return (
-    db.prepare('SELECT category_status FROM items WHERE id = ?').get<{ category_status: string }>(id)
-      ?.category_status ?? ''
+    db
+      .prepare('SELECT category_status FROM items WHERE id = ?')
+      .get<{ category_status: string }>(id)?.category_status ?? ''
   );
 }
 
@@ -149,20 +158,21 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
     const port = makePort(db, true);
     await port.start();
 
-    const place = port.listForItem(PLACE_ITEMS[0].id).find((c) => c.kind === 'place');
-    expect(place).toBeDefined();
+    const place = requireDefined(
+      port.listForItem(PLACE_ITEMS[0].id).find((c) => c.kind === 'place'),
+    );
     port.applyCorrection({
       kind: 'remove',
       itemId: PLACE_ITEMS[0].id,
-      categoryId: place!.categoryId,
+      categoryId: place.categoryId,
     });
 
     // A second full run (re-cluster) must not resurrect the removed membership.
     await port.start();
 
-    expect(
-      port.listForItem(PLACE_ITEMS[0].id).some((c) => c.categoryId === place!.categoryId),
-    ).toBe(false);
+    expect(port.listForItem(PLACE_ITEMS[0].id).some((c) => c.categoryId === place.categoryId)).toBe(
+      false,
+    );
   });
 
   it('a CONFIRM survives a relaunch — a FRESH port over the same DB still reads source=user', async () => {
@@ -171,11 +181,13 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
     const port = makePort(db, true);
     await port.start();
 
-    const place = port.listForItem(PLACE_ITEMS[0].id).find((c) => c.kind === 'place');
+    const place = requireDefined(
+      port.listForItem(PLACE_ITEMS[0].id).find((c) => c.kind === 'place'),
+    );
     port.applyCorrection({
       kind: 'confirm',
       itemId: PLACE_ITEMS[0].id,
-      categoryId: place!.categoryId,
+      categoryId: place.categoryId,
     });
 
     // "Relaunch": a brand-new port instance over the SAME on-disk catalog, then re-run.
@@ -184,7 +196,7 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
 
     const afterPlace = relaunched
       .listForItem(PLACE_ITEMS[0].id)
-      .find((c) => c.categoryId === place!.categoryId);
+      .find((c) => c.categoryId === place.categoryId);
     expect(afterPlace?.source).toBe('user');
   });
 
@@ -194,7 +206,9 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
     const port = makePort(db, true);
     await port.start();
 
-    const place = port.listForItem(PLACE_ITEMS[0].id).find((c) => c.kind === 'place');
+    const place = requireDefined(
+      port.listForItem(PLACE_ITEMS[0].id).find((c) => c.kind === 'place'),
+    );
     // Reassign onto a fresh user-made category (no source_key → never auto-collapsed).
     const targetId = createCategoriesRepo(db).upsertCategory({
       kind: 'place',
@@ -203,7 +217,7 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
     port.applyCorrection({
       kind: 'reassign',
       itemId: PLACE_ITEMS[0].id,
-      fromCategoryId: place!.categoryId,
+      fromCategoryId: place.categoryId,
       toCategoryId: targetId,
     });
 
@@ -211,7 +225,7 @@ describe('AC-30 — a user correction survives a re-cluster AND a relaunch (prov
 
     const ids = port.listForItem(PLACE_ITEMS[0].id).map((c) => c.categoryId);
     expect(ids).toContain(targetId);
-    expect(ids).not.toContain(place!.categoryId);
+    expect(ids).not.toContain(place.categoryId);
   });
 });
 

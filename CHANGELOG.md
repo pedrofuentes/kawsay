@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Organize memories by place and theme — yours to turn on** (M4-2h · ADR-0030): once the built-in
+  place-name list is available, Settings offers a gentle opt-in to let Kawsay gather a loved one's
+  memories into the **places** they were taken and the **themes** they share. It is **entirely
+  optional and off until you choose it** — nothing is organized, and no memory shows a category,
+  until you turn it on. When it is on, each memory shows calm **chips** that explain themselves (why
+  a place or theme was suggested, and how sure Kawsay is), and you stay in charge: **confirm**,
+  **rename**, **move**, or **remove** any grouping, and your decision is kept for good — a later
+  re-organize can never undo it. It all happens **on this computer**; there is no account, and
+  nothing about a loved one's memories ever leaves the device.
 - **Memories can find their place** (M4-2d · ADR-0030): when a photo or video carries a location,
   Kawsay can now gently name the **place** it came from — a city, region, and country — so memories
   can be gathered by where they happened. This works **entirely on this computer** from a built-in
