@@ -438,7 +438,12 @@ describe('themes pipeline', () => {
     expect(cats).toHaveLength(1);
     expect(cats[0].kind).toBe('theme');
     expect(cats[0].source_key).toBe(themeSourceKey(['t1', 't2']));
-    expect(cats[0].name.length).toBeGreaterThan(0);
+    // Pin the CONCRETE derived salient-term label (deriveThemeLabels ranks the three
+    // shared terms tf/df, ties broken ascending → "Beach sunset waves"), NOT merely a
+    // non-empty string: the size-based fallback ("2 similar items") is also non-empty,
+    // so only an exact match proves the orchestrator wires the real label through and
+    // catches a regression that drops labelling (Sentinel PR #335 🔴).
+    expect(cats[0].name).toBe('Beach sunset waves');
 
     const assignment = categories.resolveAssignment('t1', cats[0].id);
     expect(assignment).toMatchObject({
@@ -448,10 +453,38 @@ describe('themes pipeline', () => {
     });
     // Identical vectors ⇒ cosine to the centroid is 1 (clamped into [0, 1]).
     expect(assignment?.confidence).toBeCloseTo(1, 5);
-    expect(assignment?.explanation && assignment.explanation.length).toBeGreaterThan(0);
+    // The explanation also surfaces the derived label (not just a generic string).
+    expect(assignment?.explanation).toContain('Beach sunset waves');
 
     expect(requests[0].themes?.items.map((it) => it.id).sort()).toEqual(['t1', 't2']);
     expect(requests[0].places).toBeUndefined();
+  });
+
+  it('names a theme by the size fallback ONLY when labelling yields no salient term', async () => {
+    const { orchestrator, db, categories } = harness({
+      seed: [
+        // Identical vectors ⇒ they cluster; all-stopword text ⇒ deriveThemeLabels
+        // returns an empty label, so the orchestrator must fall back to a size name.
+        { id: 's1', embed: 0.5, description: 'the and of a to' },
+        { id: 's2', embed: 0.5, description: 'the and of a to' },
+      ],
+    });
+
+    const result = await orchestrator.run();
+
+    expect(result.outcome).toBe('completed');
+    for (const id of ['s1', 's2']) expect(categoryStatusOf(db, id)).toBe('done');
+
+    const cats = allCategories(db);
+    expect(cats).toHaveLength(1);
+    expect(cats[0].kind).toBe('theme');
+    // This fallback string is the ONLY name a labelled theme can carry when the label
+    // is empty — it pins the empty-label branch (the counterpart to the positive test).
+    expect(cats[0].name).toBe('2 similar items');
+
+    // The empty-label explanation omits the " — <label>" suffix entirely.
+    const assignment = categories.resolveAssignment('s1', cats[0].id);
+    expect(assignment?.explanation).toBe('Grouped with 2 similar items');
   });
 
   it('consumes only embed_status=done rows (embed-first, categorize-second)', async () => {
