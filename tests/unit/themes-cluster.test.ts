@@ -7,6 +7,7 @@ import {
   type ThemeClusterItem,
   type ThemeClusteringResult,
 } from '../../electron/main/categorize/themes-cluster';
+import { cosineSimilarity } from '../../electron/main/search/semantic';
 
 // Build a float32 vector from plain numbers (test ergonomics, as semantic.test.ts).
 const vec = (...values: number[]): Float32Array => Float32Array.from(values);
@@ -135,6 +136,38 @@ describe('clusterThemes — threshold-agglomerative cosine clustering (ADR-0030 
     expect(result.clusters).toHaveLength(1);
     expect(result.clusters[0].centroid[0]).toBeCloseTo((v1[0] + v2[0]) / 2, 5);
     expect(result.clusters[0].centroid[1]).toBeCloseTo((v1[1] + v2[1]) / 2, 5);
+  });
+
+  it('reports each member’s similarity as its cosine to the FINAL mean centroid, not a trivial 1', () => {
+    // NON-identical members: the mean centroid differs from every member vector, so
+    // each member's similarity is a distinct, non-1 value. This discriminates the
+    // real centroid from a hardcoded `similarity: 1` and from a wrong-reference
+    // vector (e.g. the first member instead of the mean).
+    const v1 = vec(1, 0);
+    const v2 = unitAtCos(0.997);
+    const v3 = unitAtCos(0.94);
+    const result = clusterThemes([item('a1', v1), item('a2', v2), item('a3', v3)], {
+      threshold: 0.9,
+      minClusterSize: 1,
+    });
+    expect(result.clusters).toHaveLength(1);
+
+    // Oracle: the elementwise-mean centroid, computed INDEPENDENTLY of the module.
+    const mean = vec((v1[0] + v2[0] + v3[0]) / 3, (v1[1] + v2[1] + v3[1]) / 3);
+    const expected: Record<string, number> = {
+      a1: cosineSimilarity(v1, mean),
+      a2: cosineSimilarity(v2, mean),
+      a3: cosineSimilarity(v3, mean),
+    };
+    for (const member of result.clusters[0].members) {
+      expect(member.similarity).toBeCloseTo(expected[member.id], 5);
+    }
+
+    // Guard the oracle itself: the expected values are mutually distinct and none is
+    // ~1, so the assertion above genuinely pins each member's cosine to the mean.
+    const values = Object.values(expected);
+    for (const value of values) expect(value).toBeLessThan(0.999);
+    expect(new Set(values.map((value) => value.toFixed(4))).size).toBe(values.length);
   });
 
   it('throws on inconsistent vector dimensions (a programming error, per semantic.ts ethos)', () => {
