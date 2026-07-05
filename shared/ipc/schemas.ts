@@ -434,3 +434,78 @@ export const categorizationCorrectionSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 export type CategorizationCorrectionDTO = z.infer<typeof categorizationCorrectionSchema>;
+
+// ── Suggested collections review tray (M4-3c, #273 — ADR-0030 / AC-32) ─────────
+//
+// The renderer-facing projection of the suggested-collection review TRAY: the
+// derived place/theme candidates (proposed name + effective member count + a few
+// example items), plus the real collections a candidate may be merged INTO.
+// Suggestions are derived READ-ONLY (#271) and become a `collections` row ONLY on
+// an explicit accept/merge via the curation repo (#272) — so nothing here is a
+// path, a vector, or a silently-created collection. The enums mirror the
+// derivation/curation domains exactly, so an adversarial payload with an
+// out-of-scope kind/origin is a hard error.
+
+/** How many example items a suggestion card carries (a "few" — a defence-in-depth cap). */
+export const SUGGESTION_EXAMPLES_MAX = 4;
+
+/** Defence-in-depth cap for a merge-target collection name (mirrors the collections.name budget). */
+export const COLLECTION_NAME_MAX_LENGTH = 200;
+
+/** The suggestible category kinds — places and themes only ('person' is out of scope). */
+export const suggestionKindSchema = z.enum(['place', 'theme']);
+export type SuggestionKindDTO = z.infer<typeof suggestionKindSchema>;
+
+/**
+ * One example member of a suggestion — the slim tile the tray card shows so the
+ * user recognises the grouping. A renderer-safe subset of an item (id + media
+ * type + title + a "worth a thumbnail" hint); no path or byte rides along — the
+ * bytes, when any, come back separately via `catalog:thumbnail` (AC-4).
+ */
+export const suggestionExampleSchema = z.strictObject({
+  id: z.uuid(),
+  mediaType: mediaTypeSchema,
+  title: z.string().max(ITEM_CARD_TITLE_MAX_LENGTH).nullable(),
+  hasThumbnail: z.boolean(),
+});
+export type SuggestionExampleDTO = z.infer<typeof suggestionExampleSchema>;
+
+/**
+ * ONE suggested collection awaiting review: its source category (id + kind +
+ * proposed name), the EFFECTIVE member count, and up to {@link
+ * SUGGESTION_EXAMPLES_MAX} example items. Carries `categoryId` (the provenance an
+ * accept records), never a collection id — a suggestion is not yet a collection.
+ */
+export const suggestionSchema = z.strictObject({
+  categoryId: z.uuid(),
+  kind: suggestionKindSchema,
+  name: z.string().max(CATEGORY_NAME_MAX_LENGTH),
+  memberCount: z.number().int().nonnegative(),
+  examples: z.array(suggestionExampleSchema).max(SUGGESTION_EXAMPLES_MAX),
+});
+export type SuggestionDTO = z.infer<typeof suggestionSchema>;
+
+/**
+ * A real, materialised collection a suggestion may be merged INTO — a hand-made
+ * ('user') or already-accepted ('suggested') collection. A 'dismissed' tombstone
+ * is deliberately excluded (member-less, never a target), so an out-of-scope
+ * origin is a hard error.
+ */
+export const suggestionMergeTargetSchema = z.strictObject({
+  collectionId: z.uuid(),
+  name: z.string().max(COLLECTION_NAME_MAX_LENGTH),
+  origin: z.enum(['user', 'suggested']),
+});
+export type SuggestionMergeTargetDTO = z.infer<typeof suggestionMergeTargetSchema>;
+
+/**
+ * The whole review-tray payload: the pending `suggestions` and the real
+ * `collections` a merge may target. Returned by `suggestions:list` and echoed
+ * (refreshed) by every curation action, so the tray repaints from the response
+ * with no manual re-fetch — the same shape `categorize:applyCorrection` uses.
+ */
+export const suggestionsViewSchema = z.strictObject({
+  suggestions: z.array(suggestionSchema),
+  collections: z.array(suggestionMergeTargetSchema),
+});
+export type SuggestionsViewDTO = z.infer<typeof suggestionsViewSchema>;
