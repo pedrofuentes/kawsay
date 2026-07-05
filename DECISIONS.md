@@ -511,8 +511,8 @@ acceptance direction is fixed: categorization + inference run **on-device** (pre
 
 2. **Categorization (people / places / themes) — phased, cheapest local signals first; explainable + correctable.**
    - **Places (cheapest — no new model):** cluster on the **EXIF GPS already catalogued** (`items.gps_lat/gps_lon`,
-     001_initial.sql:69; partial `idx_items_gps`), reverse-geocoded **with a bundled offline gazetteer** (MISSION §7:
-     "no online maps").
+     001_initial.sql:69; partial `idx_items_gps`), reverse-geocoded **with a bundled offline gazetteer** (PRD §7,
+     MISSION §5: "no online maps").
    - **Themes (reuse the text embedder):** cluster the `item_embeddings` from Decision 1 — no extra model.
    - **People/faces (heaviest — later, separately gated):** photo **face-embeddings** need a **separate, heavier
      face-detection + embedding model** and create a **biometric** privacy surface (a deceased person's face vectors)
