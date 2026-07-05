@@ -186,6 +186,96 @@ describe('clusterThemes — threshold-agglomerative cosine clustering (ADR-0030 
     );
   });
 
+  // ── #316: non-finite threshold / minClusterSize must throw (not silently return empty) ─────
+
+  it('throws when threshold is NaN (not silently returns empty result)', () => {
+    expect(() =>
+      clusterThemes([item('a', vec(1, 0)), item('b', vec(1, 0))], { threshold: NaN }),
+    ).toThrow(/threshold.*finite|non-finite.*threshold|threshold/i);
+  });
+
+  it('throws when threshold is Infinity', () => {
+    expect(() =>
+      clusterThemes([item('a', vec(1, 0)), item('b', vec(1, 0))], {
+        threshold: Number.POSITIVE_INFINITY,
+      }),
+    ).toThrow(/threshold.*finite|non-finite.*threshold|threshold/i);
+  });
+
+  it('throws when threshold is -Infinity', () => {
+    expect(() =>
+      clusterThemes([item('a', vec(1, 0)), item('b', vec(1, 0))], {
+        threshold: Number.NEGATIVE_INFINITY,
+      }),
+    ).toThrow(/threshold.*finite|non-finite.*threshold|threshold/i);
+  });
+
+  it('throws when minClusterSize is NaN (not silently returns empty result)', () => {
+    expect(() =>
+      clusterThemes([item('a', vec(1, 0)), item('b', vec(1, 0))], { minClusterSize: NaN }),
+    ).toThrow(/minClusterSize.*finite|non-finite.*minClusterSize|minClusterSize/i);
+  });
+
+  it('throws when minClusterSize is Infinity', () => {
+    expect(() =>
+      clusterThemes([item('a', vec(1, 0)), item('b', vec(1, 0))], {
+        minClusterSize: Number.POSITIVE_INFINITY,
+      }),
+    ).toThrow(/minClusterSize.*finite|non-finite.*minClusterSize|minClusterSize/i);
+  });
+
+  it('existing clamp behavior for finite values ≤ 1 is unchanged (clamps, never throws)', () => {
+    // 0, -5, 1.7 are all finite — must clamp to ≥ 1, not throw.
+    const twoIdentical = [item('a', vec(1, 0)), item('b', vec(1, 0))];
+    expect(() => clusterThemes(twoIdentical, { minClusterSize: 0 })).not.toThrow();
+    expect(() => clusterThemes(twoIdentical, { minClusterSize: -5 })).not.toThrow();
+    expect(() => clusterThemes(twoIdentical, { minClusterSize: 1.7 })).not.toThrow();
+  });
+
+  // ── #317: non-finite vector element must throw (not silently prune the item) ──────────────
+
+  it('throws when a vector element is NaN (non-finite element, silent prune is forbidden)', () => {
+    expect(() => clusterThemes([item('a', vec(1, 0)), item('b', vec(NaN, 0))])).toThrow(
+      /finite|NaN|non-finite/i,
+    );
+  });
+
+  it('throws when a vector element is Infinity', () => {
+    expect(() =>
+      clusterThemes([item('a', vec(1, 0)), item('b', vec(Number.POSITIVE_INFINITY, 0))]),
+    ).toThrow(/finite|NaN|non-finite/i);
+  });
+
+  it('throws when a vector element is -Infinity', () => {
+    expect(() =>
+      clusterThemes([item('a', vec(1, 0)), item('b', vec(Number.NEGATIVE_INFINITY, 0))]),
+    ).toThrow(/finite|NaN|non-finite/i);
+  });
+
+  // ── #319: tie-break determinism — strict `>` means earliest-created cluster wins a tie ────
+
+  it('tie-break: equidistant item joins earliest-created (smallest-first-id) cluster, not the later one', () => {
+    // Items sorted by id: a1, b1, c1.
+    // a1 (1,0) → opens cluster A.  b1 (0,1) → cos to A = 0 < threshold → opens cluster B.
+    // c1 (√½, √½) has cosine √½ to both centroids — an exact tie at 45°.
+    // Strict `>` means cluster A (index 0, found first) retains bestIndex → c1 joins A.
+    // If `>` were `>=`, cluster B would overwrite bestIndex and c1 would join B instead.
+    const sqrt2inv = Math.SQRT1_2; // 1/√2 ≈ 0.7071
+    const items = [
+      item('a1', vec(1, 0)),
+      item('b1', vec(0, 1)),
+      item('c1', vec(sqrt2inv, sqrt2inv)),
+    ];
+    const result = clusterThemes(items, { threshold: 0.7, minClusterSize: 1 });
+    // c1 must be in the same cluster as a1 (cluster A), never with b1.
+    const clusterA = result.clusters.find((cl) => cl.members.some((m) => m.id === 'a1'));
+    const clusterB = result.clusters.find((cl) => cl.members.some((m) => m.id === 'b1'));
+    expect(clusterA).toBeDefined();
+    expect(clusterB).toBeDefined();
+    expect(clusterA?.members.map((m) => m.id)).toContain('c1');
+    expect(clusterB?.members.map((m) => m.id)).not.toContain('c1');
+  });
+
   it('exposes documented defaults and applies them when options are omitted', () => {
     expect(THEME_CLUSTER_DEFAULTS.threshold).toBeGreaterThan(0);
     expect(THEME_CLUSTER_DEFAULTS.threshold).toBeLessThanOrEqual(1);
