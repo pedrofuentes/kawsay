@@ -90,8 +90,11 @@ export interface WorkerThreadClusterTransportOptions {
 /**
  * A {@link ClusterTransport} that runs each request on a fresh worker_thread: post the
  * request, resolve on the `result` reply, reject on an `error` reply / thread `error` /
- * premature `exit`, and always terminate the worker afterward. One worker per run keeps
- * the seam simple — clustering is an occasional, bursty batch job, not a hot path.
+ * premature `exit` / an unrecognized reply type, and always terminate the worker
+ * afterward. One worker per run keeps the seam simple — clustering is an occasional,
+ * bursty batch job, not a hot path. The unrecognized-reply guard is defensive: a
+ * misbehaving worker entry (post-#270) MUST NOT be able to wedge the orchestrator's
+ * drain by sending a reply the host doesn't understand.
  */
 export function createWorkerThreadClusterTransport(
   options: WorkerThreadClusterTransportOptions,
@@ -113,6 +116,16 @@ export function createWorkerThreadClusterTransport(
           const reply = value as ClusterWorkerReply;
           if (reply.type === 'result') finish(() => resolve(reply.response));
           else if (reply.type === 'error') finish(() => reject(new Error(reply.message)));
+          else {
+            // Defensive: an unrecognized reply type (a malformed / incompatible worker
+            // entry) MUST still settle the promise — otherwise the orchestrator's drain
+            // hangs forever and every later run() returns `busy`. Terminate + reject.
+            const kind =
+              reply && typeof (reply as { type?: unknown }).type === 'string'
+                ? (reply as { type: string }).type
+                : typeof reply;
+            finish(() => reject(new Error(`cluster worker sent unrecognized reply type: ${kind}`)));
+          }
         });
         worker.on('error', (error) => finish(() => reject(error)));
         worker.on('exit', (code) =>
