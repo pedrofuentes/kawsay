@@ -1,0 +1,199 @@
+import { createHash } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import {
+  clusterThemes,
+  themeSourceKey,
+  THEME_CLUSTER_DEFAULTS,
+  type ThemeClusterItem,
+  type ThemeClusteringResult,
+} from '../../electron/main/categorize/themes-cluster';
+
+// Build a float32 vector from plain numbers (test ergonomics, as semantic.test.ts).
+const vec = (...values: number[]): Float32Array => Float32Array.from(values);
+const item = (id: string, vector: Float32Array): ThemeClusterItem => ({ id, vector });
+
+// A 2-D unit vector whose cosine similarity to (1, 0) is EXACTLY `c`:
+//   cos((1,0), (c, √(1−c²))) = c / √(c² + (1−c²)) = c.
+// Lets a test pin a pair's similarity just above / below τ with a wide margin.
+const unitAtCos = (c: number): Float32Array => vec(c, Math.sqrt(Math.max(0, 1 - c * c)));
+
+const membership = (result: ThemeClusteringResult): string[][] =>
+  result.clusters.map((cluster) => cluster.members.map((member) => member.id));
+
+describe('clusterThemes — threshold-agglomerative cosine clustering (ADR-0030 Decision 3)', () => {
+  it('returns no clusters for empty input (graceful degrade, never crashes)', () => {
+    expect(clusterThemes([])).toEqual({ clusters: [] });
+    expect(clusterThemes([], { threshold: 0.5, minClusterSize: 1 })).toEqual({ clusters: [] });
+  });
+
+  it('groups near-identical vectors and separates dissimilar ones', () => {
+    const items = [
+      item('a1', vec(1, 0, 0)),
+      item('a2', vec(0.99, 0.01, 0)),
+      item('a3', vec(0.98, 0.02, 0)),
+      item('b1', vec(0, 0, 1)),
+      item('b2', vec(0.01, 0, 0.99)),
+      item('b3', vec(0.02, 0, 0.98)),
+    ];
+    const result = clusterThemes(items, { threshold: 0.82, minClusterSize: 1 });
+    expect(membership(result)).toEqual([
+      ['a1', 'a2', 'a3'],
+      ['b1', 'b2', 'b3'],
+    ]);
+    expect(result.clusters.map((c) => c.size)).toEqual([3, 3]);
+  });
+
+  it('merges a pair whose cosine is just above τ', () => {
+    const result = clusterThemes([item('p1', vec(1, 0)), item('p2', unitAtCos(0.83))], {
+      threshold: 0.82,
+      minClusterSize: 1,
+    });
+    expect(membership(result)).toEqual([['p1', 'p2']]);
+  });
+
+  it('splits a pair whose cosine is just below τ', () => {
+    const result = clusterThemes([item('p1', vec(1, 0)), item('p2', unitAtCos(0.81))], {
+      threshold: 0.82,
+      minClusterSize: 1,
+    });
+    expect(membership(result)).toEqual([['p1'], ['p2']]);
+  });
+
+  it('treats τ as inclusive (cosine ≥ τ merges): identical vectors merge at τ = 1', () => {
+    const result = clusterThemes([item('p1', vec(1, 0)), item('p2', vec(1, 0))], {
+      threshold: 1,
+      minClusterSize: 1,
+    });
+    expect(membership(result)).toEqual([['p1', 'p2']]);
+  });
+
+  it('drops clusters smaller than minClusterSize (pruning)', () => {
+    const items = [
+      item('a1', vec(1, 0, 0)),
+      item('a2', vec(1, 0, 0)),
+      item('a3', vec(1, 0, 0)),
+      item('lonely', vec(0, 1, 0)),
+    ];
+    expect(membership(clusterThemes(items, { threshold: 0.82, minClusterSize: 2 }))).toEqual([
+      ['a1', 'a2', 'a3'],
+    ]);
+    // With no effective minimum, the singleton survives as its own cluster.
+    expect(clusterThemes(items, { threshold: 0.82, minClusterSize: 1 }).clusters).toHaveLength(2);
+  });
+
+  it('clamps minClusterSize below 1 up to 1 (no pruning of singletons)', () => {
+    const result = clusterThemes([item('solo', vec(1, 0))], { threshold: 0.82, minClusterSize: 0 });
+    expect(membership(result)).toEqual([['solo']]);
+  });
+
+  it('is deterministic: identical output regardless of input order or repeated runs', () => {
+    const base = [
+      item('a1', vec(1, 0, 0)),
+      item('a2', vec(0.99, 0.01, 0)),
+      item('b1', vec(0, 1, 0)),
+      item('b2', vec(0.01, 0.99, 0)),
+      item('c1', vec(0, 0, 1)),
+      item('c2', vec(0, 0.01, 0.99)),
+    ];
+    const shuffled = [base[4], base[0], base[3], base[1], base[5], base[2]];
+    const opts = { threshold: 0.82, minClusterSize: 2 };
+
+    const run1 = clusterThemes(base, opts);
+    const run2 = clusterThemes(base, opts);
+    const run3 = clusterThemes(shuffled, opts);
+
+    expect(run2).toEqual(run1);
+    expect(run3).toEqual(run1);
+    expect(membership(run1)).toEqual([
+      ['a1', 'a2'],
+      ['b1', 'b2'],
+      ['c1', 'c2'],
+    ]);
+  });
+
+  it('reports each member’s cosine similarity to the final cluster centroid', () => {
+    const result = clusterThemes(
+      [item('a1', vec(1, 0)), item('a2', vec(1, 0)), item('a3', vec(1, 0))],
+      { threshold: 0.5, minClusterSize: 1 },
+    );
+    expect(result.clusters).toHaveLength(1);
+    for (const member of result.clusters[0].members) {
+      expect(member.similarity).toBeCloseTo(1, 5);
+    }
+    // Centroid of three identical unit vectors is that unit vector.
+    expect(result.clusters[0].centroid[0]).toBeCloseTo(1, 5);
+    expect(result.clusters[0].centroid[1]).toBeCloseTo(0, 5);
+  });
+
+  it('computes the centroid as the elementwise mean of member vectors', () => {
+    const v1 = vec(1, 0);
+    const v2 = unitAtCos(0.99);
+    const result = clusterThemes([item('a1', v1), item('a2', v2)], {
+      threshold: 0.9,
+      minClusterSize: 1,
+    });
+    expect(result.clusters).toHaveLength(1);
+    expect(result.clusters[0].centroid[0]).toBeCloseTo((v1[0] + v2[0]) / 2, 5);
+    expect(result.clusters[0].centroid[1]).toBeCloseTo((v1[1] + v2[1]) / 2, 5);
+  });
+
+  it('throws on inconsistent vector dimensions (a programming error, per semantic.ts ethos)', () => {
+    expect(() => clusterThemes([item('a', vec(1, 0, 0)), item('b', vec(1, 0))])).toThrow(
+      /dimension/i,
+    );
+  });
+
+  it('throws on a zero-length vector', () => {
+    expect(() => clusterThemes([item('a', vec())])).toThrow(/dimension|non-empty|length/i);
+  });
+
+  it('throws on duplicate item ids (would make membership nondeterministic)', () => {
+    expect(() => clusterThemes([item('dup', vec(1, 0)), item('dup', vec(0, 1))])).toThrow(
+      /duplicate|unique/i,
+    );
+  });
+
+  it('exposes documented defaults and applies them when options are omitted', () => {
+    expect(THEME_CLUSTER_DEFAULTS.threshold).toBeGreaterThan(0);
+    expect(THEME_CLUSTER_DEFAULTS.threshold).toBeLessThanOrEqual(1);
+    expect(THEME_CLUSTER_DEFAULTS.minClusterSize).toBeGreaterThanOrEqual(1);
+
+    const n = THEME_CLUSTER_DEFAULTS.minClusterSize;
+    const items = Array.from({ length: n }, (_, i) => item(`d${i}`, vec(1, 0, 0)));
+    const kept = clusterThemes(items); // no options ⇒ defaults
+    expect(kept.clusters).toHaveLength(1);
+    expect(kept.clusters[0].size).toBe(n);
+    // One member short of the default minimum ⇒ pruned to nothing.
+    expect(clusterThemes(items.slice(0, n - 1)).clusters).toHaveLength(0);
+  });
+});
+
+describe('themeSourceKey — deterministic, membership-derived re-cluster signature', () => {
+  it('is "theme:" + sha256 hex of the members’ ids sorted ascending and joined by "\\n"', () => {
+    const items = [item('z9', vec(1, 0, 0)), item('a1', vec(1, 0, 0)), item('m5', vec(1, 0, 0))];
+    const result = clusterThemes(items, { threshold: 0.82, minClusterSize: 1 });
+    expect(result.clusters).toHaveLength(1);
+    const expected =
+      'theme:' + createHash('sha256').update(['a1', 'm5', 'z9'].join('\n')).digest('hex');
+    expect(result.clusters[0].sourceKey).toBe(expected);
+  });
+
+  it('is order-independent, namespaced, and collision-distinct on membership', () => {
+    expect(themeSourceKey(['b', 'a', 'c'])).toBe(themeSourceKey(['a', 'b', 'c']));
+    expect(themeSourceKey(['a', 'b'])).toMatch(/^theme:[0-9a-f]{64}$/);
+    expect(themeSourceKey(['a', 'b'])).not.toBe(themeSourceKey(['a', 'c']));
+  });
+
+  it('yields the same source_key for the same membership across input orderings (idempotent)', () => {
+    const opts = { threshold: 0.5, minClusterSize: 1 };
+    const forward = clusterThemes(
+      [item('a1', vec(1, 0)), item('a2', vec(1, 0)), item('a3', vec(1, 0))],
+      opts,
+    );
+    const reversed = clusterThemes(
+      [item('a3', vec(1, 0)), item('a1', vec(1, 0)), item('a2', vec(1, 0))],
+      opts,
+    );
+    expect(forward.clusters[0].sourceKey).toBe(reversed.clusters[0].sourceKey);
+  });
+});
