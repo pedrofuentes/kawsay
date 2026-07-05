@@ -312,6 +312,18 @@ export function resolveGazetteerAssetPath(options: ResolveGazetteerOptions): str
   return null;
 }
 
+/**
+ * The BUILD-TIME opt-in gate signal (M4-2h, #270): whether a gazetteer asset (full
+ * or sample) is bundled, so the UI knows whether to even OFFER place/theme
+ * categorization. A pure path-presence probe — it never opens the network nor parses
+ * a byte — mirroring `isEmbedModelPublished()` for smart search. Places need this
+ * bundled asset; themes additionally need the opted-in embedder (resolved elsewhere),
+ * degrading to places-only when the embedder is absent.
+ */
+export function isGazetteerBundled(options: ResolveGazetteerOptions): boolean {
+  return resolveGazetteerAssetPath(options) !== null;
+}
+
 /** Collaborators for {@link loadGazetteer} (all injectable). */
 export interface LoadGazetteerOptions extends ResolveGazetteerOptions {
   /** File reader (injected for tests); defaults to `fs.readFileSync(path, 'utf8')`. */

@@ -7,6 +7,7 @@
 // ever handled here (AC-4).
 import type { ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
+import { CategoryChips } from '@renderer/components/CategoryChips';
 import { Icon } from '@renderer/components/Icon';
 import type { IconName } from '@renderer/components/Icon';
 import { ItemTranscript } from '@renderer/components/ItemTranscript';
@@ -98,6 +99,7 @@ export function ItemView(): ReactElement | null {
       </header>
 
       {transcribable ? <ItemTranscript item={item} /> : null}
+      <CategoryChips item={item} />
     </section>
   );
 }

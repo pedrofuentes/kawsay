@@ -533,6 +533,66 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(() => s.transcription()).toThrow();
   });
 
+  it('exposes a categorization library port built from the injected factory (#270)', () => {
+    const seen: { embedderAvailable: boolean }[] = [];
+    const port = {
+      listForItem: vi.fn(() => []),
+      applyCorrection: vi.fn(() => []),
+      start: vi.fn(() =>
+        Promise.resolve({
+          outcome: 'idle' as const,
+          reason: null,
+          counts: { categorized: 0, skipped: 0, failed: 0, inFlight: 0 },
+        }),
+      ),
+      cancel: vi.fn(() => ({ cancelled: false })),
+      status: vi.fn(() => ({
+        state: 'idle' as const,
+        counts: { categorized: 0, skipped: 0, failed: 0, inFlight: 0 },
+        lastItem: null,
+      })),
+    };
+    const s = createCatalogSession({
+      coordinator: coordinator.coordinator,
+      resolveMediaBinaries,
+      // The embedder is AVAILABLE, so the factory must observe a themes-capable gate.
+      resolveEmbedder: () => ({ available: true, embed: async () => [] }),
+      categorization: (ctx) => {
+        seen.push({ embedderAvailable: ctx.embedderAvailable() });
+        return port;
+      },
+    });
+    try {
+      s.createLibrary({ path: root });
+      // The port is built once per open library, threaded the live DB + embedder gate.
+      expect(s.categorization()).toBe(port);
+      expect(seen).toEqual([{ embedderAvailable: true }]);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('refuses to hand out a categorization port when no library is open (#270)', () => {
+    const s = createCatalogSession({
+      coordinator: coordinator.coordinator,
+      resolveMediaBinaries,
+      categorization: () => {
+        throw new Error('factory must not run without an open library');
+      },
+    });
+    expect(() => s.categorization()).toThrow();
+  });
+
+  it('refuses to hand out a categorization port when no factory is injected (#270)', () => {
+    const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
+    s.createLibrary({ path: root });
+    try {
+      expect(() => s.categorization()).toThrow();
+    } finally {
+      s.dispose();
+    }
+  });
+
   it('getTranscript returns a finished transcript: status done + words + detected language (#136)', async () => {
     session.createLibrary({ path: root });
     const id = seedTranscribedAudio(join(root, 'catalog.sqlite3'), {

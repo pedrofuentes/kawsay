@@ -7,6 +7,12 @@ import {
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATEGORIZE_APPLY_CORRECTION,
+  CATEGORIZE_CANCEL,
+  CATEGORIZE_LIST_FOR_ITEM,
+  CATEGORIZE_SET_CONSENT,
+  CATEGORIZE_START,
+  CATEGORIZE_STATUS,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
@@ -22,6 +28,7 @@ import {
   TRANSCRIPTION_STATUS,
 } from '@shared/ipc/contract';
 import {
+  CATEGORIZE_PROGRESS,
   IMPORT_PROGRESS,
   SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
@@ -36,6 +43,14 @@ import {
   handleTranscriptionStatus,
 } from './ipc/handlers/transcription-run';
 import { handleSmartSearchEnable, handleSmartSearchStatus } from './ipc/handlers/smart-search';
+import {
+  handleCategorizationApplyCorrection,
+  handleCategorizationCancel,
+  handleCategorizationListForItem,
+  handleCategorizationSetConsent,
+  handleCategorizationStart,
+  handleCategorizationStatus,
+} from './ipc/handlers/categorize';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
@@ -53,6 +68,11 @@ import {
   type SmartSearchController,
 } from './search/smart-search-model';
 import { isEmbedModelPublished } from './search/embed-model-source';
+import { createCategorizationConsentStore } from './categorize/categorization-consent';
+import { createCategorizationLibraryPort } from './categorize/categorization-library';
+import { isGazetteerBundled, loadGazetteer } from './categorize/gazetteer';
+import { createInlineClusterTransport } from './categorize/categorization-worker';
+import { resolveCategorizationStatus } from './categorize/categorization-orchestrator';
 import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-service';
 import { createModelDownloader } from './transcription/model-download';
 import { createElectronModelFetcher } from './transcription/electron-net-fetcher';
@@ -168,6 +188,33 @@ function requireSmartSearchController(): SmartSearchController {
   return smartSearchController;
 }
 
+// The durable categorization opt-in store (M4-2h / #270), built in bootstrap()
+// (it needs the `userData` path). Independent of transcription + smart search — its
+// OWN consent file + key — so opting in to one never implies another. Read lazily by
+// the status/consent handlers and the per-library run gate at invoke time.
+let categorizationConsentStore: ConsentStore | undefined;
+function requireCategorizationConsentStore(): ConsentStore {
+  if (categorizationConsentStore === undefined) {
+    throw new Error('the categorization consent store is not initialised yet');
+  }
+  return categorizationConsentStore;
+}
+
+// The bundled-asset resolution inputs shared by the categorization factory + the
+// `offered` gate. A thunk because it reads app/electron globals that only exist
+// post-`whenReady`; called at library-open / invoke time, never at module load.
+function gazetteerResolveOptions(): {
+  isPackaged: boolean;
+  resourcesPath: string;
+  projectRoot: string;
+} {
+  return {
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    projectRoot: app.getAppPath(),
+  };
+}
+
 // The thumbnail decoders (U4), injected into the catalog session so it stays
 // Electron-free and unit-testable. Photos use Electron's built-in `nativeImage`
 // (NO new dependency); videos reuse the existing ffmpeg wrapper to pipe a single
@@ -237,6 +284,25 @@ const catalogSession = createCatalogSession({
       resourcesPath: process.resourcesPath,
       projectRoot: app.getAppPath(),
     }),
+  // The per-library categorization port (M4-2h / #270), built once per open library.
+  // Places need only the bundled gazetteer; themes additionally need the opted-in
+  // embedder, so the gate degrades to places-only when the embedder is unavailable.
+  // The cluster passes run through the deterministic INLINE transport — real
+  // worker-thread packaging is a deferred build-config concern (out of scope here),
+  // so this wires the transport abstraction without spawning a thread.
+  categorization: ({ db, embedderAvailable }) =>
+    createCategorizationLibraryPort({
+      db,
+      gazetteer: loadGazetteer(gazetteerResolveOptions()),
+      transport: createInlineClusterTransport(),
+      getStatus: () =>
+        resolveCategorizationStatus({
+          optedIn: requireCategorizationConsentStore().isOptedIn(),
+          placesAvailable: isGazetteerBundled(gazetteerResolveOptions()),
+          themesAvailable: embedderAvailable(),
+        }),
+      onProgress: (snapshot) => emitEvent(CATEGORIZE_PROGRESS, snapshot),
+    }),
 });
 
 // The native open-dialog capability (W2): always parented to the focused window
@@ -287,6 +353,25 @@ const ipcHandlers: IpcHandlerMap = {
       // install it — read lazily so it reflects bootstrap()'s downloader result.
       isOffered: () => isEmbedModelPublished() && smartSearchDownloaderSupported,
     }),
+  [CATEGORIZE_STATUS]: () =>
+    handleCategorizationStatus({
+      consent: requireCategorizationConsentStore(),
+      // `offered` reveals the opt-in UI ONLY once the gazetteer asset is bundled.
+      isOffered: () => isGazetteerBundled(gazetteerResolveOptions()),
+    }),
+  [CATEGORIZE_SET_CONSENT]: (request) =>
+    handleCategorizationSetConsent({ consent: requireCategorizationConsentStore() }, request),
+  [CATEGORIZE_LIST_FOR_ITEM]: (request) =>
+    handleCategorizationListForItem({ getLibrary: () => catalogSession.categorization() }, request),
+  [CATEGORIZE_APPLY_CORRECTION]: (request) =>
+    handleCategorizationApplyCorrection(
+      { getLibrary: () => catalogSession.categorization() },
+      request,
+    ),
+  [CATEGORIZE_START]: () =>
+    handleCategorizationStart({ getLibrary: () => catalogSession.categorization() }),
+  [CATEGORIZE_CANCEL]: () =>
+    handleCategorizationCancel({ getLibrary: () => catalogSession.categorization() }),
 };
 
 function createMainWindow(): void {
@@ -400,6 +485,13 @@ async function bootstrap(): Promise<void> {
   smartSearchController = createSmartSearchController({
     consent: smartSearchConsentStore,
     downloader: smartSearchDownloader,
+  });
+
+  // The durable categorization opt-in (M4-2h / #270): its OWN consent file + key, so
+  // opting in never implies transcription or smart search. The default is OPTED-OUT,
+  // so no place/theme clustering runs until an explicit, well-formed opt-in.
+  categorizationConsentStore = createCategorizationConsentStore({
+    filePath: join(app.getPath('userData'), 'categorization-consent.json'),
   });
 
   registerIpcHandlers(ipcMain, ipcHandlers, senderOptions);

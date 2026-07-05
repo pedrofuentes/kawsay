@@ -11,6 +11,12 @@ import {
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATEGORIZE_APPLY_CORRECTION,
+  CATEGORIZE_CANCEL,
+  CATEGORIZE_LIST_FOR_ITEM,
+  CATEGORIZE_SET_CONSENT,
+  CATEGORIZE_START,
+  CATEGORIZE_STATUS,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
@@ -29,6 +35,7 @@ import {
   type IpcResponse,
 } from '@shared/ipc/contract';
 import {
+  CATEGORIZE_PROGRESS,
   IMPORT_PROGRESS,
   SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
@@ -82,5 +89,12 @@ export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSub
     enableSmartSearch: () => invoke(SMART_SEARCH_DOWNLOAD_MODEL, {}),
     onSmartSearchModelDownloadProgress: (listener) =>
       subscribe(SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS, listener),
+    getCategorizationStatus: () => invoke(CATEGORIZE_STATUS, {}),
+    setCategorizationConsent: (input) => invoke(CATEGORIZE_SET_CONSENT, input),
+    listItemCategories: (input) => invoke(CATEGORIZE_LIST_FOR_ITEM, input),
+    applyCategoryCorrection: (input) => invoke(CATEGORIZE_APPLY_CORRECTION, input),
+    startCategorization: () => invoke(CATEGORIZE_START, {}),
+    cancelCategorization: () => invoke(CATEGORIZE_CANCEL, {}),
+    onCategorizationProgress: (listener) => subscribe(CATEGORIZE_PROGRESS, listener),
   };
 }

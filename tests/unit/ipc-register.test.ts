@@ -5,6 +5,12 @@ import {
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATEGORIZE_APPLY_CORRECTION,
+  CATEGORIZE_CANCEL,
+  CATEGORIZE_LIST_FOR_ITEM,
+  CATEGORIZE_SET_CONSENT,
+  CATEGORIZE_START,
+  CATEGORIZE_STATUS,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
@@ -70,6 +76,16 @@ const otherHandlers = {
     text: null,
     segments: [],
   }),
+  [CATEGORIZE_STATUS]: () => ({ optedIn: false, offered: false }),
+  [CATEGORIZE_SET_CONSENT]: () => ({ optedIn: false }),
+  [CATEGORIZE_LIST_FOR_ITEM]: () => [],
+  [CATEGORIZE_APPLY_CORRECTION]: () => [],
+  [CATEGORIZE_START]: () => ({
+    outcome: 'idle' as const,
+    reason: null,
+    counts: { categorized: 0, skipped: 0, failed: 0, inFlight: 0 },
+  }),
+  [CATEGORIZE_CANCEL]: () => ({ cancelled: false }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };

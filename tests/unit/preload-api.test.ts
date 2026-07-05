@@ -6,6 +6,12 @@ import {
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATEGORIZE_APPLY_CORRECTION,
+  CATEGORIZE_CANCEL,
+  CATEGORIZE_LIST_FOR_ITEM,
+  CATEGORIZE_SET_CONSENT,
+  CATEGORIZE_START,
+  CATEGORIZE_STATUS,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
@@ -21,6 +27,7 @@ import {
   TRANSCRIPTION_STATUS,
 } from '@shared/ipc/contract';
 import {
+  CATEGORIZE_PROGRESS,
   IMPORT_PROGRESS,
   SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
@@ -64,6 +71,16 @@ function fakeInvoke() {
       text: 'Hola, te quiero mucho.',
       segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
     },
+    [CATEGORIZE_STATUS]: { optedIn: false, offered: true },
+    [CATEGORIZE_SET_CONSENT]: { optedIn: true },
+    [CATEGORIZE_LIST_FOR_ITEM]: [],
+    [CATEGORIZE_APPLY_CORRECTION]: [],
+    [CATEGORIZE_START]: {
+      outcome: 'idle',
+      reason: null,
+      counts: { categorized: 0, skipped: 0, failed: 0, inFlight: 0 },
+    },
+    [CATEGORIZE_CANCEL]: { cancelled: true },
   };
   const invoke = vi.fn((channel: string, payload: unknown) => {
     calls.push({ channel, payload });
@@ -96,6 +113,16 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     const transcript = await api.getTranscript({ id: UUID });
     const smartStatus = await api.getSmartSearchStatus();
     const smartEnable = await api.enableSmartSearch();
+    const catStatus = await api.getCategorizationStatus();
+    const catConsent = await api.setCategorizationConsent({ optedIn: true });
+    const catList = await api.listItemCategories({ itemId: UUID });
+    const catCorrection = await api.applyCategoryCorrection({
+      kind: 'confirm',
+      itemId: UUID,
+      categoryId: UUID,
+    });
+    const catStart = await api.startCategorization();
+    const catCancel = await api.cancelCategorization();
 
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
@@ -117,6 +144,16 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     });
     expect(smartStatus).toEqual({ optedIn: true, modelReady: false, offered: true });
     expect(smartEnable).toEqual({ outcome: 'download-started' });
+    expect(catStatus).toEqual({ optedIn: false, offered: true });
+    expect(catConsent).toEqual({ optedIn: true });
+    expect(catList).toEqual([]);
+    expect(catCorrection).toEqual([]);
+    expect(catStart).toEqual({
+      outcome: 'idle',
+      reason: null,
+      counts: { categorized: 0, skipped: 0, failed: 0, inFlight: 0 },
+    });
+    expect(catCancel).toEqual({ cancelled: true });
     expect(calls.map((c) => c.channel)).toEqual([
       APP_GET_VERSION,
       LIBRARY_CREATE,
@@ -136,6 +173,12 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       CATALOG_GET_TRANSCRIPT,
       SMART_SEARCH_MODEL_STATUS,
       SMART_SEARCH_DOWNLOAD_MODEL,
+      CATEGORIZE_STATUS,
+      CATEGORIZE_SET_CONSENT,
+      CATEGORIZE_LIST_FOR_ITEM,
+      CATEGORIZE_APPLY_CORRECTION,
+      CATEGORIZE_START,
+      CATEGORIZE_CANCEL,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
@@ -149,6 +192,12 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(calls[15].payload).toEqual({ id: UUID });
     expect(calls[16].payload).toEqual({});
     expect(calls[17].payload).toEqual({});
+    expect(calls[18].payload).toEqual({});
+    expect(calls[19].payload).toEqual({ optedIn: true });
+    expect(calls[20].payload).toEqual({ itemId: UUID });
+    expect(calls[21].payload).toEqual({ kind: 'confirm', itemId: UUID, categoryId: UUID });
+    expect(calls[22].payload).toEqual({});
+    expect(calls[23].payload).toEqual({});
   });
 
   it('wires onModelDownloadProgress onto the model-download event subscription', () => {
@@ -203,24 +252,42 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(returned).toBe(unsubscribe);
   });
 
+  it('wires onCategorizationProgress onto the categorize:progress event subscription (#270)', () => {
+    const { invoke } = fakeInvoke();
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn(() => unsubscribe) as never;
+    const api = createKawsayApi(invoke, subscribe);
+    const listener = () => {};
+
+    const returned = api.onCategorizationProgress(listener);
+
+    expect(subscribe).toHaveBeenCalledWith(CATEGORIZE_PROGRESS, listener);
+    expect(returned).toBe(unsubscribe);
+  });
+
   it('exposes ONLY the typed methods — no Node primitives leak through the bridge', () => {
     const { invoke } = fakeInvoke();
     const api = createKawsayApi(invoke, vi.fn(() => () => {}) as never);
 
     expect(Object.keys(api).sort()).toEqual(
       [
+        'applyCategoryCorrection',
+        'cancelCategorization',
         'cancelImport',
         'cancelTranscription',
         'createLibrary',
         'downloadTranscriptionModel',
         'enableSmartSearch',
         'getAppVersion',
+        'getCategorizationStatus',
         'getSmartSearchStatus',
         'getThumbnail',
         'getTimeline',
         'getTranscript',
         'getTranscriptionStatus',
         'isTranscriptionModelReady',
+        'listItemCategories',
+        'onCategorizationProgress',
         'onImportProgress',
         'onModelDownloadProgress',
         'onSmartSearchModelDownloadProgress',
@@ -229,6 +296,8 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'openFile',
         'openLibrary',
         'searchCatalog',
+        'setCategorizationConsent',
+        'startCategorization',
         'startImport',
         'startTranscription',
       ].sort(),

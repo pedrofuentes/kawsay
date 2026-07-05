@@ -273,3 +273,164 @@ export const transcriptViewSchema = z.strictObject({
   segments: z.array(transcriptSegmentSchema).max(TRANSCRIPT_SEGMENTS_MAX),
 });
 export type TranscriptViewDTO = z.infer<typeof transcriptViewSchema>;
+
+// ── Explainable categorization (M4-2h, #270 — ADR-0030 / AC-30·33) ────────────
+//
+// The renderer-facing projection of the categorizer (#264/#269): per-item
+// explainable CHIPS (place/theme groupings with WHY + HOW-SURE), the opt-in gate
+// snapshot, and the run result/snapshot. Like the transcription DTOs these carry
+// no paths, no vectors, no gazetteer bytes — only the calm, correctable facts the
+// item view paints. The enums mirror the categories-repo CHECK domains exactly, so
+// an adversarial payload with an unknown kind/source/signal is a hard error.
+
+/** Defence-in-depth caps for the correctable label + its human explanation. */
+export const CATEGORY_NAME_MAX_LENGTH = 200;
+export const CATEGORY_EXPLANATION_MAX_LENGTH = 512;
+
+/** The category groupings (mirrors the categories.kind CHECK). */
+export const categoryKindSchema = z.enum(['person', 'place', 'theme']);
+export type CategoryKindDTO = z.infer<typeof categoryKindSchema>;
+
+/** Assignment provenance — `user` always wins over `auto` (mirrors the source CHECK). */
+export const assignmentSourceSchema = z.enum(['auto', 'user']);
+export type AssignmentSourceDTO = z.infer<typeof assignmentSourceSchema>;
+
+/** WHY an assignment was made — the machine reason (mirrors the signal CHECK). */
+export const assignmentSignalSchema = z.enum(['gps', 'theme-cluster', 'face-cluster', 'user']);
+export type AssignmentSignalDTO = z.infer<typeof assignmentSignalSchema>;
+
+/**
+ * ONE explainable assignment on an item: the category (id + kind + correctable
+ * name) plus its provenance — the winning `source`, the machine `signal`, the
+ * auto `confidence` in [0, 1] (null for a certain user decision), and the human
+ * `explanation` the chip's tooltip shows.
+ */
+export const itemCategorySchema = z.strictObject({
+  categoryId: z.uuid(),
+  kind: categoryKindSchema,
+  name: z.string().max(CATEGORY_NAME_MAX_LENGTH),
+  source: assignmentSourceSchema,
+  signal: assignmentSignalSchema.nullable(),
+  confidence: z.number().min(0).max(1).nullable(),
+  explanation: z.string().max(CATEGORY_EXPLANATION_MAX_LENGTH).nullable(),
+});
+export type ItemCategoryDTO = z.infer<typeof itemCategorySchema>;
+
+/** The resolved chip list for one item (place before theme, name-ordered). */
+export const itemCategoriesSchema = z.array(itemCategorySchema);
+export type ItemCategoriesDTO = z.infer<typeof itemCategoriesSchema>;
+
+/**
+ * The opt-in gate snapshot the UI reads (M4-2h): whether the user `optedIn`, and
+ * whether the feature is even `offered` yet — true ONLY when the gazetteer asset is
+ * bundled. While `offered` is false the whole opt-in surface stays hidden; while
+ * `optedIn` is false NO chips show and no category_status ever transitions (AC-33).
+ */
+export const categorizationStatusSchema = z.strictObject({
+  optedIn: z.boolean(),
+  offered: z.boolean(),
+});
+export type CategorizationStatusDTO = z.infer<typeof categorizationStatusSchema>;
+
+/**
+ * The live tally for a categorization run: settled items folded into ≥1 category
+ * (`categorized`), signal-less items (`skipped`), failures, and the `inFlight`
+ * corpus being clustered. Every field is a non-negative integer, so an adversarial
+ * negative is refused. Mirrors the orchestrator's `CategorizationRunCounts` exactly.
+ */
+export const categorizationCountsSchema = z.strictObject({
+  categorized: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  inFlight: z.number().int().nonnegative(),
+});
+export type CategorizationCountsDTO = z.infer<typeof categorizationCountsSchema>;
+
+/** The terminal per-item status the UI may show on the last settled item. */
+export const categorizationItemStatusSchema = z.enum(['categorized', 'skipped', 'failed']);
+export type CategorizationItemStatusDTO = z.infer<typeof categorizationItemStatusSchema>;
+
+/** The overall state of a categorization run. */
+export const categorizationRunStateSchema = z.enum(['idle', 'running', 'complete']);
+export type CategorizationRunStateDTO = z.infer<typeof categorizationRunStateSchema>;
+
+/**
+ * A snapshot of a categorization run — the payload of the `categorize:progress`
+ * event. `lastItem` is the most recently settled item (id + status) or null before
+ * anything settled. Mirrors the orchestrator's `CategorizationRunSnapshot`.
+ */
+export const categorizationSnapshotSchema = z.strictObject({
+  state: categorizationRunStateSchema,
+  counts: categorizationCountsSchema,
+  lastItem: z.strictObject({ id: z.uuid(), status: categorizationItemStatusSchema }).nullable(),
+});
+export type CategorizationSnapshotDTO = z.infer<typeof categorizationSnapshotSchema>;
+
+/**
+ * Why a gated `categorize:start` refused — a calm, branchable reason: the user has
+ * not opted in, or there is no place/theme signal at all. Mirrors the orchestrator's
+ * `CategorizationUnavailableReason`.
+ */
+export const categorizationRefusalReasonSchema = z.enum(['not-opted-in', 'no-signal']);
+export type CategorizationRefusalReasonDTO = z.infer<typeof categorizationRefusalReasonSchema>;
+
+/**
+ * The result of `categorize:start`, a DISCRIMINATED UNION on `outcome` that ties
+ * `reason` to the outcome: only `refused` carries a typed refusal reason; every
+ * other outcome (`completed`/`idle`/`cancelled`/`busy`) carries `reason: null`. So
+ * `{outcome:'completed',reason:'not-opted-in'}` is invalid. Mirrors the
+ * orchestrator's `CategorizationRunResult` shape 1:1, so the handler just `.parse()`s
+ * the raw result with no mapping.
+ */
+export const categorizationStartResultSchema = z.discriminatedUnion('outcome', [
+  z.strictObject({
+    outcome: z.literal('completed'),
+    reason: z.null(),
+    counts: categorizationCountsSchema,
+  }),
+  z.strictObject({
+    outcome: z.literal('idle'),
+    reason: z.null(),
+    counts: categorizationCountsSchema,
+  }),
+  z.strictObject({
+    outcome: z.literal('cancelled'),
+    reason: z.null(),
+    counts: categorizationCountsSchema,
+  }),
+  z.strictObject({
+    outcome: z.literal('busy'),
+    reason: z.null(),
+    counts: categorizationCountsSchema,
+  }),
+  z.strictObject({
+    outcome: z.literal('refused'),
+    reason: categorizationRefusalReasonSchema,
+    counts: categorizationCountsSchema,
+  }),
+]);
+export type CategorizationStartResultDTO = z.infer<typeof categorizationStartResultSchema>;
+
+/**
+ * A user correction to apply — a DISCRIMINATED UNION on `kind`: `confirm` and
+ * `remove` pin an (item, category); `reassign` moves an item from one category to
+ * another; `rename` relabels the category. Ids are uuids (never paths) and a rename
+ * `name` is non-empty and bounded, so a malformed correction is a hard error.
+ */
+export const categorizationCorrectionSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('confirm'), itemId: z.uuid(), categoryId: z.uuid() }),
+  z.strictObject({ kind: z.literal('remove'), itemId: z.uuid(), categoryId: z.uuid() }),
+  z.strictObject({
+    kind: z.literal('reassign'),
+    itemId: z.uuid(),
+    fromCategoryId: z.uuid(),
+    toCategoryId: z.uuid(),
+  }),
+  z.strictObject({
+    kind: z.literal('rename'),
+    itemId: z.uuid(),
+    categoryId: z.uuid(),
+    name: z.string().min(1).max(CATEGORY_NAME_MAX_LENGTH),
+  }),
+]);
+export type CategorizationCorrectionDTO = z.infer<typeof categorizationCorrectionSchema>;

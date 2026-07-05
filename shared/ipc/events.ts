@@ -6,7 +6,11 @@
 // dropping any payload that fails — so a malformed event can never reach React.
 
 import { z } from 'zod';
-import { importSummarySchema, transcriptionSnapshotSchema } from './schemas';
+import {
+  categorizationSnapshotSchema,
+  importSummarySchema,
+  transcriptionSnapshotSchema,
+} from './schemas';
 
 /** IPC event: streamed ingestion progress for an in-flight import. */
 export const IMPORT_PROGRESS = 'import:progress';
@@ -96,12 +100,24 @@ export const TRANSCRIPTION_PROGRESS = 'transcription:progress';
 export const transcriptionProgressEventSchema = transcriptionSnapshotSchema;
 export type TranscriptionProgressEvent = z.infer<typeof transcriptionProgressEventSchema>;
 
+/**
+ * IPC event: the polite categorization progress stream (M4-2h, #270). Each tick is
+ * a full {@link categorizationSnapshotSchema} snapshot (state + counts + the last
+ * settled item), so a late subscriber needs no replay — the latest event is the
+ * whole truth. Mirrors the transcription stream's "terminal folded in" shape: a
+ * `complete` state is simply the final snapshot.
+ */
+export const CATEGORIZE_PROGRESS = 'categorize:progress';
+export const categorizationProgressEventSchema = categorizationSnapshotSchema;
+export type CategorizationProgressEvent = z.infer<typeof categorizationProgressEventSchema>;
+
 /** The complete one-way event contract. */
 export const ipcEventContract = {
   [IMPORT_PROGRESS]: importProgressEventSchema,
   [TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS]: modelDownloadProgressEventSchema,
   [SMART_SEARCH_MODEL_DOWNLOAD_PROGRESS]: modelDownloadProgressEventSchema,
   [TRANSCRIPTION_PROGRESS]: transcriptionProgressEventSchema,
+  [CATEGORIZE_PROGRESS]: categorizationProgressEventSchema,
 } as const;
 
 export type IpcEventContract = typeof ipcEventContract;

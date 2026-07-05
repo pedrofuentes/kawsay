@@ -40,6 +40,7 @@ import { EMBED_MODEL_ID, withQueryPrefix, type EmbedderStatus } from '../search/
 import { createTranscriptRepo, type TranscriptRepo } from '../db/transcript-repo';
 import { createTranscriptionLibrary } from '../transcription/transcription-library';
 import type { TranscriptionLibraryPort } from '../transcription/transcription-orchestrator';
+import type { CategorizationLibraryPort } from '../categorize/categorization-library';
 import {
   createThumbnailService,
   type ImageThumbnailer,
@@ -102,6 +103,19 @@ export interface CatalogSessionOptions {
    * slice bundles the binary + model (AC-7 / AC-29 no-regression).
    */
   resolveEmbedder?: () => EmbedderStatus;
+  /**
+   * Build the per-library categorization port (M4-2h / #270), injected as a factory
+   * (like {@link resolveEmbedder}) so the session stays Electron-free and
+   * unit-testable. It is called ONCE per open library with the live catalog `db`
+   * plus a fresh embedder-availability gate — themes need the opted-in embedder,
+   * places need only the bundled gazetteer, so the factory can degrade to
+   * places-only. Omitted ⇒ categorization is unavailable and {@link
+   * CatalogSession.categorization} throws (the pre-wiring / headless default).
+   */
+  categorization?: (ctx: {
+    db: CatalogDatabase;
+    embedderAvailable: () => boolean;
+  }) => CategorizationLibraryPort;
 }
 
 export interface CatalogSession {
@@ -128,6 +142,12 @@ export interface CatalogSession {
   cancelImport(input: { jobId: string }): { cancelled: boolean };
   /** The host-side transcription library port for the OPEN library (#157). */
   transcription(): TranscriptionLibraryPort;
+  /**
+   * The host-side categorization library port for the OPEN library (#270). Throws a
+   * {@link CatalogSessionError} when no library is open OR no categorization factory
+   * was injected (the pre-wiring / headless default).
+   */
+  categorization(): CategorizationLibraryPort;
   /** Close the open library and tear down every in-flight import (window-close). */
   dispose(): void;
 }
@@ -140,6 +160,8 @@ interface OpenLibrary {
   thumbnails: ThumbnailService;
   transcripts: TranscriptRepo;
   transcription: TranscriptionLibraryPort;
+  /** The categorization port, or undefined when no factory was injected (#270). */
+  categorization: CategorizationLibraryPort | undefined;
 }
 
 const timelineCursorSchema = z.strictObject({
@@ -244,7 +266,21 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       catalog: repo,
       transcripts,
     });
-    current = { summary, db, repo, embeddings, thumbnails, transcripts, transcription };
+    // Built once per open library (#270), threaded the live DB + a fresh
+    // embedder-availability gate so the factory can degrade themes to places-only.
+    const categorization = options.categorization
+      ? options.categorization({ db, embedderAvailable: () => getEmbedder().available })
+      : undefined;
+    current = {
+      summary,
+      db,
+      repo,
+      embeddings,
+      thumbnails,
+      transcripts,
+      transcription,
+      categorization,
+    };
     return toLibraryDto(summary);
   }
 
@@ -448,6 +484,13 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     },
     transcription() {
       return requireOpen().transcription;
+    },
+    categorization() {
+      const open = requireOpen();
+      if (open.categorization === undefined) {
+        throw new CatalogSessionError('categorization is not available');
+      }
+      return open.categorization;
     },
     dispose() {
       coordinator.disposeAll();
