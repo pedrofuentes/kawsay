@@ -21,7 +21,8 @@ import type { CatalogDatabase } from '../db/connection';
 // ── The four lifecycle actions ───────────────────────────────────────────────
 //   • accept  — materialise a candidate: INSERT one `origin='suggested'`
 //               collection linked to the category, and copy the category's
-//               EFFECTIVE members into `collection_items`.
+//               EFFECTIVE members into `collection_items`. Idempotent per
+//               category (a repeat returns the existing collection, no second row).
 //   • rename  — edit a collection's display name.
 //   • merge   — fold one collection into another: move the merged-away
 //               collection's members into the survivor (no duplicates), delete
@@ -29,6 +30,21 @@ import type { CatalogDatabase } from '../db/connection';
 //               its category so it is not re-proposed. The category row is intact.
 //   • dismiss — drop a member-less `origin='dismissed'` collection as a durable
 //               tombstone so the derivation never re-proposes the category.
+//               Idempotent per category (a repeat returns the existing tombstone).
+//
+// ── Idempotency — a lifecycle collection is created exactly once per category ─
+// Migration 005 puts NO UNIQUE constraint on `collections(category_id)`, and the
+// derivation exclusion is READ-only: it stops re-OFFERING a handled category but
+// cannot block a direct second WRITE (a double-clicked tray card, an IPC retry, or
+// a click on a stale still-visible candidate). So accept/dismiss enforce it in the
+// repo: each probes for an existing lifecycle row of its origin and no-ops to that
+// row's id when present, upholding AC-32's "created only from an explicit action
+// (exactly once)". The two origins are independent — accept keys on a 'suggested'
+// row and dismiss/merge on a 'dismissed' row — so a prior dismiss does NOT block a
+// later accept (a dismissed category is excluded from derivation, so it is not
+// re-offered; a direct accept still materialises it, and vice-versa); only a repeat
+// of the SAME action collapses. An idempotent no-op never mutates the existing row
+// (no re-copy of members, no rename) — use `rename` to relabel.
 //
 // ── Effective membership (accept copies exactly what derivation counts) ──────
 // A member is an item whose WINNING assignment row is 'assigned', resolved exactly
@@ -45,7 +61,7 @@ export interface AcceptInput {
   categoryId: string;
   /** Display name for the collection; defaults to the category's current name. */
   name?: string;
-  /** Pre-allocated collection UUID; generated when omitted. */
+  /** Pre-allocated collection UUID (used only on a fresh insert); generated when omitted. */
   id?: string;
 }
 
@@ -69,7 +85,7 @@ export interface DismissInput {
   categoryId: string;
   /** Display name for the tombstone row; defaults to the category's current name. */
   name?: string;
-  /** Pre-allocated tombstone UUID; generated when omitted. */
+  /** Pre-allocated tombstone UUID (used only on a fresh insert); generated when omitted. */
   id?: string;
 }
 
@@ -79,7 +95,10 @@ export interface CurationRepo {
    * Materialise a candidate category as a real `origin='suggested'` collection
    * linked to it (`category_id`), copying the category's EFFECTIVE members into
    * `collection_items`. An explicit user action — the ONLY way a suggested row is
-   * created (AC-32). Throws for an unknown category; returns the new collection id.
+   * created (AC-32). Idempotent per category: when a suggested collection already
+   * exists for it, this is a no-op that returns the existing id (never a second
+   * row, never a member re-copy). Throws for an unknown category; returns the
+   * (existing or new) collection id.
    */
   accept(input: AcceptInput): string;
   /** Rename a collection. Throws when no collection has that id. */
@@ -87,15 +106,18 @@ export interface CurationRepo {
   /**
    * Fold `from` into `into`: move `from`'s members into `into` (skipping items
    * `into` already holds — no duplicate `collection_items`), delete `from`, and —
-   * when `from` was linked to a category — drop a `dismissed` tombstone for that
-   * category so it is not re-proposed. The underlying `categories` row is left
-   * intact. Throws on a self-merge or an unknown collection.
+   * when `from` was linked to a category with no existing tombstone — drop a
+   * `dismissed` tombstone for that category so it is not re-proposed. The
+   * underlying `categories` row is left intact. Throws on a self-merge or an
+   * unknown collection.
    */
   merge(input: MergeInput): void;
   /**
    * Drop a member-less `origin='dismissed'` collection linked to the category as a
    * durable tombstone (so `deriveSuggestionCandidates` never re-proposes it). An
-   * explicit user action. Throws for an unknown category; returns the tombstone id.
+   * explicit user action. Idempotent per category: when a tombstone already exists
+   * for it, this is a no-op that returns the existing id. Throws for an unknown
+   * category; returns the (existing or new) tombstone id.
    */
   dismiss(input: DismissInput): string;
 }
@@ -113,15 +135,30 @@ interface CollectionRow {
 
 /**
  * Build the suggested-collection curation write layer over an open, migrated
- * database. Single-write actions (rename, dismiss) run one prepared statement;
- * multi-write actions (accept, merge) run inside a `better-sqlite3` transaction so
- * the collection and its members — or the move, delete and tombstone — commit
- * atomically (the same discipline `embeddings-repo` applies to its upsert+drain).
+ * database. Every action runs inside a `better-sqlite3` transaction so its
+ * check-then-write is atomic (no TOCTOU between the idempotency probe and the
+ * INSERT) and its writes commit together — the collection and its members, or the
+ * move/delete/tombstone (the same discipline `embeddings-repo` applies to its
+ * upsert+drain). accept/dismiss are idempotent PER CATEGORY: because migration 005
+ * puts no UNIQUE constraint on `collections(category_id)` and the derivation
+ * exclusion is read-only (it stops re-OFFERING a handled category but cannot block
+ * a direct second WRITE), a repeated action would otherwise duplicate a lifecycle
+ * row. So each first probes for an existing row and no-ops to it (AC-32: a
+ * lifecycle collection is created exactly once per category).
  */
 export function createCurationRepo(db: CatalogDatabase): CurationRepo {
   const selectCategoryStmt = db.prepare('SELECT id, name FROM categories WHERE id = @id');
   const selectCollectionStmt = db.prepare(
     'SELECT id, name, category_id FROM collections WHERE id = @id',
+  );
+  // The existing lifecycle collection for a category, if any — the idempotency
+  // probe. accept collapses onto an existing 'suggested' row; dismiss and merge's
+  // tombstone collapse onto an existing 'dismissed' row.
+  const selectSuggestedByCategoryStmt = db.prepare(
+    "SELECT id FROM collections WHERE category_id = @categoryId AND origin = 'suggested' LIMIT 1",
+  );
+  const selectDismissedByCategoryStmt = db.prepare(
+    "SELECT id FROM collections WHERE category_id = @categoryId AND origin = 'dismissed' LIMIT 1",
   );
 
   const insertSuggestedStmt = db.prepare(`
@@ -167,22 +204,52 @@ export function createCurationRepo(db: CatalogDatabase): CurationRepo {
     UPDATE collections SET name = @name, updated_at = datetime('now') WHERE id = @collectionId
   `);
 
-  // accept: insert the suggested collection, then copy its effective members —
-  // atomically, so a collection never persists without (or before) its members.
-  const acceptTxn = db.transaction((collectionId: string, categoryId: string, name: string) => {
-    insertSuggestedStmt.run({ id: collectionId, name, categoryId });
-    copyEffectiveMembersStmt.run({ collectionId, categoryId });
-  });
+  // accept: idempotent per category. Probe for an existing 'suggested' collection
+  // first — if one exists a repeat is a no-op returning its id (never a second row,
+  // never a re-copy of members); otherwise insert the collection and copy its
+  // effective members. Atomic, so a collection never persists without (or before)
+  // its members and the probe cannot race the insert.
+  const acceptTxn = db.transaction(
+    (desiredId: string, categoryId: string, name: string): string => {
+      const existing = selectSuggestedByCategoryStmt.get<{ id: string }>({ categoryId });
+      if (existing !== undefined) {
+        return existing.id;
+      }
+      insertSuggestedStmt.run({ id: desiredId, name, categoryId });
+      copyEffectiveMembersStmt.run({ collectionId: desiredId, categoryId });
+      return desiredId;
+    },
+  );
+
+  // dismiss: idempotent per category. Probe for an existing 'dismissed' tombstone —
+  // a repeat is a no-op returning its id; otherwise insert one. Atomic check-then-
+  // write (no TOCTOU between the probe and the INSERT).
+  const dismissTxn = db.transaction(
+    (desiredId: string, categoryId: string, name: string): string => {
+      const existing = selectDismissedByCategoryStmt.get<{ id: string }>({ categoryId });
+      if (existing !== undefined) {
+        return existing.id;
+      }
+      insertDismissedStmt.run({ id: desiredId, name, categoryId });
+      return desiredId;
+    },
+  );
 
   // merge: move members, delete the merged-away collection, and — when it was
-  // linked to a category — tombstone that category (using the collection's own
-  // display name; the name is cosmetic, derivation matches only origin +
-  // category_id). Atomic so the move/delete/tombstone never partially apply.
+  // linked to a category with no existing 'dismissed' tombstone — tombstone that
+  // category (using the collection's own display name; the name is cosmetic,
+  // derivation matches only origin + category_id). The same "don't duplicate an
+  // existing tombstone" guard as dismiss keeps it idempotent. Atomic so the
+  // move/delete/tombstone never partially apply.
   const mergeTxn = db.transaction(
     (fromId: string, intoId: string, fromName: string, fromCategoryId: string | null) => {
       moveMembersStmt.run({ fromId, intoId });
       deleteCollectionStmt.run({ id: fromId });
-      if (fromCategoryId !== null) {
+      if (
+        fromCategoryId !== null &&
+        selectDismissedByCategoryStmt.get<{ id: string }>({ categoryId: fromCategoryId }) ===
+          undefined
+      ) {
         insertDismissedStmt.run({ id: randomUUID(), name: fromName, categoryId: fromCategoryId });
       }
     },
@@ -196,9 +263,9 @@ export function createCurationRepo(db: CatalogDatabase): CurationRepo {
       if (category === undefined) {
         throw new Error(`accept: unknown category ${input.categoryId}`);
       }
-      const collectionId = input.id ?? randomUUID();
-      acceptTxn(collectionId, input.categoryId, input.name ?? category.name);
-      return collectionId;
+      // The txn returns the EXISTING suggested collection's id when one already
+      // exists (idempotent no-op) — so `input.id` is only ever used on a fresh insert.
+      return acceptTxn(input.id ?? randomUUID(), input.categoryId, input.name ?? category.name);
     },
 
     rename(input) {
@@ -228,13 +295,9 @@ export function createCurationRepo(db: CatalogDatabase): CurationRepo {
       if (category === undefined) {
         throw new Error(`dismiss: unknown category ${input.categoryId}`);
       }
-      const tombstoneId = input.id ?? randomUUID();
-      insertDismissedStmt.run({
-        id: tombstoneId,
-        name: input.name ?? category.name,
-        categoryId: input.categoryId,
-      });
-      return tombstoneId;
+      // The txn returns the EXISTING tombstone's id when one already exists
+      // (idempotent no-op) — so `input.id` is only ever used on a fresh insert.
+      return dismissTxn(input.id ?? randomUUID(), input.categoryId, input.name ?? category.name);
     },
   };
 }
