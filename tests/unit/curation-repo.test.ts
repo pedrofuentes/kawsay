@@ -577,3 +577,144 @@ describe('createCurationRepo — AC-32: a collections row appears ONLY from an e
     expect(count(db, "SELECT COUNT(*) AS n FROM collections WHERE origin = 'dismissed'")).toBe(1);
   });
 });
+
+describe('createCurationRepo — accept/dismiss/merge idempotency (created exactly once per category)', () => {
+  let db: Db;
+  let catalog: CatalogRepo;
+  let repo: CategoriesRepo;
+  let curation: CurationRepo;
+  let items: string[];
+
+  beforeEach(() => {
+    db = freshCatalog();
+    catalog = createCatalogRepo(db);
+    repo = createCategoriesRepo(db);
+    curation = createCurationRepo(db);
+    items = seedItems(catalog, 12);
+  });
+  afterEach(() => db.close());
+
+  it('a second accept of the same category creates NO second suggested collection and returns the same id', () => {
+    const cat = autoCategory(repo, {
+      id: 'cat',
+      kind: 'place',
+      name: 'Cusco',
+      sourceKey: 'place:1',
+      members: items.slice(0, 4),
+    });
+
+    const first = curation.accept({ categoryId: cat });
+    // A repeated accept (double-click / IPC retry / stale still-visible card) must be
+    // an idempotent no-op — the derivation exclusion is read-only and cannot block a
+    // direct second WRITE, so the repo itself has to (AC-32: created exactly once).
+    const second = curation.accept({ categoryId: cat });
+
+    expect(second).toBe(first);
+    expect(
+      count(
+        db,
+        "SELECT COUNT(*) AS n FROM collections WHERE origin = 'suggested' AND category_id = ?",
+        cat,
+      ),
+    ).toBe(1);
+    // The one collection's members were not re-copied/duplicated either.
+    expect(
+      count(db, 'SELECT COUNT(*) AS n FROM collection_items WHERE collection_id = ?', first),
+    ).toBe(4);
+  });
+
+  it('the idempotent second accept leaves the already-materialised collection untouched (snapshot)', () => {
+    const cat = autoCategory(repo, {
+      id: 'cat',
+      kind: 'place',
+      name: 'Cusco',
+      sourceKey: 'place:1',
+      members: items.slice(0, 4),
+    });
+    const first = curation.accept({ categoryId: cat });
+    const membersAfterFirst = memberItemIds(db, first);
+
+    // Effective membership changes after the first accept…
+    repo.setUserAssignment({ itemId: items[0], categoryId: cat, state: 'removed' });
+    // …but a second accept is a pure no-op: it must NOT re-copy members or mutate the row.
+    const second = curation.accept({ categoryId: cat });
+
+    expect(second).toBe(first);
+    expect(memberItemIds(db, first)).toEqual(membersAfterFirst);
+    expect(
+      count(
+        db,
+        "SELECT COUNT(*) AS n FROM collections WHERE origin = 'suggested' AND category_id = ?",
+        cat,
+      ),
+    ).toBe(1);
+  });
+
+  it('a second dismiss of the same category creates NO second tombstone and returns the same id', () => {
+    const cat = autoCategory(repo, {
+      id: 'cat',
+      kind: 'theme',
+      name: 'Beach',
+      sourceKey: 'theme:a',
+      members: items.slice(0, 4),
+    });
+
+    const first = curation.dismiss({ categoryId: cat });
+    const second = curation.dismiss({ categoryId: cat });
+
+    expect(second).toBe(first);
+    expect(
+      count(
+        db,
+        "SELECT COUNT(*) AS n FROM collections WHERE origin = 'dismissed' AND category_id = ?",
+        cat,
+      ),
+    ).toBe(1);
+  });
+
+  it('merge does not duplicate an existing dismissed tombstone for the merged-away category', () => {
+    const cf = autoCategory(repo, {
+      id: 'cf',
+      kind: 'place',
+      name: 'From',
+      sourceKey: 'place:1',
+      members: items.slice(0, 3),
+    });
+    const ci = autoCategory(repo, {
+      id: 'ci',
+      kind: 'theme',
+      name: 'Into',
+      sourceKey: 'theme:a',
+      members: items.slice(3, 7),
+    });
+    const intoId = curation.accept({ categoryId: ci });
+    // A dismissed tombstone for cf already exists…
+    const existingTomb = curation.dismiss({ categoryId: cf });
+    // …and a separate suggested collection for cf is the one being merged away.
+    db.prepare('INSERT INTO collections (id, name, origin, category_id) VALUES (?, ?, ?, ?)').run(
+      'from-col',
+      'From',
+      'suggested',
+      cf,
+    );
+    db.prepare('INSERT INTO collection_items (collection_id, item_id) VALUES (?, ?)').run(
+      'from-col',
+      items[0],
+    );
+
+    curation.merge({ fromCollectionId: 'from-col', intoCollectionId: intoId });
+
+    // Still exactly ONE dismissed tombstone for cf — merge reused it, did not duplicate.
+    expect(
+      count(
+        db,
+        "SELECT COUNT(*) AS n FROM collections WHERE origin = 'dismissed' AND category_id = ?",
+        cf,
+      ),
+    ).toBe(1);
+    expect(dismissedTombstone(db, cf)?.id).toBe(existingTomb);
+    // The merged-away collection is gone and its member moved to the survivor.
+    expect(collectionRow(db, 'from-col')).toBeUndefined();
+    expect(memberItemIds(db, intoId)).toEqual(expect.arrayContaining([items[0]]));
+  });
+});
