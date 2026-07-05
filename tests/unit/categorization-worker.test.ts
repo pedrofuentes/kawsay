@@ -14,7 +14,12 @@ import {
   createWorkerThreadClusterTransport,
   runClusterRequest,
 } from '../../electron/main/categorize/categorization-worker';
-import type { ClusterRequest } from '../../electron/main/categorize/categorization-orchestrator';
+import { createCancelFlaggedCategorizationPort } from '../../electron/main/categorize/categorization-cancel-flag';
+import type {
+  CategorizationRunResult,
+  ClusterRequest,
+} from '../../electron/main/categorize/categorization-orchestrator';
+import type { CategorizationLibraryPort } from '../../electron/main/categorize/categorization-library';
 import type {
   MessagePortLike,
   WorkerLike,
@@ -163,6 +168,33 @@ describe('createInlineClusterTransport (cooperative yield + cancel — #344 inte
     // themes runs after places (or is the only pass); a cancel observed at any
     // yield point MUST prevent the themes pass from writing a result.
     expect(response.themes).toBeUndefined();
+    // Pin the "yield BEFORE places" contract (#378): a regression that moves
+    // `response.places = clusterPlaces(...)` BEFORE its `await yieldOnce()`
+    // (degrading places-phase IPC responsiveness) would leave `places` defined
+    // while `themes` stays undefined — this assertion catches it.
+    expect(response.places).toBeUndefined();
+  });
+
+  it('honors an isCancelled probe at yield points: cancel flipped between passes runs places, skips themes', async () => {
+    // Cover the cancel-BETWEEN-passes branch (#379): a stateful yield flips
+    // cancel only on its 2nd call, so the places pass runs to completion and
+    // the themes pass is skipped. A regression that yields+checks cancel only
+    // ONCE (before all passes) — eliminating the inter-pass responsiveness
+    // window the interim fix advertises — would leave `themes` defined.
+    let cancelled = false;
+    let yieldCount = 0;
+    const transport = createInlineClusterTransport({
+      isCancelled: () => cancelled,
+      yield: async () => {
+        yieldCount += 1;
+        if (yieldCount === 2) cancelled = true;
+      },
+    });
+
+    const response = await transport.run(BOTH_REQUEST);
+
+    expect(response.places).toBeDefined();
+    expect(response.themes).toBeUndefined();
   });
 
   it('preserves deterministic output when isCancelled always returns false (parity with runClusterRequest)', async () => {
@@ -278,5 +310,133 @@ describe('createWorkerThreadClusterTransport', () => {
       createWorker: () => link2.worker,
     });
     await expect(transport2.run(PLACES_REQUEST)).resolves.toBeDefined();
+  });
+});
+
+describe('createCancelFlaggedCategorizationPort (#377 start→cancel→start race hardening)', () => {
+  // The interim off-thread cancel path in `electron/main/index.ts` wraps the
+  // categorization port with a host-owned `cancelRequested` flag: `start` clears
+  // it, `cancel` sets it, and the inline transport probes it at each yield.
+  //
+  // Regression (#377): a `categorize:cancel` followed by a `categorize:start`
+  // serviced in the same event-loop poll phase — BEFORE the in-flight yield's
+  // pending macrotask fires — flipped the flag `true → false`; the underlying
+  // orchestrator single-flight'd the second start as `busy` without beginning
+  // a new run, and the in-flight yield then read `false` and burned through
+  // the remaining pass wastefully. The wrapper MUST restore the flag when
+  // `port.start()` returns `busy` so an in-flight cancel stays armed.
+
+  const zeroCounts = {
+    categorized: 0,
+    skipped: 0,
+    failed: 0,
+    inFlight: 0,
+  } as const;
+
+  function busyResult(): CategorizationRunResult {
+    return { outcome: 'busy', reason: null, counts: { ...zeroCounts } };
+  }
+
+  function cancelledResult(): CategorizationRunResult {
+    return { outcome: 'cancelled', reason: null, counts: { ...zeroCounts } };
+  }
+
+  function completedResult(): CategorizationRunResult {
+    return {
+      outcome: 'completed',
+      reason: null,
+      counts: { ...zeroCounts, categorized: 1 },
+    };
+  }
+
+  /**
+   * A minimal fake {@link CategorizationLibraryPort} whose `start()` mimics the
+   * orchestrator's single-flight contract: the first call marks the run as
+   * "in-flight" and awaits an externally-controlled promise, and any concurrent
+   * `start()` returns `busy` synchronously (as an async function resolves the
+   * short-circuit in a microtask). The `isCancelled` probe the wrapper passes
+   * to the port factory is captured on the returned handle so a test can
+   * inspect the flag from outside.
+   */
+  function fakePort(): {
+    build: (isCancelled: () => boolean) => CategorizationLibraryPort;
+    release: (result?: CategorizationRunResult) => void;
+    probe: () => boolean;
+  } {
+    let running = false;
+    let releaseFirstRun: (result: CategorizationRunResult) => void = () => {};
+    let capturedProbe: () => boolean = () => false;
+    return {
+      probe: () => capturedProbe(),
+      release: (result = cancelledResult()) => releaseFirstRun(result),
+      build: (isCancelled) => {
+        capturedProbe = isCancelled;
+        return {
+          listForItem: () => [],
+          applyCorrection: () => [],
+          status: () => ({
+            state: 'idle',
+            counts: { ...zeroCounts },
+            lastItem: null,
+          }),
+          start: async () => {
+            if (running) return busyResult();
+            running = true;
+            try {
+              return await new Promise<CategorizationRunResult>((resolve) => {
+                releaseFirstRun = resolve;
+              });
+            } finally {
+              running = false;
+            }
+          },
+          cancel: () => ({ cancelled: true }),
+        };
+      },
+    };
+  }
+
+  it('keeps the cancel flag armed when a second start hits the single-flight busy short-circuit', async () => {
+    const port = fakePort();
+    const wrapper = createCancelFlaggedCategorizationPort(port.build);
+
+    // Kick off the in-flight "run" (the fake awaits an externally-controlled
+    // promise so we can freeze it mid-flight).
+    const firstRun = wrapper.start();
+    // Let the wrapper's `start` body run past its `await port.start()` so the
+    // fake's `running = true` is committed before the racing cancel/start.
+    await Promise.resolve();
+
+    // The race: a cancel followed by a start, both serviced BEFORE the
+    // in-flight run's macrotask resolves.
+    wrapper.cancel();
+    const secondRun = wrapper.start();
+
+    // The orchestrator's single-flight short-circuits the second start.
+    await expect(secondRun).resolves.toMatchObject({ outcome: 'busy' });
+
+    // The wrapper MUST have restored the cancel flag: a start that hit `busy`
+    // did NOT begin a fresh run, so it must not de-arm the outstanding cancel
+    // — the in-flight transport's next yield MUST still observe `true`.
+    expect(port.probe()).toBe(true);
+
+    // Clean up the outstanding first-run promise.
+    port.release();
+    await expect(firstRun).resolves.toMatchObject({ outcome: 'cancelled' });
+  });
+
+  it('clears the cancel flag on a fresh non-busy start (a completed run leaves the flag ready for the next run)', async () => {
+    // Regression guard: the busy-restore MUST NOT apply when the underlying
+    // start actually began a run. A completed non-cancelled run must leave the
+    // flag cleared so a subsequent cycle observes a clean starting state.
+    const port = fakePort();
+    const wrapper = createCancelFlaggedCategorizationPort(port.build);
+
+    const run = wrapper.start();
+    await Promise.resolve();
+    port.release(completedResult());
+    await expect(run).resolves.toMatchObject({ outcome: 'completed' });
+
+    expect(port.probe()).toBe(false);
   });
 });
