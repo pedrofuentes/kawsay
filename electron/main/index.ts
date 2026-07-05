@@ -80,6 +80,7 @@ import {
 import { isEmbedModelPublished } from './search/embed-model-source';
 import { createCategorizationConsentStore } from './categorize/categorization-consent';
 import { createCategorizationLibraryPort } from './categorize/categorization-library';
+import { createCancelFlaggedCategorizationPort } from './categorize/categorization-cancel-flag';
 import { createSuggestionsLibraryPort } from './categorize/suggestions-library';
 import { isGazetteerBundled, loadGazetteer } from './categorize/gazetteer';
 import { createInlineClusterTransport } from './categorize/categorization-worker';
@@ -303,36 +304,24 @@ const catalogSession = createCatalogSession({
   // so this wires the transport abstraction without spawning a thread. The transport
   // cooperatively yields to the event loop between passes (see #344 interim fix in
   // categorization-worker.ts) and is fed a per-library cancel flag that the wrapped
-  // `start`/`cancel` toggle: `start` clears it, `cancel` sets it, so a
-  // `categorize:cancel` serviced during a yield stops the next pass mid-run.
-  categorization: ({ db, embedderAvailable }) => {
-    let cancelRequested = false;
-    const port = createCategorizationLibraryPort({
-      db,
-      gazetteer: loadGazetteer(gazetteerResolveOptions()),
-      transport: createInlineClusterTransport({
-        isCancelled: () => cancelRequested,
+  // `start`/`cancel` toggle: `start` clears it (restoring it on a `busy` outcome so
+  // an in-flight cancel isn't de-armed by a racing start — #377), `cancel` sets it,
+  // so a `categorize:cancel` serviced during a yield stops the next pass mid-run.
+  categorization: ({ db, embedderAvailable }) =>
+    createCancelFlaggedCategorizationPort((isCancelled) =>
+      createCategorizationLibraryPort({
+        db,
+        gazetteer: loadGazetteer(gazetteerResolveOptions()),
+        transport: createInlineClusterTransport({ isCancelled }),
+        getStatus: () =>
+          resolveCategorizationStatus({
+            optedIn: requireCategorizationConsentStore().isOptedIn(),
+            placesAvailable: isGazetteerBundled(gazetteerResolveOptions()),
+            themesAvailable: embedderAvailable(),
+          }),
+        onProgress: (snapshot) => emitEvent(CATEGORIZE_PROGRESS, snapshot),
       }),
-      getStatus: () =>
-        resolveCategorizationStatus({
-          optedIn: requireCategorizationConsentStore().isOptedIn(),
-          placesAvailable: isGazetteerBundled(gazetteerResolveOptions()),
-          themesAvailable: embedderAvailable(),
-        }),
-      onProgress: (snapshot) => emitEvent(CATEGORIZE_PROGRESS, snapshot),
-    });
-    return {
-      ...port,
-      start: () => {
-        cancelRequested = false;
-        return port.start();
-      },
-      cancel: () => {
-        cancelRequested = true;
-        return port.cancel();
-      },
-    };
-  },
+    ),
   // The per-library SUGGESTED-COLLECTIONS tray port (M4-3c / #273), built once per
   // open library. A read-then-curate surface over the derivation (#271) + curation
   // repo (#272); it needs only the live DB (no embedder/gazetteer gate — the tray's
