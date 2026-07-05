@@ -139,6 +139,30 @@ SOFTWARE.
 
 ---
 
+## GeoNames — places gazetteer data
+
+- **Project:** GeoNames geographical database (<https://www.geonames.org/>)
+- **Component bundled:** the `cities1000` dataset — all cities/settlements with a
+  population of at least 1000 — used **offline** for on-device reverse-geocoding of
+  photo/media GPS coordinates to a `City, Admin1, Country` place label. No GeoNames
+  web service, tile server, or API is contacted at runtime; the data ships inside the
+  installer and the zero-egress guarantee (AC-4) is preserved.
+- **License:** Creative Commons Attribution 4.0 International (CC BY 4.0) —
+  <https://creativecommons.org/licenses/by/4.0/>.
+- **Attribution:** place data © GeoNames, licensed under CC BY 4.0. This attribution
+  is also surfaced in-app on the About/Credits surface (AC-23, ADR-0023/0027).
+- **How it is obtained:** downloaded from
+  <https://download.geonames.org/export/dump/cities1000.zip> at release time by
+  `scripts/pack-gazetteer.mjs`, then bundled under `resources/gazetteer/` via
+  electron-builder `extraResources`. See ADR-0030 Decision 2 in `DECISIONS.md`.
+- **Modifications:** the source dump is trimmed to only the `name`, `latitude`,
+  `longitude`, admin1 code, and country code fields (plus the GeoNames id used as the
+  place key) and re-serialized as compact NDJSON; no field values are altered. A small
+  representative sample (`cities1000.sample.ndjson`) ships in the source tree as the
+  offline default; the full dataset is packed at build time.
+
+---
+
 ## Appendix A — GNU General Public License v3.0
 
 ```text

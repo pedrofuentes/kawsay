@@ -25,6 +25,13 @@ out/
 /.llama-build/
 /resources/embed/*/
 
+# Full offline places gazetteer (ADR-0030 / M4-2d): the ~15 MB packed
+# resources/gazetteer/cities1000.ndjson is generated from GeoNames cities1000 by
+# scripts/pack-gazetteer.mjs at release time and bundled by electron-builder, never
+# committed (mirrors the whisper / media / embed artifact ignores above). Only the
+# small representative cities1000.sample.ndjson lives in git as the offline default.
+/resources/gazetteer/cities1000.ndjson
+
 # Converted embedder GGUF + its scratch checkout/build (ADR-0029 / M4-1b) — produced
 # by scripts/convert-embed-model.sh in the maintainer-gated publish-embed-model
 # workflow, uploaded as a Release asset, never committed.
