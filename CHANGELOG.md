@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A missing merge target no longer leaves a stray suggested collection**: if the collection you
+  chose to merge a suggestion into is no longer available at the moment you accept, Kawsay now
+  cancels the whole step cleanly — the suggestion stays in the review tray so you can pick a
+  different target, instead of quietly appearing as its own new collection.
 - **A stalled model download no longer hangs**: if the optional smart-search model download
   opens a connection but then receives no data, Kawsay now ends it calmly with a clear message
   and releases the connection, instead of sitting stuck.
