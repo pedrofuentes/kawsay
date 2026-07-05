@@ -344,8 +344,12 @@ export function loadGazetteer(options: LoadGazetteerOptions): Gazetteer {
   try {
     return createGazetteer(parseGazetteerNdjson(readFile(path)));
   } catch (err) {
+    // `path` is an internal, resolver-produced asset path (never user/attacker input),
+    // and a JS template literal is not a printf format string — so Semgrep's
+    // unsafe-formatstring (CWE-134) taint match here is a false positive. The path is
+    // deliberately kept inline in the message for triage (#331).
     console.warn(
-      `[kawsay] gazetteer asset is present but could not be read/parsed (${path}); degrading to empty gazetteer.`,
+      `[kawsay] gazetteer asset is present but could not be read/parsed (${path}); degrading to empty gazetteer.`, // nosemgrep: unsafe-formatstring
       err,
     );
     return createGazetteer([]);
