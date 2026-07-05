@@ -121,9 +121,14 @@ export function themeSourceKey(memberIds: readonly string[]): string {
  * Cluster items into themes by greedy threshold agglomeration over cosine
  * similarity (see the module header). Pure and deterministic: the output depends
  * only on the items and options, never on input order. Empty input degrades to
- * an empty result (no themes, no crash). Throws on malformed input — an empty
- * vector, a dimension mismatch, or a duplicate id — since each is a programming
- * error that would make results ill-defined or nondeterministic.
+ * an empty result (no themes, no crash). Throws on malformed input since each
+ * is a programming error that would make results ill-defined or nondeterministic:
+ * - an empty vector (zero-length Float32Array)
+ * - a dimension mismatch (vectors of differing lengths)
+ * - a duplicate id
+ * - a non-finite `threshold` option (NaN or ±Infinity)
+ * - a non-finite `minClusterSize` option (NaN or ±Infinity)
+ * - a non-finite element in any item's vector (NaN or ±Infinity)
  */
 export function clusterThemes(
   items: readonly ThemeClusterItem[],
