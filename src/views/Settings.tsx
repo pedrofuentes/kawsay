@@ -8,6 +8,7 @@
 import type { ReactElement } from 'react';
 import { CategorizationConsent } from '@renderer/components/CategorizationConsent';
 import { SmartSearchConsent } from '@renderer/components/SmartSearchConsent';
+import { SuggestionsTray } from '@renderer/components/SuggestionsTray';
 import { TranscriptionConsent } from '@renderer/components/TranscriptionConsent';
 import { TranscriptionRun } from '@renderer/components/TranscriptionRun';
 import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
@@ -32,6 +33,7 @@ export function Settings(): ReactElement {
       <TranscriptionRun />
       <SmartSearchConsent />
       <CategorizationConsent />
+      <SuggestionsTray />
       <footer className="font-body text-sm text-text-secondary">
         Place names © GeoNames, licensed under CC BY 4.0.
       </footer>

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Suggested collections, only when you say so** (M4-3c · ADR-0030): when organizing is on,
+  Kawsay gently gathers the places and themes it noticed into a **review tray** in Settings, kept
+  apart from your real collections. Each suggestion shows its name, how many memories it holds, and
+  a few examples — and **nothing joins your collections until you accept it**. You stay in charge:
+  **rename** a suggestion before accepting, **merge** it into a collection you already have, or
+  **dismiss** it for good (dismissed suggestions are not offered again). It all happens **on this
+  computer**; there is no account, and nothing about a loved one's memories ever leaves the device.
 - **Organize memories by place and theme — yours to turn on** (M4-2h · ADR-0030): once the built-in
   place-name list is available, Settings offers a gentle opt-in to let Kawsay gather a loved one's
   memories into the **places** they were taken and the **themes** they share. It is **entirely
