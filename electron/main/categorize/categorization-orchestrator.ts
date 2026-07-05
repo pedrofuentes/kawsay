@@ -133,7 +133,13 @@ export interface CategorizationStore {
   listPendingCategorization(afterId: string | null, limit: number): CategorizableItem[];
   /** Mark an item DONE (category_status → 'done') — folded into every applicable cluster. */
   markCategorized(itemId: string): void;
-  /** Mark an item's drain FAILED (category_status → 'error') — retried on a later run. */
+  /**
+   * Mark an item's drain FAILED (category_status → 'error'). Semi-terminal:
+   * `error` items leave the pending set (the pending keyset lists only
+   * `category_status='pending'`) and no drain path resets them, so a subsequent
+   * run does NOT re-drive them (mirrors the embedding-orchestrator convention).
+   * An explicit reset (successor slice) is required to retry.
+   */
   markCategoryFailed(itemId: string): void;
   /** Mark an item SKIPPED (category_status → 'skipped') — no GPS and no embedding. */
   markCategorySkipped(itemId: string): void;
@@ -497,7 +503,8 @@ export function createCategorizationOrchestrator(
       } catch {
         // A whole-run clustering failure (worker crash / timeout) is the corpus-scale
         // analogue of the embedding drain's per-batch failure: mark every read item
-        // 'error' and carry on — a later run re-drains them (idempotent).
+        // 'error' and carry on. Semi-terminal — errors leave the pending set; an
+        // explicit reset (successor slice) is required to retry.
         counts = { ...counts, inFlight: 0 };
         for (const item of items) recordFailed(item.id);
         return;
@@ -625,13 +632,28 @@ export function createCategorizationStore(
 ): CategorizationStore {
   const modelId = options.modelId ?? EMBED_MODEL_ID;
 
-  const listPendingStmt = db.prepare(`
+  const listPendingFirstStmt = db.prepare(`
     SELECT i.id AS id, i.gps_lat AS gps_lat, i.gps_lon AS gps_lon,
            i.description AS description, i.search_meta AS search_meta,
            i.embed_status AS embed_status, e.vector AS vector
       FROM items i
       LEFT JOIN item_embeddings e ON e.item_id = i.id AND e.model_id = @modelId
-     WHERE i.category_status = 'pending' AND (@afterId IS NULL OR i.id > @afterId)
+     WHERE i.category_status = 'pending'
+     ORDER BY i.id
+     LIMIT @limit
+  `);
+  // Subsequent-page (seekable) statement — split from the first-page statement
+  // so migration 005's partial `idx_items_category_queue` (on category_status
+  // WHERE category_status='pending') can serve the ordered scan without a
+  // temp-sort per page (#340). Ordering + boundaries match the first-page
+  // statement exactly; only the id-cursor predicate differs.
+  const listPendingAfterStmt = db.prepare(`
+    SELECT i.id AS id, i.gps_lat AS gps_lat, i.gps_lon AS gps_lon,
+           i.description AS description, i.search_meta AS search_meta,
+           i.embed_status AS embed_status, e.vector AS vector
+      FROM items i
+      LEFT JOIN item_embeddings e ON e.item_id = i.id AND e.model_id = @modelId
+     WHERE i.category_status = 'pending' AND i.id > @afterId
      ORDER BY i.id
      LIMIT @limit
   `);
@@ -647,11 +669,10 @@ export function createCategorizationStore(
 
   return {
     listPendingCategorization(afterId, limit) {
-      const rows = listPendingStmt.all<RawCategorizableRow>({
-        modelId,
-        afterId: afterId ?? null,
-        limit,
-      });
+      const rows =
+        afterId === null
+          ? listPendingFirstStmt.all<RawCategorizableRow>({ modelId, limit })
+          : listPendingAfterStmt.all<RawCategorizableRow>({ modelId, afterId, limit });
       return rows.map((row) => ({
         id: row.id,
         gpsLat: row.gps_lat,
