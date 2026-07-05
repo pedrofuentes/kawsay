@@ -30,6 +30,9 @@ export function Settings(): ReactElement {
       <TranscriptionConsent />
       <TranscriptionRun />
       <SmartSearchConsent />
+      <footer className="font-body text-sm text-text-secondary">
+        Place names © GeoNames, licensed under CC BY 4.0.
+      </footer>
     </section>
   );
 }

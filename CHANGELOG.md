@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Memories can find their place** (M4-2d · ADR-0030): when a photo or video carries a location,
+  Kawsay can now gently name the **place** it came from — a city, region, and country — so memories
+  can be gathered by where they happened. This works **entirely on this computer** from a built-in
+  list of place names (© GeoNames, CC BY 4.0); no map service is ever contacted, and nothing about a
+  loved one's memories ever leaves the device.
+
 ### Changed
 
 ### Fixed

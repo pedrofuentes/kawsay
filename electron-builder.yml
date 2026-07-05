@@ -84,6 +84,22 @@ extraResources:
     to: 'media/${os}-${arch}/'
     filter:
       - '**/*'
+  # Offline places gazetteer for on-device reverse-geocoding (ADR-0030 Decision 2,
+  # milestone M4-2d). GeoNames `cities1000` trimmed to name/lat/lon/admin1/country,
+  # packed to NDJSON by scripts/pack-gazetteer.mjs and resolved at runtime by
+  # electron/main/categorize/gazetteer.ts (GAZETTEER_RESOURCE_SUBDIR = 'gazetteer').
+  # Attribution: place data © GeoNames, CC BY 4.0 (see NOTICES.md + in-app About).
+  # This asset is ARCH-INDEPENDENT — plain data, no per-arch expansion — so a SINGLE
+  # copy ships in every installer (unlike the ${os}-${arch} binary blocks above). A
+  # fresh checkout carries only the small committed cities1000.sample.ndjson; the full
+  # cities1000.ndjson is generated at release time (gitignored). A missing/empty dir is
+  # a build-time WARNING (not an error), so a local `pnpm dist` still yields a running
+  # app — reverse-geocoding just degrades to a coordinate-only label (gazetteer.ts
+  # returns null when the asset is absent), never a crash and never any network call.
+  - from: 'resources/gazetteer/'
+    to: 'gazetteer/'
+    filter:
+      - '**/*'
 
 # Security fuses flipped at package time (ARCHITECTURE §2.5/§8, ADR-0007). Mirrors
 # electron/fuses/fuses.ts FUSE_CONFIG — kept in lock-step by tests/unit/packaging-

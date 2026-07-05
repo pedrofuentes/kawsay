@@ -1,0 +1,128 @@
+{"id":1796236,"name":"Shanghai","lat":31.22222,"lon":121.45806,"admin1":"23","country":"CN"}
+{"id":1816670,"name":"Beijing","lat":39.9075,"lon":116.39723,"admin1":"22","country":"CN"}
+{"id":1795565,"name":"Shenzhen","lat":22.54554,"lon":114.0683,"admin1":"30","country":"CN"}
+{"id":1809858,"name":"Guangzhou","lat":23.11667,"lon":113.25,"admin1":"30","country":"CN"}
+{"id":2314302,"name":"Kinshasa","lat":-4.32758,"lon":15.31357,"admin1":"06","country":"CD"}
+{"id":745044,"name":"Istanbul","lat":41.01384,"lon":28.94966,"admin1":"34","country":"TR"}
+{"id":2332459,"name":"Lagos","lat":6.45407,"lon":3.39467,"admin1":"05","country":"NG"}
+{"id":1566083,"name":"Ho Chi Minh City","lat":10.82302,"lon":106.62965,"admin1":"79","country":"VN"}
+{"id":1815286,"name":"Chengdu","lat":30.66667,"lon":104.06667,"admin1":"32","country":"CN"}
+{"id":1172451,"name":"Lahore","lat":31.558,"lon":74.35071,"admin1":"04","country":"PK"}
+{"id":1275339,"name":"Mumbai","lat":19.07283,"lon":72.88261,"admin1":"16","country":"IN"}
+{"id":3448439,"name":"São Paulo","lat":-23.5475,"lon":-46.63611,"admin1":"27","country":"BR"}
+{"id":3530597,"name":"Mexico City","lat":19.42847,"lon":-99.12766,"admin1":"09","country":"MX"}
+{"id":1174872,"name":"Karachi","lat":24.8608,"lon":67.0104,"admin1":"05","country":"PK"}
+{"id":1792947,"name":"Tianjin","lat":39.14222,"lon":117.17667,"admin1":"28","country":"CN"}
+{"id":1273294,"name":"Delhi","lat":28.65195,"lon":77.23149,"admin1":"07","country":"IN"}
+{"id":1791247,"name":"Wuhan","lat":30.58333,"lon":114.26667,"admin1":"12","country":"CN"}
+{"id":524901,"name":"Moscow","lat":55.75204,"lon":37.61781,"admin1":"48","country":"RU"}
+{"id":1185241,"name":"Dhaka","lat":23.7104,"lon":90.40744,"admin1":"81","country":"BD"}
+{"id":1835848,"name":"Seoul","lat":37.566,"lon":126.9784,"admin1":"11","country":"KR"}
+{"id":1850147,"name":"Tokyo","lat":35.6895,"lon":139.69171,"admin1":"40","country":"JP"}
+{"id":1812545,"name":"Dongguan","lat":23.01797,"lon":113.74866,"admin1":"30","country":"CN"}
+{"id":360630,"name":"Cairo","lat":30.06263,"lon":31.24967,"admin1":"11","country":"EG"}
+{"id":1790630,"name":"Xi’an","lat":34.25833,"lon":108.92861,"admin1":"26","country":"CN"}
+{"id":993800,"name":"Johannesburg","lat":-26.20227,"lon":28.04363,"admin1":"06","country":"ZA"}
+{"id":1799962,"name":"Nanjing","lat":32.06167,"lon":118.77778,"admin1":"04","country":"CN"}
+{"id":1808926,"name":"Hangzhou","lat":30.29365,"lon":120.16142,"admin1":"02","country":"CN"}
+{"id":1811103,"name":"Foshan","lat":23.02677,"lon":113.13148,"admin1":"30","country":"CN"}
+{"id":2643743,"name":"London","lat":51.50853,"lon":-0.12574,"admin1":"ENG","country":"GB"}
+{"id":5128581,"name":"New York City","lat":40.71427,"lon":-74.00597,"admin1":"NY","country":"US"}
+{"id":1642911,"name":"Jakarta","lat":-6.21462,"lon":106.84513,"admin1":"04","country":"ID"}
+{"id":1277333,"name":"Bengaluru","lat":12.97194,"lon":77.59369,"admin1":"19","country":"IN"}
+{"id":1581130,"name":"Hanoi","lat":21.0245,"lon":105.84117,"admin1":"01","country":"VN"}
+{"id":1668341,"name":"Taipei","lat":25.05306,"lon":121.52639,"admin1":"04","country":"TW"}
+{"id":3936456,"name":"Lima","lat":-12.04318,"lon":-77.02824,"admin1":"LMA","country":"PE"}
+{"id":3688689,"name":"Bogotá","lat":4.60971,"lon":-74.08175,"admin1":"34","country":"CO"}
+{"id":1814906,"name":"Chongqing","lat":29.56026,"lon":106.55771,"admin1":"33","country":"CN"}
+{"id":1819729,"name":"Hong Kong","lat":22.27832,"lon":114.17469,"admin1":"","country":"HK"}
+{"id":98182,"name":"Baghdad","lat":33.34058,"lon":44.40088,"admin1":"07","country":"IQ"}
+{"id":1790842,"name":"Wuzhong","lat":37.9867,"lon":106.201,"admin1":"21","country":"CN"}
+{"id":1797929,"name":"Qingdao","lat":36.06488,"lon":120.38042,"admin1":"25","country":"CN"}
+{"id":112931,"name":"Tehran","lat":35.69439,"lon":51.42151,"admin1":"26","country":"IR"}
+{"id":2034937,"name":"Shenyang","lat":41.79222,"lon":123.43278,"admin1":"19","country":"CN"}
+{"id":1269843,"name":"Hyderabad","lat":17.38405,"lon":78.45636,"admin1":"40","country":"IN"}
+{"id":3451190,"name":"Rio de Janeiro","lat":-22.90642,"lon":-43.18223,"admin1":"21","country":"BR"}
+{"id":1886760,"name":"Suzhou","lat":31.30408,"lon":120.59538,"admin1":"04","country":"CN"}
+{"id":11072148,"name":"Puxi","lat":31.24414,"lon":121.46592,"admin1":"23","country":"CN"}
+{"id":1279233,"name":"Ahmedabad","lat":23.02579,"lon":72.58727,"admin1":"09","country":"IN"}
+{"id":2293538,"name":"Abidjan","lat":5.35444,"lon":-4.00167,"admin1":"93","country":"CI"}
+{"id":1798524,"name":"Pudong","lat":31.23995,"lon":121.50094,"admin1":"23","country":"CN"}
+{"id":2147714,"name":"Sydney","lat":-33.86785,"lon":151.20732,"admin1":"02","country":"AU"}
+{"id":1880252,"name":"Singapore","lat":1.28967,"lon":103.85007,"admin1":"","country":"SG"}
+{"id":2158177,"name":"Melbourne","lat":-37.814,"lon":144.96332,"admin1":"07","country":"AU"}
+{"id":160263,"name":"Dar es Salaam","lat":-6.82349,"lon":39.26951,"admin1":"23","country":"TZ"}
+{"id":498817,"name":"Saint Petersburg","lat":59.93863,"lon":30.31413,"admin1":"66","country":"RU"}
+{"id":361058,"name":"Alexandria","lat":31.20176,"lon":29.91582,"admin1":"06","country":"EG"}
+{"id":2037013,"name":"Harbin","lat":45.75,"lon":126.65,"admin1":"08","country":"CN"}
+{"id":1609350,"name":"Bangkok","lat":13.75398,"lon":100.50144,"admin1":"40","country":"TH"}
+{"id":1808722,"name":"Hefei","lat":31.86389,"lon":117.28083,"admin1":"01","country":"CN"}
+{"id":1814087,"name":"Dalian","lat":38.91222,"lon":121.60222,"admin1":"19","country":"CN"}
+{"id":2335204,"name":"Kano","lat":12.00012,"lon":8.51672,"admin1":"29","country":"NG"}
+{"id":3871336,"name":"Santiago","lat":-33.45694,"lon":-70.64827,"admin1":"12","country":"CL"}
+{"id":3369157,"name":"Cape Town","lat":-33.92584,"lon":18.42322,"admin1":"11","country":"ZA"}
+{"id":1168197,"name":"Peshawar","lat":34.008,"lon":71.57849,"admin1":"03","country":"PK"}
+{"id":2038180,"name":"Changchun","lat":43.88,"lon":125.32278,"admin1":"05","country":"CN"}
+{"id":105343,"name":"Jeddah","lat":21.49012,"lon":39.18624,"admin1":"14","country":"SA"}
+{"id":1264527,"name":"Chennai","lat":13.08784,"lon":80.27847,"admin1":"25","country":"IN"}
+{"id":1275004,"name":"Kolkata","lat":22.56263,"lon":88.36304,"admin1":"28","country":"IN"}
+{"id":1790645,"name":"Xiamen","lat":24.47979,"lon":118.08187,"admin1":"07","country":"CN"}
+{"id":1255364,"name":"Surat","lat":21.19594,"lon":72.83023,"admin1":"09","country":"IN"}
+{"id":1298824,"name":"Yangon","lat":16.80528,"lon":96.15611,"admin1":"17","country":"MM"}
+{"id":13308620,"name":"Bao'an","lat":22.55213,"lon":113.88288,"admin1":"30","country":"CN"}
+{"id":1138958,"name":"Kabul","lat":34.52813,"lon":69.17233,"admin1":"13","country":"AF"}
+{"id":184745,"name":"Nairobi","lat":-1.28333,"lon":36.81667,"admin1":"05","country":"KE"}
+{"id":1790923,"name":"Wuxi","lat":31.56887,"lon":120.28857,"admin1":"04","country":"CN"}
+{"id":360995,"name":"Giza","lat":30.00944,"lon":31.20861,"admin1":"08","country":"EG"}
+{"id":1805753,"name":"Jinan","lat":36.66833,"lon":116.99722,"admin1":"25","country":"CN"}
+{"id":1793511,"name":"Taiyuan","lat":37.86944,"lon":112.56028,"admin1":"24","country":"CN"}
+{"id":1784658,"name":"Zhengzhou","lat":34.75778,"lon":113.64861,"admin1":"09","country":"CN"}
+{"id":2460596,"name":"Bamako","lat":12.60915,"lon":-7.97522,"admin1":"01","country":"ML"}
+{"id":108410,"name":"Riyadh","lat":24.68773,"lon":46.72185,"admin1":"10","country":"SA"}
+{"id":12908892,"name":"New Taipei City","lat":25.06199,"lon":121.45703,"admin1":"03","country":"TW"}
+{"id":12747063,"name":"New Territories","lat":22.42441,"lon":114.11095,"admin1":"00","country":"HK"}
+{"id":1795270,"name":"Shijiazhuang","lat":38.04139,"lon":114.47861,"admin1":"10","country":"CN"}
+{"id":1205733,"name":"Chattogram","lat":22.3384,"lon":91.83168,"admin1":"84","country":"BD"}
+{"id":344979,"name":"Addis Ababa","lat":9.02497,"lon":38.74689,"admin1":"44","country":"ET"}
+{"id":1804651,"name":"Kunming","lat":25.03889,"lon":102.71833,"admin1":"29","country":"CN"}
+{"id":6986104,"name":"Zhongshan","lat":22.52306,"lon":113.37912,"admin1":"30","country":"CN"}
+{"id":1799869,"name":"Nanning","lat":22.81667,"lon":108.31667,"admin1":"16","country":"CN"}
+{"id":1795940,"name":"Shantou","lat":23.35489,"lon":116.67876,"admin1":"30","country":"CN"}
+{"id":5368361,"name":"Los Angeles","lat":34.05223,"lon":-118.24368,"admin1":"CA","country":"US"}
+{"id":1179400,"name":"Faisalabad","lat":31.41554,"lon":73.08969,"admin1":"04","country":"PK"}
+{"id":292223,"name":"Dubai","lat":25.07725,"lon":55.30927,"admin1":"03","country":"AE"}
+{"id":1848354,"name":"Yokohama","lat":35.43333,"lon":139.65,"admin1":"19","country":"JP"}
+{"id":1810821,"name":"Fuzhou","lat":26.06139,"lon":119.30611,"admin1":"07","country":"CN"}
+{"id":1799397,"name":"Ningbo","lat":29.87819,"lon":121.54945,"admin1":"02","country":"CN"}
+{"id":2553604,"name":"Casablanca","lat":33.58831,"lon":-7.61138,"admin1":"06","country":"MA"}
+{"id":2339354,"name":"Ibadan","lat":7.37756,"lon":3.90591,"admin1":"32","country":"NG"}
+{"id":1798425,"name":"Puyang","lat":29.45679,"lon":119.88872,"admin1":"02","country":"CN"}
+{"id":323786,"name":"Ankara","lat":39.91987,"lon":32.85427,"admin1":"68","country":"TR"}
+{"id":1794903,"name":"Shiyan","lat":32.6475,"lon":110.77806,"admin1":"12","country":"CN"}
+{"id":2950159,"name":"Berlin","lat":52.52437,"lon":13.41053,"admin1":"16","country":"DE"}
+{"id":1793346,"name":"Tangshan","lat":39.64381,"lon":118.18319,"admin1":"10","country":"CN"}
+{"id":1166993,"name":"Rawalpindi","lat":33.59733,"lon":73.0479,"admin1":"04","country":"PK"}
+{"id":13512505,"name":"Lüliang","lat":37.5192,"lon":111.14436,"admin1":"24","country":"CN"}
+{"id":1007311,"name":"Durban","lat":-29.8579,"lon":31.0292,"admin1":"02","country":"ZA"}
+{"id":1815456,"name":"Changzhou","lat":31.77359,"lon":119.95401,"admin1":"04","country":"CN"}
+{"id":1838524,"name":"Busan","lat":35.10168,"lon":129.03004,"admin1":"10","country":"KR"}
+{"id":3117735,"name":"Madrid","lat":40.4165,"lon":-3.70256,"admin1":"29","country":"ES"}
+{"id":1871859,"name":"Pyongyang","lat":39.03385,"lon":125.75432,"admin1":"12","country":"KP"}
+{"id":1785286,"name":"Zibo","lat":36.79056,"lon":118.06333,"admin1":"25","country":"CN"}
+{"id":1259229,"name":"Pune","lat":18.51957,"lon":73.85535,"admin1":"16","country":"IN"}
+{"id":750269,"name":"Bursa","lat":40.19559,"lon":29.06013,"admin1":"16","country":"TR"}
+{"id":1815577,"name":"Changsha","lat":28.19874,"lon":112.97087,"admin1":"11","country":"CN"}
+{"id":1692192,"name":"Quezon City","lat":14.6488,"lon":121.0509,"admin1":"NCR","country":"PH"}
+{"id":1269515,"name":"Jaipur","lat":26.91962,"lon":75.78781,"admin1":"24","country":"IN"}
+{"id":1809461,"name":"Guiyang","lat":26.58333,"lon":106.71667,"admin1":"18","country":"CN"}
+{"id":1529102,"name":"Ürümqi","lat":43.80096,"lon":87.60046,"admin1":"13","country":"CN"}
+{"id":1625822,"name":"Surabaya","lat":-7.24917,"lon":112.75083,"admin1":"08","country":"ID"}
+{"id":1843564,"name":"Incheon","lat":37.45646,"lon":126.70515,"admin1":"12","country":"KR"}
+{"id":1804430,"name":"Lanzhou","lat":36.05701,"lon":103.83987,"admin1":"15","country":"CN"}
+{"id":3646738,"name":"Caracas","lat":10.48801,"lon":-66.87919,"admin1":"25","country":"VE"}
+{"id":703448,"name":"Kyiv","lat":50.45466,"lon":30.5238,"admin1":"12","country":"UA"}
+{"id":311046,"name":"İzmir","lat":38.41273,"lon":27.13838,"admin1":"35","country":"TR"}
+{"id":1806776,"name":"Huizhou","lat":23.11147,"lon":114.41523,"admin1":"30","country":"CN"}
+{"id":3435910,"name":"Buenos Aires","lat":-34.61315,"lon":-58.37723,"admin1":"07","country":"AR"}
+{"id":1809078,"name":"Haikou","lat":20.03421,"lon":110.34651,"admin1":"31","country":"CN"}
+{"id":1668399,"name":"Taichung","lat":24.1469,"lon":120.6839,"admin1":"04","country":"TW"}
