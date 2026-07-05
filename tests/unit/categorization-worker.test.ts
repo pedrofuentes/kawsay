@@ -115,6 +115,68 @@ describe('createInlineClusterTransport', () => {
   });
 });
 
+describe('createInlineClusterTransport (cooperative yield + cancel — #344 interim)', () => {
+  // The interim fix for #344: the inline transport must cooperatively surrender
+  // the event loop between cluster passes so the Electron main process can service
+  // pending IPC (crucially `categorize:cancel`) instead of stalling until the whole
+  // clustering pass returns. It must also honor a cancel probe at each yield point
+  // so a cancel requested mid-pass stops further slices, and — when NOT cancelled —
+  // its output must be byte-for-byte identical to `runClusterRequest`.
+
+  it('yields via a macrotask (setImmediate) so a pending macrotask runs mid-transport', async () => {
+    // A macrotask queued BEFORE `run()` cannot fire until the transport actually
+    // surrenders to the event loop's macrotask queue. `Promise.resolve(value)`
+    // (the pre-fix wrapper) only creates a microtask — macrotasks stay starved
+    // until the whole async function drains. Proving this handler runs during
+    // `transport.run(...)` proves the transport yields via `setImmediate`
+    // (or equivalent) between passes.
+    let handlerFiredBeforeRunFinished = false;
+    let runFinished = false;
+    setImmediate(() => {
+      handlerFiredBeforeRunFinished = !runFinished;
+    });
+
+    const transport = createInlineClusterTransport();
+    await transport.run(BOTH_REQUEST);
+    runFinished = true;
+
+    // One more macrotask tick to let the assertion see the flip.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(handlerFiredBeforeRunFinished).toBe(true);
+  });
+
+  it('honors an isCancelled probe at yield points: cancel flipped mid-run skips further passes', async () => {
+    // Cancel is flipped the first time the transport yields, so at least one
+    // subsequent pass must be skipped. Proves both that the injected yield is
+    // actually invoked AND that the transport re-checks the cancel probe
+    // after each yield (never blindly running every pass to completion).
+    let cancelled = false;
+    const transport = createInlineClusterTransport({
+      isCancelled: () => cancelled,
+      yield: async () => {
+        cancelled = true;
+      },
+    });
+
+    const response = await transport.run(BOTH_REQUEST);
+
+    // themes runs after places (or is the only pass); a cancel observed at any
+    // yield point MUST prevent the themes pass from writing a result.
+    expect(response.themes).toBeUndefined();
+  });
+
+  it('preserves deterministic output when isCancelled always returns false (parity with runClusterRequest)', async () => {
+    // With a probe that never signals cancel and the injected yield still firing,
+    // the resulting clusters MUST be byte-for-byte identical to the pure runner —
+    // yielding must not perturb determinism (AC3 of the interim fix).
+    const transport = createInlineClusterTransport({
+      isCancelled: () => false,
+      yield: async () => {},
+    });
+    await expect(transport.run(BOTH_REQUEST)).resolves.toEqual(runClusterRequest(BOTH_REQUEST));
+  });
+});
+
 describe('createWorkerThreadClusterTransport', () => {
   it('marshals the request to the worker and resolves with its clustered reply, then tears down', async () => {
     const link = linkedWorker();
