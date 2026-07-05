@@ -115,10 +115,16 @@ export function clusterThemes(
 
   const dim = validateAndDim(items);
   const threshold = options.threshold ?? THEME_CLUSTER_DEFAULTS.threshold;
-  const minClusterSize = Math.max(
-    1,
-    Math.trunc(options.minClusterSize ?? THEME_CLUSTER_DEFAULTS.minClusterSize),
-  );
+  if (!Number.isFinite(threshold)) {
+    throw new Error(`clusterThemes: threshold must be finite, got ${String(threshold)}`);
+  }
+  const rawMinClusterSize = options.minClusterSize ?? THEME_CLUSTER_DEFAULTS.minClusterSize;
+  if (!Number.isFinite(rawMinClusterSize)) {
+    throw new Error(
+      `clusterThemes: minClusterSize must be finite, got ${String(rawMinClusterSize)}`,
+    );
+  }
+  const minClusterSize = Math.max(1, Math.trunc(rawMinClusterSize));
 
   // Stable id order ⇒ reproducible clustering (the semantic.ts determinism rule).
   const ordered = [...items].sort((left, right) => compareIdsAsc(left.id, right.id));
@@ -210,6 +216,11 @@ function validateAndDim(items: readonly ThemeClusterItem[]): number {
     }
     if (seen.has(item.id)) {
       throw new Error(`clusterThemes: duplicate item id ${item.id} (ids must be unique)`);
+    }
+    if (!item.vector.every(Number.isFinite)) {
+      throw new Error(
+        `clusterThemes: non-finite element in vector for item ${item.id} (NaN/Infinity not allowed)`,
+      );
     }
     seen.add(item.id);
   }
