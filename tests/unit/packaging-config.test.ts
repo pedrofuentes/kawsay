@@ -766,7 +766,10 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
       '        with:',
       '          fetch-depth: 0  # persist-credentials: false',
     ].join('\n');
-    expect(() => assertPersistCredentialsFalse(inlineBlock)).toThrow();
+    // #298: assert the SPECIFIC failure (the absent persist-credentials setting) rather
+    // than any throw, so a future unrelated error path added to the helper cannot
+    // false-pass this negative guard.
+    expect(() => assertPersistCredentialsFalse(inlineBlock)).toThrow(/persist-credentials/);
   });
 
   it('every actions/checkout step in ci.yml has persist-credentials: false', () => {
@@ -789,7 +792,7 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
     // ac4-egress runs pnpm install on untrusted PR code (same risk surface as ci.yml).
     // All 4 jobs (os-deny, os-deny-macos, os-deny-windows, renderer-egress) each have a checkout step.
     const blocks = checkoutStepBlocks(ac4EgressYml);
-    expect(blocks.length).toBeGreaterThanOrEqual(3); // os-deny + os-deny-macos + os-deny-windows + renderer-egress
+    expect(blocks.length).toBeGreaterThanOrEqual(4); // os-deny + os-deny-macos + os-deny-windows + renderer-egress
     for (const block of blocks) {
       assertPersistCredentialsFalse(block);
     }
