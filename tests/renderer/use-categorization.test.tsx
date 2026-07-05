@@ -9,7 +9,7 @@
 //       state rather than being silently swallowed (fixes the "no feedback that
 //       a preservation correction was not saved" regression, #346 b).
 import type { ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { CategorizationCorrectionDTO, ItemCategoryDTO } from '@shared/kawsay-api';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
@@ -44,6 +44,12 @@ function deferred<T>(): {
 
 const CONFIRM: CategorizationCorrectionDTO = {
   kind: 'confirm',
+  itemId: ITEM_A,
+  categoryId: CATEGORY_ID,
+};
+
+const REMOVE: CategorizationCorrectionDTO = {
+  kind: 'remove',
   itemId: ITEM_A,
   categoryId: CATEGORY_ID,
 };
@@ -234,5 +240,117 @@ describe('useItemCategories — surfaces a retryable failure instead of swallowi
     // user is no longer looking at.
     rerender({ itemId: ITEM_B });
     await waitFor(() => expect(result.current.correctionError).toBeNull());
+  });
+});
+
+describe('useItemCategories — concurrent-correction retry survives a sibling success (#360)', () => {
+  it('retryCorrection re-fires the most recent correction even if an earlier sibling correction resolved first', async () => {
+    // Two corrections fire on the same item before the first resolves — a
+    // realistic double-click race the surrounding DB-busy failure path
+    // widens. Correction A resolves successfully; correction B (still in
+    // flight) then rejects. The user is shown the retryable banner for B,
+    // and clicking "Try again" MUST replay B — not silently no-op.
+    const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
+    const refreshedAfterA: ItemCategoryDTO[] = [
+      makeItemCategory({
+        categoryId: CATEGORY_ID,
+        name: 'Cusco, Perú',
+        source: 'user',
+        confidence: null,
+      }),
+    ];
+    const refreshedAfterRetry: ItemCategoryDTO[] = [
+      makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú (removed)' }),
+    ];
+
+    const pendingA = deferred<ItemCategoryDTO[]>();
+    const pendingB = deferred<ItemCategoryDTO[]>();
+    const applyCategoryCorrection = vi
+      .fn<(input: CategorizationCorrectionDTO) => Promise<ItemCategoryDTO[]>>()
+      // First call = correction A (will succeed).
+      .mockImplementationOnce(() => pendingA.promise)
+      // Second call = correction B (will reject).
+      .mockImplementationOnce(() => pendingB.promise)
+      // Third call = the retry (will succeed) — proves the retry was re-fired.
+      .mockImplementationOnce(() => Promise.resolve(refreshedAfterRetry));
+    const api = makeFakeApi({
+      listItemCategories: vi.fn(() => Promise.resolve([initial])),
+      applyCategoryCorrection,
+    });
+
+    const { result } = renderHook(() => useItemCategories(ITEM_A, true), { wrapper: wrapper(api) });
+    await waitFor(() => expect(result.current.categories).toEqual([initial]));
+
+    // Fire A, then B — both in flight against the same item.
+    act(() => result.current.applyCorrection(CONFIRM));
+    act(() => result.current.applyCorrection(REMOVE));
+    expect(applyCategoryCorrection).toHaveBeenCalledTimes(2);
+    expect(applyCategoryCorrection).toHaveBeenNthCalledWith(1, CONFIRM);
+    expect(applyCategoryCorrection).toHaveBeenNthCalledWith(2, REMOVE);
+
+    // Resolve A first — successfully. The buggy code path clears the retry
+    // target here; the fixed path leaves it pointing at B.
+    await act(async () => {
+      pendingA.resolve(refreshedAfterA);
+      await pendingA.promise;
+    });
+    expect(result.current.correctionError).toBeNull();
+
+    // Now B rejects — the banner + "Try again" become available.
+    await act(async () => {
+      pendingB.reject(new Error('DB busy'));
+      await pendingB.promise.catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.correctionError).not.toBeNull());
+
+    // Click "Try again" — this MUST re-fire the last correction (B), not no-op.
+    await act(async () => {
+      result.current.retryCorrection();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(applyCategoryCorrection).toHaveBeenCalledTimes(3);
+    expect(applyCategoryCorrection).toHaveBeenNthCalledWith(3, REMOVE);
+    await waitFor(() => expect(result.current.correctionError).toBeNull());
+    expect(result.current.categories).toEqual(refreshedAfterRetry);
+  });
+});
+
+describe('useItemCategories — logs correction failures via the [kawsay] convention (#361)', () => {
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+  afterEach(() => {
+    warnSpy.mockClear();
+  });
+
+  it('emits a tagged console.warn carrying the original error when the correction rejects', async () => {
+    const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
+    const failure = new Error('SQLITE_BUSY: database is locked');
+    const applyCategoryCorrection = vi.fn(() => Promise.reject(failure));
+    const api = makeFakeApi({
+      listItemCategories: vi.fn(() => Promise.resolve([initial])),
+      applyCategoryCorrection,
+    });
+
+    const { result } = renderHook(() => useItemCategories(ITEM_A, true), { wrapper: wrapper(api) });
+    await waitFor(() => expect(result.current.categories).toEqual([initial]));
+
+    await act(async () => {
+      result.current.applyCorrection(CONFIRM);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.correctionError).not.toBeNull());
+
+    // At least one tagged warn call must reference the [kawsay] prefix AND
+    // carry the original error object as a subsequent argument — matching the
+    // established convention in src/lib/use-transcription-run.ts.
+    const taggedCalls = warnSpy.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && args[0].startsWith('[kawsay]'),
+    );
+    expect(taggedCalls.length).toBeGreaterThan(0);
+    const surfacedCall = taggedCalls.find((args) => args.includes(failure));
+    expect(surfacedCall).toBeDefined();
   });
 });
