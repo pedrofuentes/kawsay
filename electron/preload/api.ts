@@ -25,6 +25,10 @@ import {
   LIBRARY_OPEN,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
+  SUGGESTIONS_ACCEPT,
+  SUGGESTIONS_DISMISS,
+  SUGGESTIONS_LIST,
+  SUGGESTIONS_MERGE,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -96,5 +100,10 @@ export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSub
     startCategorization: () => invoke(CATEGORIZE_START, {}),
     cancelCategorization: () => invoke(CATEGORIZE_CANCEL, {}),
     onCategorizationProgress: (listener) => subscribe(CATEGORIZE_PROGRESS, listener),
+
+    listSuggestions: () => invoke(SUGGESTIONS_LIST, {}),
+    acceptSuggestion: (input) => invoke(SUGGESTIONS_ACCEPT, input),
+    mergeSuggestion: (input) => invoke(SUGGESTIONS_MERGE, input),
+    dismissSuggestion: (input) => invoke(SUGGESTIONS_DISMISS, input),
   };
 }

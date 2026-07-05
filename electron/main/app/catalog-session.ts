@@ -41,6 +41,7 @@ import { createTranscriptRepo, type TranscriptRepo } from '../db/transcript-repo
 import { createTranscriptionLibrary } from '../transcription/transcription-library';
 import type { TranscriptionLibraryPort } from '../transcription/transcription-orchestrator';
 import type { CategorizationLibraryPort } from '../categorize/categorization-library';
+import type { SuggestionsLibraryPort } from '../categorize/suggestions-library';
 import {
   createThumbnailService,
   type ImageThumbnailer,
@@ -116,6 +117,15 @@ export interface CatalogSessionOptions {
     db: CatalogDatabase;
     embedderAvailable: () => boolean;
   }) => CategorizationLibraryPort;
+  /**
+   * Build the per-library SUGGESTED-COLLECTIONS port (M4-3c / #273), injected as a
+   * factory (like {@link categorization}) so the session stays Electron-free and
+   * unit-testable. Called ONCE per open library with the live catalog `db`. The
+   * tray is a read-then-curate surface over the derivation (#271) + curation repo
+   * (#272), so it needs only the db — no embedder gate. Omitted ⇒ suggestions are
+   * unavailable and {@link CatalogSession.suggestions} throws (the headless default).
+   */
+  suggestions?: (ctx: { db: CatalogDatabase }) => SuggestionsLibraryPort;
 }
 
 export interface CatalogSession {
@@ -148,6 +158,12 @@ export interface CatalogSession {
    * was injected (the pre-wiring / headless default).
    */
   categorization(): CategorizationLibraryPort;
+  /**
+   * The host-side SUGGESTED-COLLECTIONS review-tray port for the OPEN library (#273).
+   * Throws a {@link CatalogSessionError} when no library is open OR no suggestions
+   * factory was injected (the headless default).
+   */
+  suggestions(): SuggestionsLibraryPort;
   /** Close the open library and tear down every in-flight import (window-close). */
   dispose(): void;
 }
@@ -162,6 +178,8 @@ interface OpenLibrary {
   transcription: TranscriptionLibraryPort;
   /** The categorization port, or undefined when no factory was injected (#270). */
   categorization: CategorizationLibraryPort | undefined;
+  /** The suggested-collections tray port, or undefined when no factory was injected (#273). */
+  suggestions: SuggestionsLibraryPort | undefined;
 }
 
 const timelineCursorSchema = z.strictObject({
@@ -271,6 +289,9 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     const categorization = options.categorization
       ? options.categorization({ db, embedderAvailable: () => getEmbedder().available })
       : undefined;
+    // Built once per open library (#273), threaded the same live DB. The tray reads
+    // the derivation + curates via the repo — no embedder gate needed here.
+    const suggestions = options.suggestions ? options.suggestions({ db }) : undefined;
     current = {
       summary,
       db,
@@ -280,6 +301,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       transcripts,
       transcription,
       categorization,
+      suggestions,
     };
     return toLibraryDto(summary);
   }
@@ -491,6 +513,13 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         throw new CatalogSessionError('categorization is not available');
       }
       return open.categorization;
+    },
+    suggestions() {
+      const open = requireOpen();
+      if (open.suggestions === undefined) {
+        throw new CatalogSessionError('suggestions are not available');
+      }
+      return open.suggestions;
     },
     dispose() {
       coordinator.disposeAll();

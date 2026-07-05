@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  CATEGORY_NAME_MAX_LENGTH,
   CURSOR_MAX_LENGTH,
   NAME_MAX_LENGTH,
   PAGE_LIMIT_MAX,
@@ -14,6 +15,7 @@ import {
   pathSchema,
   searchResultSchema,
   sourceTypeSchema,
+  suggestionsViewSchema,
   thumbnailDataUrlSchema,
   timelinePageSchema,
   transcriptViewSchema,
@@ -132,6 +134,23 @@ export const CATEGORIZE_APPLY_CORRECTION = 'categorize:applyCorrection';
 export const CATEGORIZE_START = 'categorize:start';
 /** IPC channel: cooperatively cancel an in-flight categorization run; resolves `{ cancelled }`. */
 export const CATEGORIZE_CANCEL = 'categorize:cancel';
+
+/**
+ * IPC channels for the SUGGESTED-COLLECTIONS review tray (M4-3c, #273 — ADR-0030).
+ * All ADDITIVE — no existing channel or the contextBridge exposure model changes.
+ * Each request/response is a strict zod schema, so a malformed payload is rejected
+ * in either direction (AC-4). Suggestions are derived READ-ONLY (#271); a
+ * `collections` row is created ONLY by an explicit curation action here (#272 /
+ * AC-32), never by mere listing.
+ */
+/** IPC channel: list the pending suggestions + the real collections a merge may target. */
+export const SUGGESTIONS_LIST = 'suggestions:list';
+/** IPC channel: accept a suggestion (optionally renamed) — materialises the collection; echoes the refreshed tray. */
+export const SUGGESTIONS_ACCEPT = 'suggestions:accept';
+/** IPC channel: merge a suggestion into an existing collection; echoes the refreshed tray. */
+export const SUGGESTIONS_MERGE = 'suggestions:merge';
+/** IPC channel: dismiss a suggestion (durable tombstone — not re-proposed); echoes the refreshed tray. */
+export const SUGGESTIONS_DISMISS = 'suggestions:dismiss';
 
 /**
  * The renderer-controllable options for a native open dialog (W2). This is the
@@ -297,6 +316,35 @@ export const ipcContract = {
   [CATEGORIZE_CANCEL]: {
     request: z.strictObject({}),
     response: z.strictObject({ cancelled: z.boolean() }),
+  },
+  [SUGGESTIONS_LIST]: {
+    request: z.strictObject({}),
+    response: suggestionsViewSchema,
+  },
+  [SUGGESTIONS_ACCEPT]: {
+    // An opaque category id — never a path — plus an optional edited name (the
+    // "rename before accepting" affordance): a bounded, non-empty label or nothing.
+    request: z.strictObject({
+      categoryId: z.uuid(),
+      name: z.string().min(1).max(CATEGORY_NAME_MAX_LENGTH).optional(),
+    }),
+    response: suggestionsViewSchema,
+  },
+  [SUGGESTIONS_MERGE]: {
+    // Both ids are opaque uuids: the source suggestion's category and the survivor
+    // collection it folds into. No path can ever validate.
+    request: z.strictObject({
+      categoryId: z.uuid(),
+      intoCollectionId: z.uuid(),
+    }),
+    response: suggestionsViewSchema,
+  },
+  [SUGGESTIONS_DISMISS]: {
+    request: z.strictObject({
+      categoryId: z.uuid(),
+      name: z.string().min(1).max(CATEGORY_NAME_MAX_LENGTH).optional(),
+    }),
+    response: suggestionsViewSchema,
   },
 } as const;
 

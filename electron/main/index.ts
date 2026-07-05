@@ -21,6 +21,10 @@ import {
   LIBRARY_OPEN,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
+  SUGGESTIONS_ACCEPT,
+  SUGGESTIONS_DISMISS,
+  SUGGESTIONS_LIST,
+  SUGGESTIONS_MERGE,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -51,6 +55,12 @@ import {
   handleCategorizationStart,
   handleCategorizationStatus,
 } from './ipc/handlers/categorize';
+import {
+  handleSuggestionsAccept,
+  handleSuggestionsDismiss,
+  handleSuggestionsList,
+  handleSuggestionsMerge,
+} from './ipc/handlers/suggestions';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
@@ -70,6 +80,7 @@ import {
 import { isEmbedModelPublished } from './search/embed-model-source';
 import { createCategorizationConsentStore } from './categorize/categorization-consent';
 import { createCategorizationLibraryPort } from './categorize/categorization-library';
+import { createSuggestionsLibraryPort } from './categorize/suggestions-library';
 import { isGazetteerBundled, loadGazetteer } from './categorize/gazetteer';
 import { createInlineClusterTransport } from './categorize/categorization-worker';
 import { resolveCategorizationStatus } from './categorize/categorization-orchestrator';
@@ -303,6 +314,11 @@ const catalogSession = createCatalogSession({
         }),
       onProgress: (snapshot) => emitEvent(CATEGORIZE_PROGRESS, snapshot),
     }),
+  // The per-library SUGGESTED-COLLECTIONS tray port (M4-3c / #273), built once per
+  // open library. A read-then-curate surface over the derivation (#271) + curation
+  // repo (#272); it needs only the live DB (no embedder/gazetteer gate — the tray's
+  // reveal is gated in the renderer by the categorization opt-in, like the chips).
+  suggestions: ({ db }) => createSuggestionsLibraryPort({ db }),
 });
 
 // The native open-dialog capability (W2): always parented to the focused window
@@ -372,6 +388,14 @@ const ipcHandlers: IpcHandlerMap = {
     handleCategorizationStart({ getLibrary: () => catalogSession.categorization() }),
   [CATEGORIZE_CANCEL]: () =>
     handleCategorizationCancel({ getLibrary: () => catalogSession.categorization() }),
+  [SUGGESTIONS_LIST]: () =>
+    handleSuggestionsList({ getLibrary: () => catalogSession.suggestions() }),
+  [SUGGESTIONS_ACCEPT]: (request) =>
+    handleSuggestionsAccept({ getLibrary: () => catalogSession.suggestions() }, request),
+  [SUGGESTIONS_MERGE]: (request) =>
+    handleSuggestionsMerge({ getLibrary: () => catalogSession.suggestions() }, request),
+  [SUGGESTIONS_DISMISS]: (request) =>
+    handleSuggestionsDismiss({ getLibrary: () => catalogSession.suggestions() }, request),
 };
 
 function createMainWindow(): void {

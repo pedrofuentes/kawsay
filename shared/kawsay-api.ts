@@ -12,6 +12,7 @@ import type {
   ItemCategoriesDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
+  SuggestionsViewDTO,
   TimelinePageDTO,
   TranscriptionSnapshotDTO,
   TranscriptionStartResultDTO,
@@ -221,6 +222,41 @@ export interface KawsayAPI {
    * unsubscribe function. Mirrors {@link onImportProgress}.
    */
   onCategorizationProgress(listener: (event: CategorizationProgressEvent) => void): () => void;
+
+  /**
+   * List the pending SUGGESTED collections for the review tray (#273 / AC-32): each
+   * derived place/theme grouping with its proposed name, effective member count, and
+   * a few example items, plus the real collections a merge may target. READ-ONLY —
+   * calling this creates NO collection, so the main list stays byte-identical until
+   * the user explicitly accepts. Returns empty lists when the feature is off. No path
+   * or vector crosses back (AC-4).
+   */
+  listSuggestions(): Promise<SuggestionsViewDTO>;
+
+  /**
+   * Accept a suggestion — materialise it into a real collection, optionally renamed
+   * first (the tray's edit-before-accept). Resolves the REFRESHED tray view (the
+   * accepted suggestion is gone; the new collection appears among the merge targets).
+   * Idempotent per category. Ids are opaque; a malformed payload is rejected.
+   */
+  acceptSuggestion(input: { categoryId: string; name?: string }): Promise<SuggestionsViewDTO>;
+
+  /**
+   * Merge a suggestion into an existing collection — its members move into the
+   * survivor and the source category is tombstoned so it is not re-proposed (AC-32).
+   * Resolves the refreshed tray view.
+   */
+  mergeSuggestion(input: {
+    categoryId: string;
+    intoCollectionId: string;
+  }): Promise<SuggestionsViewDTO>;
+
+  /**
+   * Dismiss a suggestion — drop a durable tombstone so the derivation never
+   * re-proposes it, even after a relaunch (AC-32). Resolves the refreshed tray view.
+   * Idempotent per category.
+   */
+  dismissSuggestion(input: { categoryId: string; name?: string }): Promise<SuggestionsViewDTO>;
 }
 
 /**
@@ -247,6 +283,11 @@ export type {
   CategorizationSnapshotDTO,
   CategorizationStartResultDTO,
   CategorizationRefusalReasonDTO,
+  SuggestionsViewDTO,
+  SuggestionDTO,
+  SuggestionExampleDTO,
+  SuggestionMergeTargetDTO,
+  SuggestionKindDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
   TimelinePageDTO,
