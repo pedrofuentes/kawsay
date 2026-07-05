@@ -84,7 +84,7 @@ rather than invent new ones:
 Binding constraints carried from ADR-0029 (all must stay green — cumulative regression, ratchet):
 
 - **AC-4 / AC-31 zero-egress** — categorization moves NO user data (pixels, text, GPS, vectors, derived
-  labels) off-device. Reverse-geocoding is **offline only** (MISSION §7: "no online maps") via a
+  labels) off-device. Reverse-geocoding is **offline only** (PRD §7, MISSION §5: "no online maps") via a
   **bundled** gazetteer — no tile server, no Nominatim, no request of any kind.
 - **AC-7 / AC-29 search never regresses** — migration 005 changes **no `items_fts` column**, so there is
   **no destructive FTS drop+rebuild** (unlike the transcript case, ADR-0027 §5) and exact/semantic search
@@ -406,7 +406,7 @@ M4-3 · Suggested collections
 **Alternatives considered**
 
 - **A cloud/managed reverse-geocoder or vision categorizer** (Google/Mapbox geocoding, cloud tagging) —
-  **REJECTED outright**: ships GPS/pixels off-device → breaks AC-4 and MISSION §7 ("no online maps");
+  **REJECTED outright**: ships GPS/pixels off-device → breaks AC-4 and PRD §7, MISSION §5 ("no online maps");
   on the NEVER list. All categorization is local.
 - **A redundant `is_suggested` boolean beside `origin`** — rejected; one `origin` enum is the single source
   of truth (no two-column drift). Boolean → 0/1 awareness still governs `is_favourite` and any future flag.
