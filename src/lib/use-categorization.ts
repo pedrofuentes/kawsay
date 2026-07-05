@@ -144,6 +144,16 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
   // without re-rendering when it changes.
   const lastCorrectionRef = useRef<CategorizationCorrectionDTO | null>(null);
 
+  // Monotonic per-attempt sequence used to distinguish concurrent corrections
+  // on the SAME item. Each runCorrection call captures its own `seq`; the
+  // resolver compares against `lastSucceededSeqRef` — the highest seq that
+  // has already settled successfully — so a stale, earlier rejection that
+  // arrives AFTER a later success cannot surface a spurious retryable banner
+  // (#383, the symmetric residual of #360). Reset on item-switch so a new
+  // item starts clean.
+  const attemptSeqRef = useRef(0);
+  const lastSucceededSeqRef = useRef(0);
+
   useEffect(() => {
     currentItemIdRef.current = itemId;
     // Correction feedback is per-item — leaving the item drops both the error
@@ -151,6 +161,8 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
     // user is no longer looking at.
     setCorrectionError(null);
     lastCorrectionRef.current = null;
+    attemptSeqRef.current = 0;
+    lastSucceededSeqRef.current = 0;
 
     // DEFAULT-OFF: while the feature is disabled we never even ask for chips, and we
     // drop any previously-shown ones so turning it off hides everything at once.
@@ -187,6 +199,10 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
       // Capture the itemId at call time; the resolve MUST match it (and the
       // hook must still be mounted) or the result is stale and gets dropped.
       const capturedItemId = currentItemIdRef.current;
+      // Bind this attempt to a monotonic seq so a stale rejection that
+      // arrives AFTER a later success on the same item can be recognised
+      // and dropped (#383).
+      const seq = ++attemptSeqRef.current;
       lastCorrectionRef.current = input;
       void api
         .applyCategoryCorrection(input)
@@ -200,6 +216,17 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
             );
             return;
           }
+          if (seq < lastSucceededSeqRef.current) {
+            // An out-of-order older success — a newer correction on the same
+            // item already resolved successfully and applied its state.
+            // Overwriting with this stale refresh would regress the visible
+            // chips, so drop it (advance-only successor tracking).
+            console.debug(
+              '[kawsay] category correction success dropped; superseded by a later successful correction',
+            );
+            return;
+          }
+          lastSucceededSeqRef.current = seq;
           setCategories(refreshed);
           setCorrectionError(null);
           // Deliberately DO NOT clear `lastCorrectionRef` here: a sibling
@@ -213,6 +240,18 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
           if (!mountedRef.current || currentItemIdRef.current !== capturedItemId) {
             console.debug(
               '[kawsay] category correction rejection dropped; item switched or hook unmounted',
+              error,
+            );
+            return;
+          }
+          if (seq < lastSucceededSeqRef.current) {
+            // A later correction on the same item already resolved
+            // successfully — displayed + on-disk state reflect the user's
+            // latest intent, so surfacing this earlier attempt's rejection
+            // would be a spurious retryable banner (#383). Drop it, with a
+            // trace consistent with the other drop paths.
+            console.debug(
+              '[kawsay] category correction rejection dropped; superseded by a later successful correction',
               error,
             );
             return;
