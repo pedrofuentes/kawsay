@@ -219,6 +219,12 @@ describe('createCategoriesRepo — item_categories writes + effective-assignment
     expect(() =>
       repo.assignAuto({ itemId: 'i1', categoryId, signal: 'gps', confidence: -0.1 }),
     ).toThrow();
+    // No partial write: the two rejected calls must not have modified the stored row
+    // (confidence still 1 from the last accepted write, still exactly one auto row).
+    expect(storedRow(db, 'i1', categoryId, 'auto')?.confidence).toBe(1);
+    expect(
+      count(db, "SELECT COUNT(*) n FROM item_categories WHERE item_id='i1' AND source='auto'"),
+    ).toBe(1);
   });
 
   it('throws a FK error for an unknown item or category and writes nothing', () => {

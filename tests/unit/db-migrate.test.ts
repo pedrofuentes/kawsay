@@ -552,20 +552,43 @@ describe('migration 005 — categories, item_categories, collections provenance,
     expect(columnNames(db, 'items').has('category_status')).toBe(true);
   });
 
-  it('creates the source_key partial-unique, kind, category, collections, and drain indexes', () => {
+  it('creates the source_key partial-unique, kind, category, collections, and drain indexes — correct columns and partial predicates', () => {
     runMigrations(db);
-    for (const idx of [
-      'idx_categories_source_key',
-      'idx_categories_kind',
-      'idx_item_categories_category',
-      'idx_collections_category',
-      'idx_items_category_queue',
-    ]) {
-      const row = db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
-        .get<{ name: string }>(idx);
-      expect(row?.name).toBe(idx);
-    }
+
+    const indexCols = (idx: string): string[] =>
+      db
+        .prepare(`PRAGMA index_info(${idx})`)
+        .all<{ name: string }>()
+        .map((r) => r.name);
+
+    const indexSql = (idx: string): string =>
+      (
+        db
+          .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?")
+          .get<{ sql: string }>(idx) ?? { sql: '' }
+      ).sql;
+
+    // UNIQUE partial index on source_key (NULLs exempt)
+    expect(indexCols('idx_categories_source_key')).toEqual(['source_key']);
+    expect(indexSql('idx_categories_source_key')).toMatch(/WHERE\s+source_key\s+IS\s+NOT\s+NULL/i);
+
+    // Plain index on kind — no WHERE predicate
+    expect(indexCols('idx_categories_kind')).toEqual(['kind']);
+    expect(indexSql('idx_categories_kind')).not.toMatch(/WHERE/i);
+
+    // Plain index on category_id — no WHERE predicate
+    expect(indexCols('idx_item_categories_category')).toEqual(['category_id']);
+    expect(indexSql('idx_item_categories_category')).not.toMatch(/WHERE/i);
+
+    // Partial index on category_id — only non-NULL (suggested/dismissed collections)
+    expect(indexCols('idx_collections_category')).toEqual(['category_id']);
+    expect(indexSql('idx_collections_category')).toMatch(/WHERE\s+category_id\s+IS\s+NOT\s+NULL/i);
+
+    // Partial drain index on category_status — only 'pending' items
+    expect(indexCols('idx_items_category_queue')).toEqual(['category_status']);
+    expect(indexSql('idx_items_category_queue')).toMatch(
+      /WHERE\s+category_status\s*=\s*'pending'/i,
+    );
   });
 
   it('enforces the categories.kind CHECK (person|place|theme)', () => {
