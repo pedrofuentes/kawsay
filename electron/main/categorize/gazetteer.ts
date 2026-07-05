@@ -343,7 +343,11 @@ export function loadGazetteer(options: LoadGazetteerOptions): Gazetteer {
   const readFile = options.readFile ?? ((target: string): string => readFileSync(target, 'utf8'));
   try {
     return createGazetteer(parseGazetteerNdjson(readFile(path)));
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[kawsay] gazetteer asset is present but could not be read/parsed (${path}); degrading to empty gazetteer.`,
+      err,
+    );
     return createGazetteer([]);
   }
 }
