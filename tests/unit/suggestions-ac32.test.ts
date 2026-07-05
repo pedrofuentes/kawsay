@@ -67,7 +67,13 @@ const SIGNAL_BY_KIND: Record<CategoryKind, 'gps' | 'theme-cluster' | 'face-clust
 /** Upsert a category and AUTO-assign each member item to it; returns the category id. */
 function autoCategory(
   categories: CategoriesRepo,
-  opts: { id: string; kind: CategoryKind; name: string; sourceKey: string; members: readonly string[] },
+  opts: {
+    id: string;
+    kind: CategoryKind;
+    name: string;
+    sourceKey: string;
+    members: readonly string[];
+  },
 ): string {
   const id = categories.upsertCategory({
     id: opts.id,
@@ -120,7 +126,9 @@ interface StoredCollection {
 
 function collectionsByCategory(db: Db, categoryId: string, origin: string): StoredCollection[] {
   return db
-    .prepare('SELECT id, name, origin, category_id FROM collections WHERE category_id = ? AND origin = ?')
+    .prepare(
+      'SELECT id, name, origin, category_id FROM collections WHERE category_id = ? AND origin = ?',
+    )
     .all<StoredCollection>(categoryId, origin);
 }
 
@@ -197,7 +205,11 @@ describe('AC-32 — accept materialises a suggestion into a listed collection', 
 
     const rows = collectionsByCategory(db, PLACE_CATEGORY, 'suggested');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ name: 'Cusco, Perú', origin: 'suggested', category_id: PLACE_CATEGORY });
+    expect(rows[0]).toMatchObject({
+      name: 'Cusco, Perú',
+      origin: 'suggested',
+      category_id: PLACE_CATEGORY,
+    });
     expect(memberItemIds(db, rows[0].id)).toEqual([...PLACE_ITEMS].sort());
 
     // The accepted category drops out of the tray; the theme suggestion remains.
@@ -227,7 +239,9 @@ describe('AC-32 — accept materialises a suggestion into a listed collection', 
 
     port.accept({ categoryId: THEME_CATEGORY, name: 'Birthdays we shared' });
 
-    expect(collectionsByCategory(db, THEME_CATEGORY, 'suggested')[0].name).toBe('Birthdays we shared');
+    expect(collectionsByCategory(db, THEME_CATEGORY, 'suggested')[0].name).toBe(
+      'Birthdays we shared',
+    );
   });
 });
 
@@ -252,22 +266,59 @@ describe('AC-32 — dismiss is durable across a relaunch', () => {
   });
 });
 
+describe('AC-32 — a merge to a valid-uuid-but-nonexistent target is atomic (no orphan)', () => {
+  // Regression for #350 — the TOCTOU window between the tray's list() and the
+  // merge() call: the chosen survivor may have been deleted (or was never real).
+  // Before the fix, port.merge composed curation.accept + curation.merge WITHOUT
+  // an outer transaction, so the accept committed FIRST and the merge then threw
+  // on the unknown intoCollectionId — leaving a phantom 'suggested' collection
+  // for the source category (orphan) with the members already copied into it.
+  it('rolls back the accept when the target does not exist — no suggested collection persists, error surfaces', () => {
+    const db = freshCatalog();
+    seedCorpus(db);
+    const port = createSuggestionsLibraryPort({ db });
+    // A syntactically valid uuid the tray "listed" but which no longer refers
+    // to any collections row (deleted between list() and merge(), or never real).
+    const missingTarget = 'ffff0001-0000-4000-8000-000000000001';
+
+    expect(() =>
+      port.merge({ categoryId: PLACE_CATEGORY, intoCollectionId: missingTarget }),
+    ).toThrow(/unknown collection/i);
+
+    // Full rollback — the source category is NOT silently materialised as its
+    // own 'suggested' collection, no tombstone was written, and no members were
+    // copied. The whole `collections` table is byte-identical to pre-merge.
+    expect(collectionsByCategory(db, PLACE_CATEGORY, 'suggested')).toEqual([]);
+    expect(collectionsByCategory(db, PLACE_CATEGORY, 'dismissed')).toEqual([]);
+    expect(count(db, 'SELECT COUNT(*) AS n FROM collections')).toBe(0);
+    expect(count(db, 'SELECT COUNT(*) AS n FROM collection_items')).toBe(0);
+    // …and the suggestion is still offered on the next list() — the user can retry.
+    expect(port.list().suggestions.map((s) => s.categoryId)).toEqual([
+      PLACE_CATEGORY,
+      THEME_CATEGORY,
+    ]);
+  });
+});
+
 describe('AC-32 — merge folds a suggestion into an existing collection', () => {
   it('moves the members into the survivor and tombstones the source category', () => {
     const db = freshCatalog();
     seedCorpus(db);
     const catalog = createCatalogRepo(db);
     catalog.insertItem({ id: OTHER_ITEM, mediaType: 'photo', title: 'Existing member' });
-    db.prepare("INSERT INTO collections (id, name, origin, category_id) VALUES (?, 'Our trips', 'user', NULL)").run(
-      USER_COLLECTION,
-    );
+    db.prepare(
+      "INSERT INTO collections (id, name, origin, category_id) VALUES (?, 'Our trips', 'user', NULL)",
+    ).run(USER_COLLECTION);
     db.prepare('INSERT INTO collection_items (collection_id, item_id) VALUES (?, ?)').run(
       USER_COLLECTION,
       OTHER_ITEM,
     );
     const port = createSuggestionsLibraryPort({ db });
 
-    const afterMerge = port.merge({ categoryId: PLACE_CATEGORY, intoCollectionId: USER_COLLECTION });
+    const afterMerge = port.merge({
+      categoryId: PLACE_CATEGORY,
+      intoCollectionId: USER_COLLECTION,
+    });
 
     // The survivor gains the place members alongside its pre-existing one (no duplicates).
     expect(memberItemIds(db, USER_COLLECTION)).toEqual([...PLACE_ITEMS, OTHER_ITEM].sort());

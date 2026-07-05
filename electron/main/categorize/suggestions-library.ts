@@ -137,8 +137,22 @@ export function createSuggestionsLibraryPort(
       // that into the chosen survivor: members move over and the source category is
       // tombstoned so it is not re-proposed (AC-32). Both steps are idempotent per
       // category, so a double-merge collapses onto the same transient collection.
-      const fromCollectionId = curation.accept({ categoryId: input.categoryId });
-      curation.merge({ fromCollectionId, intoCollectionId: input.intoCollectionId });
+      //
+      // The pair runs INSIDE a single outer db.transaction so the accept rolls
+      // back when merge fails — a TOCTOU-stale intoCollectionId (deleted between
+      // the tray's list() and this call, or never a real row) MUST NOT leave the
+      // source category materialised as a phantom 'suggested' collection (#350).
+      // curation.accept and curation.merge each open their own inner transaction;
+      // better-sqlite3 nests them as SAVEPOINTs, so an error inside merge (thrown
+      // by its "unknown intoCollectionId" probe before its own txn opens) unwinds
+      // the outer transaction and both the collection row and its copied members
+      // vanish. The error propagates out so the caller can surface it — this
+      // layer never silently swallows.
+      const acceptAndMerge = db.transaction(() => {
+        const fromCollectionId = curation.accept({ categoryId: input.categoryId });
+        curation.merge({ fromCollectionId, intoCollectionId: input.intoCollectionId });
+      });
+      acceptAndMerge();
       return list();
     },
     dismiss(input) {

@@ -476,7 +476,7 @@ describe('createCurationRepo — dismiss (durable tombstone)', () => {
     ).toBe(0);
   });
 
-  it('is durable: after dismiss, deriveSuggestionCandidates no longer returns the category (round-trip)', () => {
+  it('is durable AND discriminating: dismiss inserts the tombstone WITHOUT destroying the category memberships, and the tombstone is the sole cause of exclusion (round-trip)', () => {
     const cat = autoCategory(repo, {
       id: 'cat',
       kind: 'place',
@@ -495,11 +495,39 @@ describe('createCurationRepo — dismiss (durable tombstone)', () => {
       'cat',
       'other',
     ]);
+    // Snapshot the source category's item_categories BEFORE dismiss so we can
+    // prove they are unchanged after (a hypothetical dismiss that also purged
+    // memberships would still pass the exclusion oracle — that would be data
+    // loss the naive oracle cannot see, so we assert it explicitly).
+    const beforeAssigns = db
+      .prepare(
+        'SELECT item_id, source, state FROM item_categories WHERE category_id = ? ORDER BY item_id, source',
+      )
+      .all<{ item_id: string; source: string; state: string }>(cat);
+    expect(beforeAssigns).toHaveLength(4);
 
     curation.dismiss({ categoryId: cat });
 
-    // The key durability assertion — the dismiss round-trips through the real read model.
+    // Durability #1 — the category no longer surfaces via the real read model.
     expect(deriveSuggestionCandidates(db, { minMembers: 3 }).map((c) => c.categoryId)).toEqual([
+      'other',
+    ]);
+    // Discrimination #1 — the item_categories rows for the dismissed category
+    // survive UNCHANGED (dismiss touches only `collections`; no data loss).
+    const afterAssigns = db
+      .prepare(
+        'SELECT item_id, source, state FROM item_categories WHERE category_id = ? ORDER BY item_id, source',
+      )
+      .all<{ item_id: string; source: string; state: string }>(cat);
+    expect(afterAssigns).toEqual(beforeAssigns);
+    // Discrimination #2 — removing ONLY the dismissed tombstone lets the
+    // category reappear in the derivation, proving the tombstone (not
+    // destroyed memberships or a below-threshold member count) is what
+    // excludes it. If dismiss had wiped item_categories, the category would
+    // still be missing after this DELETE and this assertion would fail.
+    db.prepare("DELETE FROM collections WHERE category_id = ? AND origin = 'dismissed'").run(cat);
+    expect(deriveSuggestionCandidates(db, { minMembers: 3 }).map((c) => c.categoryId)).toEqual([
+      'cat',
       'other',
     ]);
   });
