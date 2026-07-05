@@ -3,6 +3,7 @@ import {
   DEFAULT_EPS_METERS,
   DEFAULT_MIN_PTS,
   clusterPlaces,
+  clusterPlacesWithStats,
   haversineDistanceMeters,
   type GpsPoint,
   type PlacesClusterResult,
@@ -239,5 +240,103 @@ describe('clusterPlaces — configurable options with documented defaults', () =
     // 1200 m apart: together under the default eps, but noise under a 500 m eps.
     expect(clusterPlaces(pts, { epsMeters: 500, minPts: 2 }).noise).toEqual(['p1', 'p2']);
     expect(clusterPlaces(pts, { epsMeters: 1500, minPts: 2 }).clusters).toHaveLength(1);
+  });
+});
+
+describe('clusterPlaces — border-point reclaim (mutation-discriminating)', () => {
+  // A low-id, non-core point processed first — labelled NOISE — must be
+  // reclaimed when a later, higher-id CORE point's expansion reaches it. If the
+  // reclaim branch is removed or neutered, `a` stays in the noise list and this
+  // test fails. Constructed so `a` is decisively non-core (only one neighbour
+  // within eps) yet decisively reachable from cluster `b` (well inside eps).
+  it('reclaims a previously-noise low-id point as a border of a later core cluster', () => {
+    const eps = 1500;
+    const minPts = 3;
+    // `a` at (0, 0). `b` is 1400 m north — inside eps of `a` (so `b` will find
+    // `a` when it expands) but `c` and `d` sit ~2500 m north — beyond eps of
+    // `a`, so `a`'s own neighbourhood is only { a, b } = 2 < minPts → NOISE.
+    // `b`, `c`, `d` are mutually within eps and together satisfy the density
+    // check that makes `b` a core seed once the outer loop reaches it.
+    const a = pt('a', 0, 0);
+    const b = pt('b', metresToLatDeg(1400), 0);
+    const c = pt('c', metresToLatDeg(2400), 0);
+    const d = pt('d', metresToLatDeg(2500), 0);
+
+    // Pre-conditions the fixture depends on (guard against unit drift).
+    expect(haversineDistanceMeters(a, b)).toBeLessThan(eps);
+    expect(haversineDistanceMeters(a, c)).toBeGreaterThan(eps);
+    expect(haversineDistanceMeters(a, d)).toBeGreaterThan(eps);
+    expect(haversineDistanceMeters(b, c)).toBeLessThan(eps);
+    expect(haversineDistanceMeters(b, d)).toBeLessThan(eps);
+    expect(haversineDistanceMeters(c, d)).toBeLessThan(eps);
+
+    const { clusters, assignments, noise } = clusterPlaces([a, b, c, d], {
+      epsMeters: eps,
+      minPts,
+    });
+
+    // `a` must be RECLAIMED into the cluster, not left as noise. If the
+    // reclaim branch is removed, `a` ends up in `noise` and this fails.
+    expect(noise).toEqual([]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.memberIds).toEqual(['a', 'b', 'c', 'd']);
+    expect(assignments.get('a')).toBe(0);
+  });
+});
+
+describe('clusterPlaces — dense-cell complexity bound (#313)', () => {
+  // A single coordinate holding many photos (a home GPS) is folded to one
+  // representative before DBSCAN so grid.neighbours() runs O(unique-coords)
+  // times, not O(input-points). Without this fold, a 5 000-clone fixture drives
+  // ~25 million haversine evaluations; with the fold it drives one query.
+  it('folds coincident coordinates so neighbourhood queries scale with unique coords', () => {
+    const N = 5_000;
+    const clones: GpsPoint[] = [];
+    for (let i = 0; i < N; i += 1) {
+      // Zero-padded ids so ascending id order is deterministic and stable.
+      clones.push(pt(`p${String(i).padStart(5, '0')}`, 40.4168, -3.7038));
+    }
+
+    const { result, stats } = clusterPlacesWithStats(clones, { epsMeters: 1500, minPts: 3 });
+
+    // Output correctness: all clones land in a single cluster, no noise.
+    expect(result.clusters).toHaveLength(1);
+    expect(result.clusters[0]?.size).toBe(N);
+    expect(result.noise).toEqual([]);
+
+    // Complexity bound: exactly one coordinate → exactly one representative,
+    // and grid.neighbours() is invoked at most once per representative. The
+    // pre-fold implementation would report N here.
+    expect(stats.representativeCount).toBe(1);
+    expect(stats.neighbourQueries).toBeLessThanOrEqual(stats.representativeCount);
+  });
+
+  it('folds coincident coordinates without altering the result of a mixed fixture', () => {
+    // Two co-located home groups plus a sparse outlier: fold must not perturb
+    // cluster ids, membership, centroids, or noise vs. the unfolded reference.
+    const home = Array.from({ length: 20 }, (_, i) =>
+      pt(`home${String(i).padStart(3, '0')}`, 40.4168, -3.7038),
+    );
+    const park = Array.from({ length: 15 }, (_, i) =>
+      pt(`park${String(i).padStart(3, '0')}`, 40.5, -3.7),
+    );
+    const lonely = pt('zzz-lonely', 41.9, 12.5);
+    const input = [...home, ...park, lonely];
+
+    const { result, stats } = clusterPlacesWithStats(input, { epsMeters: 1500, minPts: 3 });
+
+    // Two unique coords in the clusters (home, park) + one for the outlier = 3.
+    expect(stats.representativeCount).toBe(3);
+    // At most one neighbourhood query per representative.
+    expect(stats.neighbourQueries).toBeLessThanOrEqual(stats.representativeCount);
+
+    expect(result.clusters).toHaveLength(2);
+    expect(result.clusters[0]?.size).toBe(home.length);
+    expect(result.clusters[1]?.size).toBe(park.length);
+    expect(result.noise).toEqual(['zzz-lonely']);
+
+    // The public entry point returns the identical result.
+    const publicResult = clusterPlaces(input, { epsMeters: 1500, minPts: 3 });
+    expect(snapshot(publicResult)).toEqual(snapshot(result));
   });
 });
