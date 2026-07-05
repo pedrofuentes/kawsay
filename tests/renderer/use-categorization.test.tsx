@@ -386,13 +386,19 @@ describe('useItemCategories — supersedes a stale rejection after a later succe
 });
 
 describe('useItemCategories — logs correction failures via the [kawsay] convention (#361)', () => {
-  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
+  // Restore any test-installed spies (e.g. the console.warn spy in the it()
+  // below) between tests. Installing spies at describe-collection time with
+  // vi.spyOn(...).mockImplementation(...) and only .mockClear()-ing in
+  // afterEach would keep console.warn mocked for the ENTIRE FILE (and any
+  // later file that inherits a hot module cache), silently masking any
+  // future warn-based assertion (#384). Scoping the spy inside the it()
+  // plus vi.restoreAllMocks() keeps console.warn honest across the suite.
   afterEach(() => {
-    warnSpy.mockClear();
+    vi.restoreAllMocks();
   });
 
   it('emits a tagged console.warn carrying the original error when the correction rejects', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
     const failure = new Error('SQLITE_BUSY: database is locked');
     const applyCategoryCorrection = vi.fn(() => Promise.reject(failure));
