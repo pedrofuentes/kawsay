@@ -82,6 +82,12 @@ const publishEmbedModelYml = readFileSync(
   repoRoot('.github/workflows/publish-embed-model.yml'),
   'utf8',
 ).replace(/\r\n/g, '\n');
+// The #247 hash-pinned convert lockfile the workflow installs with --require-hashes.
+// Normalize CRLF→LF once (Windows-checkout safe) as with the workflow reads.
+const publishEmbedConvertLock = readFileSync(
+  repoRoot('.github/workflows/requirements-embed-convert.lock.txt'),
+  'utf8',
+).replace(/\r\n/g, '\n');
 // The security workflow (gitleaks + semgrep). Normalize CRLF→LF once (Windows-checkout safe).
 const securityYml = readFileSync(repoRoot('.github/workflows/security.yml'), 'utf8').replace(
   /\r\n/g,
@@ -686,46 +692,53 @@ describe('embed-cli engine build + bundling contract (M4-1b, ADR-0029)', () => {
   });
 });
 
-describe('embedder-model publish workflow pins its Python conversion deps (#233)', () => {
-  // #233 (from Sentinel PR #232, 🟡 Dim E): the convert job's "Install Python
-  // conversion deps" step installed huggingface_hub and self-upgraded pip UNPINNED.
-  // The llama.cpp requirements file it installs is already pinned, but a bare
-  // `pip install huggingface_hub` resolves to whatever is latest at run time —
-  // non-reproducible AND exposed to a future compromised/regressed release — and the
-  // produced model bytes (hence the SHA-256 the descriptor pins) must be reproducible.
-  // These assertions pin the exact-version install so the step cannot silently drift
-  // back to an unpinned resolve.
+describe('embedder-model publish workflow hash-pins its Python conversion deps (#233, #247)', () => {
+  // #233 (Sentinel PR #232, Dim E) pinned huggingface_hub and dropped the unpinned pip
+  // self-upgrade in the convert step. #247 hardens it further: the convert step now
+  // installs the FULL linux/CPython-3.11 closure of the (already-pinned) llama.cpp convert
+  // requirements + huggingface_hub from a checked-in, hash-pinned lockfile via
+  // `pip install --require-hashes`. The huggingface_hub exact-0.x pin still holds — it
+  // simply moved from an inline `pip install huggingface_hub==…` into the lockfile, where
+  // it is now also sha256-verified. These assertions guard both the install mechanism
+  // (workflow) and the pin itself (lockfile) against regressing to an unpinned/unhashed resolve.
 
-  it('installs huggingface_hub at an EXACT version pin (== x.y[.z])', () => {
-    // The only huggingface_hub API the convert script uses (snapshot_download) is
-    // stable across the 0.x→1.x line, so an exact `==` pin is both safe and byte-
-    // reproducible for the one-off, revision-pinned model download.
+  it('installs conversion deps via a --require-hashes lockfile (no unpinned resolve)', () => {
     expect(publishEmbedModelYml).toMatch(
-      /pip install\s+['"]?huggingface_hub==\d+\.\d+(\.\d+)?['"]?/,
+      /pip install --require-hashes -r \.github\/workflows\/requirements-embed-convert\.lock\.txt/,
+    );
+    // The old unpinned installs must be gone.
+    expect(publishEmbedModelYml).not.toMatch(/pip install\s+-r\s+\.llama-cpp-src\/requirements/);
+  });
+
+  it('the lockfile pins huggingface_hub at an EXACT version (== x.y[.z]) with a sha256 hash', () => {
+    // snapshot_download (the only API used) is stable across 0.x→1.x, so an exact `==`
+    // pin is safe and byte-reproducible for the revision-pinned model download — now also
+    // hash-verified (#247). Every requirement in a --require-hashes file carries a sha256.
+    expect(publishEmbedConvertLock).toMatch(/^huggingface[-_]hub==\d+\.\d+(\.\d+)?\b/m);
+    expect(publishEmbedConvertLock).toMatch(
+      /huggingface[-_]hub==0\.\d+(\.\d+)?[\s\S]{0,600}--hash=sha256:[0-9a-f]{64}/,
     );
   });
 
-  it('pins huggingface_hub to a 0.x version (pinned llama.cpp transformers caps huggingface-hub<1.0)', () => {
-    // The convert job installs `transformers` from the IMMUTABLE llama.cpp b9848
-    // requirements-convert_hf_to_gguf.txt, and that transformers requires
-    // `huggingface-hub>=0.34.0,<1.0`. A 1.x pin therefore fails convert_hf_to_gguf.py at
-    // import ("ImportError: huggingface-hub>=0.34.0,<1.0 is required ... found ==1.21.0").
-    // Pin the LATEST compatible 0.x — a regression guard for exactly that 1.x-pin bug.
-    expect(publishEmbedModelYml).toMatch(/pip install\s+['"]?huggingface_hub==0\.\d+(\.\d+)?['"]?/);
-    // A 1.x (or any >=1.0) pin breaks the pinned-transformers convert import.
-    expect(publishEmbedModelYml).not.toMatch(/pip install\s+['"]?huggingface_hub\s*(==|>=)\s*1\./);
+  it('the lockfile pins huggingface_hub to a 0.x version (pinned llama.cpp transformers caps huggingface-hub<1.0)', () => {
+    // llama.cpp b9848 transformers requires huggingface-hub>=0.34.0,<1.0; a 1.x pin fails
+    // convert_hf_to_gguf.py at import. Pin the LATEST compatible 0.x.
+    expect(publishEmbedConvertLock).toMatch(/^huggingface[-_]hub==0\.\d+(\.\d+)?\b/m);
+    expect(publishEmbedConvertLock).not.toMatch(/^huggingface[-_]hub==1\./m);
   });
 
-  it('never installs huggingface_hub UNPINNED (no bare `pip install huggingface_hub`)', () => {
-    // The exact regression #233 removed: a version-less install. Only the `==`-pinned
-    // form asserted above is allowed.
-    expect(publishEmbedModelYml).not.toMatch(/pip install\s+['"]?huggingface_hub['"]?\s*$/m);
+  it('never inline-installs huggingface_hub in the workflow (only via the --require-hashes lockfile)', () => {
+    // With --require-hashes, huggingface_hub is installed ONLY from the hash-pinned
+    // lockfile. Any inline `pip install … huggingface_hub[==x]` in the workflow — bare,
+    // 0.x, or 1.x — would bypass the lockfile's hash verification; a 1.x inline would
+    // ALSO break the pinned-transformers convert import. Forbid every inline form at the
+    // workflow level (this restores + strengthens the #233 1.x regression guard). (#233, #247)
+    expect(publishEmbedModelYml).not.toMatch(/pip install[^\n]*\bhuggingface[-_]hub\b/);
+    // Explicit 1.x regression guard (the exact bug #233 tracked), at the workflow level.
+    expect(publishEmbedModelYml).not.toMatch(/pip install[^\n]*\bhuggingface[-_]hub\s*(==|>=)\s*1\./);
   });
 
   it('drops the unpinned `pip install --upgrade pip` self-upgrade', () => {
-    // setup-python already ships a fine pip for `pip install`; an unpinned self-upgrade
-    // pulls a non-reproducible pip at run time. #233 drops it — if ever re-added it must
-    // be version-pinned, never a bare `--upgrade`.
     expect(publishEmbedModelYml).not.toMatch(/pip install --upgrade pip\b/);
   });
 });
