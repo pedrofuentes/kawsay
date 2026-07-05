@@ -25,6 +25,24 @@ import { cosineSimilarity } from '../search/semantic';
 // on the raw string, never `localeCompare`), a strict-`>` "nearest" selection so
 // the earliest-created (smallest-first-id) cluster wins a tie, and output sorted
 // by each cluster's smallest member id.
+//
+// ── Bounded candidate scan (#318, ADR-0030 revisit) ──────────────────────────
+// The naive per-item scan calls `cosineSimilarity` against every open cluster,
+// which is O(n · k · dim) per pass and — because k trends to n on topically-
+// diverse corpora (ADR-0030 cites 10k–100k items at dim=384) — degrades to
+// n²·dim float ops per pass (minutes-to-hours). We keep the algorithm's OUTPUT
+// bit-identical (same assignments, same tie-break, same centroids) but replace
+// the inner `cosineSimilarity` call with an inline early-terminating dot product
+// that PROVABLY prunes any cluster whose cosine cannot beat the current best or
+// the τ threshold. The prune uses Cauchy-Schwarz on the unread tail:
+//   dot_full ≤ dot_partial + √(qRem·cRem)  ⇒  cos ≤ (dot_partial + √…) / denom.
+// If that upper bound is strictly less than `max(threshold, bestSimilarity)`,
+// this candidate cannot become the argmax nor meet τ, so we bail before scanning
+// the remaining dims. The bound is a mathematical UPPER bound, never an
+// estimate: no true match is ever skipped, so clusters, sizes, members, and the
+// resulting `sourceKey` are identical to the naive scan (verified end-to-end by
+// the unit tests, including the strict-`>` tie-break case). Cached ||centroid||²
+// keeps the denominator computation O(1) per pair rather than O(dim).
 
 /** One item to cluster: a stable id and its embedding vector (384-dim in prod). */
 export interface ThemeClusterItem {
@@ -131,10 +149,23 @@ export function clusterThemes(
 
   const working: WorkingCluster[] = [];
   for (const current of ordered) {
+    const queryCumNormSq = cumulativeSquaredNorms(current.vector, dim);
     let bestIndex = -1;
     let bestSimilarity = Number.NEGATIVE_INFINITY;
     for (let c = 0; c < working.length; c += 1) {
-      const similarity = cosineSimilarity(current.vector, working[c].centroid);
+      // Prune bar: a candidate can only matter if its cosine ≥ τ (assignable) AND
+      // strictly exceeds the current best (strict-`>` tie-break, so ties keep the
+      // earliest-visited cluster). `bestSimilarity` starts at -Infinity ⇒ initial
+      // bar is τ; as soon as a candidate above τ is found, the bar tightens to it.
+      const skipBar = bestSimilarity > threshold ? bestSimilarity : threshold;
+      const similarity = boundedCosine(
+        current.vector,
+        queryCumNormSq,
+        working[c].centroid,
+        working[c].centroidCumNormSq,
+        dim,
+        skipBar,
+      );
       // Strict `>` ⇒ on a tie the earliest-created (smallest-first-id) cluster wins.
       if (similarity > bestSimilarity) {
         bestSimilarity = similarity;
@@ -144,7 +175,7 @@ export function clusterThemes(
     if (bestIndex >= 0 && bestSimilarity >= threshold) {
       addMember(working[bestIndex], current, dim);
     } else {
-      working.push(newCluster(current, dim));
+      working.push(newCluster(current, dim, queryCumNormSq));
     }
   }
 
@@ -165,12 +196,28 @@ interface WorkingCluster {
   readonly sum: Float64Array;
   /** Current mean = sum / count, cached as Float32 for the cosine comparison. */
   centroid: Float32Array;
+  /** `centroidCumNormSq[i] = Σ_{j<i} centroid[j]²` (length `dim + 1`), so
+   *  `centroidCumNormSq[dim] = ‖centroid‖²` and `centroidCumNormSq[dim] −
+   *  centroidCumNormSq[i]` is the tail norm used by the Cauchy-Schwarz prune.
+   *  Uses Float32 summands then Float64 accumulation, so it matches the exact
+   *  magBSquared that `cosineSimilarity` would compute for this centroid. */
+  centroidCumNormSq: Float64Array;
 }
 
-function newCluster(item: ThemeClusterItem, dim: number): WorkingCluster {
+function newCluster(
+  item: ThemeClusterItem,
+  dim: number,
+  itemCumNormSq: Float64Array,
+): WorkingCluster {
   const sum = new Float64Array(dim);
   for (let i = 0; i < dim; i += 1) sum[i] = item.vector[i];
-  return { members: [item], sum, centroid: Float32Array.from(item.vector) };
+  // First centroid = the item's own vector, so its cumulative norms match the item's.
+  return {
+    members: [item],
+    sum,
+    centroid: Float32Array.from(item.vector),
+    centroidCumNormSq: itemCumNormSq,
+  };
 }
 
 function addMember(cluster: WorkingCluster, item: ThemeClusterItem, dim: number): void {
@@ -180,6 +227,9 @@ function addMember(cluster: WorkingCluster, item: ThemeClusterItem, dim: number)
   const centroid = new Float32Array(dim);
   for (let i = 0; i < dim; i += 1) centroid[i] = cluster.sum[i] / count;
   cluster.centroid = centroid;
+  // Recompute cached cumulative norms from the Float32 centroid so the value at
+  // dim matches the exact magBSquared that `cosineSimilarity` would accumulate.
+  cluster.centroidCumNormSq = cumulativeSquaredNorms(centroid, dim);
 }
 
 function finalizeCluster(cluster: WorkingCluster): ThemeCluster {
@@ -225,6 +275,82 @@ function validateAndDim(items: readonly ThemeClusterItem[]): number {
     seen.add(item.id);
   }
   return dim;
+}
+
+/**
+ * Prefix sums of squared elements: `cum[i] = Σ_{j<i} v[j]²`, length `dim + 1`.
+ * `cum[dim]` equals ‖v‖² and matches the exact magASquared/magBSquared that
+ * `cosineSimilarity` would accumulate (same Float32-to-Float64 pattern, same
+ * left-to-right order), so caching this yields bit-identical cosines.
+ */
+function cumulativeSquaredNorms(v: Float32Array, dim: number): Float64Array {
+  const cum = new Float64Array(dim + 1);
+  let s = 0;
+  for (let i = 0; i < dim; i += 1) {
+    const x = v[i];
+    s += x * x;
+    cum[i + 1] = s;
+  }
+  return cum;
+}
+
+/**
+ * Compute cos(q, c) with a Cauchy-Schwarz early-termination prune: whenever the
+ * upper bound on the remainder proves cos cannot reach `skipBar`, return
+ * `NEGATIVE_INFINITY` so the caller drops this candidate. When we run to
+ * completion the result is bit-identical to `cosineSimilarity(q, c)` because
+ * both cumulative-norm arrays are computed with the same Float32-to-Float64
+ * pattern as the naive cosine's magASquared/magBSquared.
+ *
+ * The prune is EXACT (never approximate): Cauchy-Schwarz gives
+ *   dot_full = dot_partial + Σ_tail q_j·c_j ≤ dot_partial + √(qRem·cRem)
+ * so cos_full ≤ (dot_partial + √(qRem·cRem)) / (‖q‖·‖c‖). If that upper bound
+ * is strictly less than `skipBar`, this candidate cannot beat the current best
+ * or clear τ, so skipping it does not change the argmax nor the assignment.
+ *
+ * `STEP` sizes the batch between bound checks: too small ⇒ per-batch overhead
+ * dominates; too large ⇒ we do wasted mult-adds before pruning. 64 keeps the
+ * per-cluster overhead to ⌈384/64⌉ = 6 checks in the production dim while
+ * prune-happy corpora (most pairs orthogonal-ish) bail on the first check.
+ */
+function boundedCosine(
+  q: Float32Array,
+  qCumNormSq: Float64Array,
+  c: Float32Array,
+  cCumNormSq: Float64Array,
+  dim: number,
+  skipBar: number,
+): number {
+  const qNormSq = qCumNormSq[dim];
+  const cNormSq = cCumNormSq[dim];
+  // Matches `cosineSimilarity`'s zero-magnitude contract: 0, never NaN.
+  if (qNormSq === 0 || cNormSq === 0) return 0;
+
+  const denom = Math.sqrt(qNormSq * cNormSq);
+  let dot = 0;
+  const STEP = 64;
+
+  for (let i = 0; i < dim;) {
+    const end = i + STEP < dim ? i + STEP : dim;
+    for (let j = i; j < end; j += 1) {
+      dot += q[j] * c[j];
+    }
+    i = end;
+    if (i >= dim) break;
+    // Tail norms come from cached prefix sums — O(1) per check, no accumulation.
+    const qRem = qNormSq - qCumNormSq[i];
+    const cRem = cNormSq - cCumNormSq[i];
+    if (qRem <= 0 || cRem <= 0) break;
+    // Skip iff (dot + √(qRem·cRem)) / denom < skipBar. Rearranged to avoid the
+    // per-step sqrt: let slack = skipBar·denom − dot; if slack > 0 and
+    // qRem·cRem < slack², then √(qRem·cRem) < slack ⇒ upper bound < skipBar.
+    const slack = skipBar * denom - dot;
+    if (slack > 0 && qRem * cRem < slack * slack) {
+      return Number.NEGATIVE_INFINITY;
+    }
+  }
+
+  return dot / denom;
 }
 
 /** Total, locale-independent ascending order on raw ids (matches semantic.ts). */
