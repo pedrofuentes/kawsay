@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { UserEvent } from '@testing-library/user-event';
 import { CategoryChips } from '@renderer/components/CategoryChips';
@@ -14,7 +14,10 @@ const PLACE_ID = '10000000-0000-4000-8000-0000000000a1';
 const THEME_ID = '10000000-0000-4000-8000-0000000000b2';
 
 /** A fake whose categorization surface is opted-in (chips are allowed to show). */
-function optedInApi(categories: ItemCategoryDTO[], opts: Partial<Parameters<typeof makeFakeApi>[0]> = {}): FakeApi {
+function optedInApi(
+  categories: ItemCategoryDTO[],
+  opts: Partial<Parameters<typeof makeFakeApi>[0]> = {},
+): FakeApi {
   return makeFakeApi({
     getCategorizationStatus: vi.fn(() => Promise.resolve({ optedIn: true, offered: true })),
     listItemCategories: vi.fn(() => Promise.resolve(categories)),
@@ -195,6 +198,46 @@ describe('CategoryChips — corrections (confirm / remove / rename / reassign)',
   });
 });
 
+describe('CategoryChips — surfaces a retryable failure when a correction is not saved (#346)', () => {
+  it('shows an accessible alert with a Try again action when applyCategoryCorrection rejects', async () => {
+    const api = optedInApi([makeItemCategory({ categoryId: PLACE_ID, name: 'Cusco, Perú' })]);
+    // First save fails (e.g. DB busy), second save (the retry) succeeds and
+    // refreshes the chips as a durable user decision.
+    (api.applyCategoryCorrection as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('DB busy'))
+      .mockResolvedValueOnce([
+        makeItemCategory({
+          categoryId: PLACE_ID,
+          name: 'Cusco, Perú',
+          source: 'user',
+          confidence: null,
+          explanation: 'Confirmed by you',
+        }),
+      ]);
+    const { user } = setup(api);
+
+    await user.click(await screen.findByRole('button', { name: /confirm .*Cusco/i }));
+
+    // A calm, non-technical alert surfaces the failure — no raw error codes
+    // leak, and the visible chip is left untouched (nothing on disk changed).
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/couldn'?t save|try again/i);
+    expect(alert).not.toHaveTextContent(/DB busy|Error:|undefined/);
+    expect(screen.getByText('Cusco, Perú')).toBeInTheDocument();
+
+    // The user can retry from the banner; the second attempt replays the
+    // same correction and clears the alert on success.
+    await user.click(within(alert).getByRole('button', { name: /try again/i }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(api.applyCategoryCorrection).toHaveBeenCalledTimes(2);
+    expect(api.applyCategoryCorrection).toHaveBeenNthCalledWith(2, {
+      kind: 'confirm',
+      itemId: ITEM_ID,
+      categoryId: PLACE_ID,
+    });
+  });
+});
+
 describe('CategoryChips — accessibility (WCAG 2.1 AA)', () => {
   it('has no axe violations with chips + correction affordances rendered', async () => {
     const api = optedInApi([
@@ -213,6 +256,18 @@ describe('CategoryChips — accessibility (WCAG 2.1 AA)', () => {
 
     await user.click(await screen.findByRole('button', { name: /rename .*Cusco/i }));
     await screen.findByRole('textbox', { name: /category name/i });
+    await expectNoAxeViolations(container);
+  });
+
+  it('has no axe violations while the correction-failure banner is shown', async () => {
+    const api = optedInApi([makeItemCategory({ categoryId: PLACE_ID, name: 'Cusco, Perú' })]);
+    (api.applyCategoryCorrection as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('DB busy'),
+    );
+    const { user, container } = setup(api);
+
+    await user.click(await screen.findByRole('button', { name: /confirm .*Cusco/i }));
+    await screen.findByRole('alert');
     await expectNoAxeViolations(container);
   });
 });

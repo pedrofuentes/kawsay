@@ -14,6 +14,7 @@ import type { ReactElement } from 'react';
 import type { ItemCardDTO, ItemCategoryDTO } from '@shared/kawsay-api';
 import { cx } from '@renderer/lib/cx';
 import { useCategorizationStatus, useItemCategories } from '@renderer/lib/use-categorization';
+import { ErrorBanner } from './ErrorBanner';
 
 /** The explainable one-line tooltip: "Auto · Near Cusco, Perú (from photo GPS) · 0.92". */
 function reasonText(category: ItemCategoryDTO): string {
@@ -35,14 +36,19 @@ type Editing = { categoryId: string; mode: 'rename' | 'reassign' } | null;
 
 export function CategoryChips({ item }: { item: ItemCardDTO }): ReactElement | null {
   const { optedIn } = useCategorizationStatus();
-  const { categories, applyCorrection } = useItemCategories(item.id, optedIn);
+  const { categories, applyCorrection, correctionError, retryCorrection } = useItemCategories(
+    item.id,
+    optedIn,
+  );
 
   const baseId = useId();
   const [editing, setEditing] = useState<Editing>(null);
   const [draftName, setDraftName] = useState('');
 
   // DEFAULT-OFF and calm empty state: no surface at all until there is something to show.
-  if (!optedIn || categories.length === 0) {
+  // A pending correction-failure banner also keeps the panel visible so the user
+  // still sees WHY nothing changed and can retry.
+  if (!optedIn || (categories.length === 0 && correctionError === null)) {
     return null;
   }
 
@@ -62,6 +68,13 @@ export function CategoryChips({ item }: { item: ItemCardDTO }): ReactElement | n
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-border-subtle bg-surface-raised p-6">
       <h2 className="font-display text-xl font-semibold text-text-primary">Places &amp; themes</h2>
+      {correctionError !== null ? (
+        <ErrorBanner
+          message={correctionError.message}
+          onRetry={retryCorrection}
+          retryLabel="Try again"
+        />
+      ) : null}
       <ul aria-label="Places and themes this memory belongs to" className="flex flex-col gap-4">
         {categories.map((category) => {
           const descId = `${baseId}-desc-${category.categoryId}`;

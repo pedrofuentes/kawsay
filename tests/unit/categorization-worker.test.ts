@@ -188,4 +188,33 @@ describe('createWorkerThreadClusterTransport', () => {
     await expect(pending).rejects.toThrow(/exited/);
     expect(link.terminate).toHaveBeenCalledTimes(1);
   });
+
+  it('rejects and tears down when the worker replies with an unrecognized message type (must not hang the drain)', async () => {
+    const link = linkedWorker();
+    // Deliberately DO NOT bind the port — we drive the transport with a hand-crafted
+    // bogus reply, simulating a misbehaving/incompatible worker entry (once #270 lands).
+    const transport = createWorkerThreadClusterTransport({
+      scriptPath: 'unused.js',
+      createWorker: () => link.worker,
+    });
+
+    const pending = transport.run(PLACES_REQUEST);
+    // Post a reply whose `type` is neither `result` nor `error`. Before the fix this
+    // path silently ignores the message and the promise never settles, which would
+    // permanently wedge the orchestrator's drain (every later run returns `busy`).
+    link.port.postMessage({ type: 'garbage', payload: { anything: true } });
+
+    await expect(pending).rejects.toThrow();
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+
+    // Prove the transport is reusable: a fresh run on a fresh worker still resolves,
+    // i.e. the earlier bogus reply did not corrupt subsequent runs.
+    const link2 = linkedWorker();
+    bindClusterWorker(link2.port);
+    const transport2 = createWorkerThreadClusterTransport({
+      scriptPath: 'unused.js',
+      createWorker: () => link2.worker,
+    });
+    await expect(transport2.run(PLACES_REQUEST)).resolves.toBeDefined();
+  });
 });

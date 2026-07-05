@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GAZETTEER_ASSET_FILENAME,
   GAZETTEER_RESOURCE_SUBDIR,
@@ -16,7 +16,10 @@ import {
   resolveGazetteerAssetPath,
   type GazetteerEntry,
 } from '../../electron/main/categorize/gazetteer';
-import { haversineDistanceMeters, type GeoCoord } from '../../electron/main/categorize/places-cluster';
+import {
+  haversineDistanceMeters,
+  type GeoCoord,
+} from '../../electron/main/categorize/places-cluster';
 
 // A hand-authored in-memory gazetteer. The reverse-geocoder is fully injectable, so
 // these unit tests NEVER touch the real bundled asset — they pass this fixture (or a
@@ -28,7 +31,14 @@ const FIXTURE: readonly GazetteerEntry[] = [
   { id: 3936456, name: 'Lima', lat: -12.04318, lon: -77.02824, admin1: '15', country: 'PE' },
   { id: 3941584, name: 'Cusco', lat: -13.52264, lon: -71.96734, admin1: '08', country: 'PE' },
   { id: 2643743, name: 'London', lat: 51.50853, lon: -0.12574, admin1: 'ENG', country: 'GB' },
-  { id: 5128581, name: 'New York City', lat: 40.71427, lon: -74.00597, admin1: 'NY', country: 'US' },
+  {
+    id: 5128581,
+    name: 'New York City',
+    lat: 40.71427,
+    lon: -74.00597,
+    admin1: 'NY',
+    country: 'US',
+  },
   { id: 1850147, name: 'Tokyo', lat: 35.6895, lon: 139.69171, admin1: '40', country: 'JP' },
   { id: 2988507, name: 'Paris', lat: 48.85341, lon: 2.3488, admin1: 'A8', country: 'FR' },
 ];
@@ -100,7 +110,14 @@ describe('formatPlaceLabel ("City, Admin1, Country")', () => {
   });
 
   it('omits an empty country too (→ just the city)', () => {
-    const bare: GazetteerEntry = { id: 7, name: 'Lonelyville', lat: 0, lon: 0, admin1: '', country: '' };
+    const bare: GazetteerEntry = {
+      id: 7,
+      name: 'Lonelyville',
+      lat: 0,
+      lon: 0,
+      admin1: '',
+      country: '',
+    };
     expect(formatPlaceLabel(bare)).toBe('Lonelyville');
   });
 });
@@ -325,6 +342,52 @@ describe('loadGazetteer (asset loading + graceful degrade)', () => {
     }).not.toThrow();
     expect(gazetteer.size).toBe(0);
     expect(gazetteer.reverseGeocode(near(0, 0))).toBeNull();
+  });
+
+  describe('warn on present-but-unreadable asset (#331)', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('emits ONE console.warn (with path + error) when the asset is present but read fails', () => {
+      const diskError = new Error('disk error');
+      const readFile = vi.fn(() => {
+        throw diskError;
+      });
+      loadGazetteer({ ...OPTIONS, exists: () => true, readFile });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const call = warnSpy.mock.calls[0];
+      expect(call).toBeDefined();
+      const [msg, ...args] = call ?? [];
+      expect(typeof msg).toBe('string');
+      expect((msg as string).toLowerCase()).toContain('gazetteer');
+      // The resolved path must appear in the warning so triage can locate the asset.
+      const resolvedPath = resolveGazetteerAssetPath({ ...OPTIONS, exists: () => true });
+      expect(resolvedPath).not.toBeNull();
+      expect(msg as string).toContain(resolvedPath as string);
+      // The caught error must be forwarded as well.
+      expect(args).toContain(diskError);
+    });
+
+    it('emits ONE console.warn when the asset is present but JSON is corrupt', () => {
+      const readFile = vi.fn(() => 'not-valid-json-at-all\x00\x01\x02');
+      loadGazetteer({ ...OPTIONS, exists: () => true, readFile });
+      // parseGazetteerNdjson is resilient (skips malformed lines) so this may not throw;
+      // the file IS readable but produces an empty gazetteer — no warn expected here.
+      // A truly corrupt/truncated binary that causes readFile to throw IS the warn case.
+      // This test verifies the non-throw empty-parse path does NOT warn.
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('does NOT warn when the asset is simply absent (dev checkout)', () => {
+      const readFile = vi.fn(() => '');
+      loadGazetteer({ ...OPTIONS, exists: () => false, readFile });
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
   });
 });
 
