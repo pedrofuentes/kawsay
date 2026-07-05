@@ -271,11 +271,13 @@ describe('createKawsayApi (the contextBridge surface)', () => {
 
     expect(Object.keys(api).sort()).toEqual(
       [
+        'acceptSuggestion',
         'applyCategoryCorrection',
         'cancelCategorization',
         'cancelImport',
         'cancelTranscription',
         'createLibrary',
+        'dismissSuggestion',
         'downloadTranscriptionModel',
         'enableSmartSearch',
         'getAppVersion',
@@ -287,6 +289,8 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'getTranscriptionStatus',
         'isTranscriptionModelReady',
         'listItemCategories',
+        'listSuggestions',
+        'mergeSuggestion',
         'onCategorizationProgress',
         'onImportProgress',
         'onModelDownloadProgress',

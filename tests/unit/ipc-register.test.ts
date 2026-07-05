@@ -19,6 +19,10 @@ import {
   LIBRARY_OPEN,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
+  SUGGESTIONS_ACCEPT,
+  SUGGESTIONS_DISMISS,
+  SUGGESTIONS_LIST,
+  SUGGESTIONS_MERGE,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -86,6 +90,10 @@ const otherHandlers = {
     counts: { categorized: 0, skipped: 0, failed: 0, inFlight: 0 },
   }),
   [CATEGORIZE_CANCEL]: () => ({ cancelled: false }),
+  [SUGGESTIONS_LIST]: () => ({ suggestions: [], collections: [] }),
+  [SUGGESTIONS_ACCEPT]: () => ({ suggestions: [], collections: [] }),
+  [SUGGESTIONS_MERGE]: () => ({ suggestions: [], collections: [] }),
+  [SUGGESTIONS_DISMISS]: () => ({ suggestions: [], collections: [] }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
