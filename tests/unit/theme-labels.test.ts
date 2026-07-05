@@ -3,6 +3,7 @@ import {
   deriveThemeLabels,
   tokenizeThemeText,
   THEME_LABEL_CONFIDENCE,
+  THEME_LABEL_DEFAULTS,
   type ThemeLabelCluster,
   type ThemeLabelCorpusItem,
   type DeriveThemeLabelsResult,
@@ -147,6 +148,53 @@ describe('deriveThemeLabels — TF-in-cluster ÷ DF-in-corpus labelling (ADR-003
     });
     expect(result.labels[0].label).toBe('Beach');
     expect(termNames(result)).toEqual(['beach', 'sea']);
+  });
+
+  it('falls back to default maxLabelTerms when NaN is supplied (non-finite guard)', () => {
+    // NaN is non-finite: must fall back to THEME_LABEL_DEFAULTS.maxLabelTerms (3),
+    // not produce an empty label from slice(0, NaN) === [].
+    const corpus = [
+      doc('c1', 'beach sea sun'),
+      doc('c2', 'beach sea wind'),
+      doc('c3', 'beach sun wind'),
+    ];
+    const result = deriveThemeLabels([cluster('theme:beach', ['c1', 'c2', 'c3'])], corpus, {
+      maxLabelTerms: NaN,
+    });
+    // With default (3) terms the label must be non-empty and confidence > 0.
+    expect(result.labels[0].label).not.toBe('');
+    expect(result.labels[0].confidence).toBeGreaterThan(0);
+    // The label word count must equal THEME_LABEL_DEFAULTS.maxLabelTerms (≤ distinct terms).
+    const wordCount = result.labels[0].label.split(' ').length;
+    expect(wordCount).toBe(THEME_LABEL_DEFAULTS.maxLabelTerms);
+  });
+
+  it('falls back to default maxLabelTerms when Infinity is supplied (non-finite guard)', () => {
+    // Infinity would pass the Math.max(1, …) clamp producing slice(0, Infinity).
+    // The guard must replace it with THEME_LABEL_DEFAULTS.maxLabelTerms (3).
+    const corpus = [
+      doc('c1', 'beach sea sun'),
+      doc('c2', 'beach sea wind'),
+      doc('c3', 'beach sun wind'),
+    ];
+    const result = deriveThemeLabels([cluster('theme:beach', ['c1', 'c2', 'c3'])], corpus, {
+      maxLabelTerms: Infinity,
+    });
+    const wordCount = result.labels[0].label.split(' ').length;
+    expect(wordCount).toBe(THEME_LABEL_DEFAULTS.maxLabelTerms);
+  });
+
+  it('falls back to default maxLabelTerms when -Infinity is supplied (non-finite guard)', () => {
+    const corpus = [
+      doc('c1', 'beach sea sun'),
+      doc('c2', 'beach sea wind'),
+      doc('c3', 'beach sun wind'),
+    ];
+    const result = deriveThemeLabels([cluster('theme:beach', ['c1', 'c2', 'c3'])], corpus, {
+      maxLabelTerms: -Infinity,
+    });
+    const wordCount = result.labels[0].label.split(' ').length;
+    expect(wordCount).toBe(THEME_LABEL_DEFAULTS.maxLabelTerms);
   });
 
   it('marks text-derived labels with a low, sub-gazetteer confidence; empty when none', () => {
