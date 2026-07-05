@@ -12,6 +12,8 @@ import type {
   LibrarySummaryDTO,
   ModelDownloadProgressEvent,
   SearchResultDTO,
+  SuggestionDTO,
+  SuggestionsViewDTO,
   TranscriptionProgressEvent,
   TranscriptViewDTO,
 } from '@shared/kawsay-api';
@@ -21,6 +23,7 @@ export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 let itemCardSeq = 0;
 let itemCategorySeq = 0;
+let suggestionSeq = 0;
 
 /**
  * Build a renderer-shaped timeline/search tile. The id is unique per call so
@@ -145,6 +148,39 @@ export function makeItemCategory(over: Partial<ItemCategoryDTO> = {}): ItemCateg
   };
 }
 
+/**
+ * Build a suggested-collection card DTO (the `suggestions:list` element, #273).
+ * Defaults to a place grouping near Cusco with 12 members and one photo example,
+ * so a tray test sees a realistic card; the `categoryId` is unique per call so
+ * list-key tests get distinct rows — pass `over` to pin any field a test asserts on.
+ */
+export function makeSuggestion(over: Partial<SuggestionDTO> = {}): SuggestionDTO {
+  suggestionSeq += 1;
+  return {
+    categoryId: `20000000-0000-4000-8000-${String(suggestionSeq).padStart(12, '0')}`,
+    kind: 'place',
+    name: 'Cusco, Perú',
+    memberCount: 12,
+    examples: [
+      {
+        id: `21000000-0000-4000-8000-${String(suggestionSeq).padStart(12, '0')}`,
+        mediaType: 'photo',
+        title: 'A quiet afternoon',
+        hasThumbnail: true,
+      },
+    ],
+    ...over,
+  };
+}
+
+/** Build a suggestions-tray view (the `suggestions:list` response, #273). Empty by default. */
+export function makeSuggestionsView(over: Partial<SuggestionsViewDTO> = {}): SuggestionsViewDTO {
+  return {
+    suggestions: over.suggestions ?? [],
+    collections: over.collections ?? [],
+  };
+}
+
 export interface FakeApi extends KawsayAPI {
   /** Push a progress event to every current onImportProgress subscriber. */
   emitProgress(event: ImportProgressEvent): void;
@@ -194,6 +230,10 @@ export interface FakeApiOptions {
   applyCategoryCorrection?: KawsayAPI['applyCategoryCorrection'];
   startCategorization?: KawsayAPI['startCategorization'];
   cancelCategorization?: KawsayAPI['cancelCategorization'];
+  listSuggestions?: KawsayAPI['listSuggestions'];
+  acceptSuggestion?: KawsayAPI['acceptSuggestion'];
+  mergeSuggestion?: KawsayAPI['mergeSuggestion'];
+  dismissSuggestion?: KawsayAPI['dismissSuggestion'];
 }
 
 /** A zero transcription tally (the calm default for status/start fakes). */
@@ -338,6 +378,17 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         categorizationListeners.delete(listener);
       };
     },
+    // Suggested-collections review tray (M4-3c / #273). Defaults stay calm and
+    // DEFAULT-OFF: an empty tray (no suggestions, no merge targets), and curation
+    // actions that echo an empty refreshed view. Tray tests inject their own view.
+    listSuggestions:
+      opts.listSuggestions ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
+    acceptSuggestion:
+      opts.acceptSuggestion ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
+    mergeSuggestion:
+      opts.mergeSuggestion ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
+    dismissSuggestion:
+      opts.dismissSuggestion ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },
