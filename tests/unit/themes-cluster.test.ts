@@ -419,9 +419,13 @@ describe('clusterThemes — threshold-agglomerative cosine clustering (ADR-0030 
 
       // Complexity bound: same hardware, same corpus, same algorithm shape — the
       // bounded impl must be materially faster (≥ 2×) than the naive O(n·k·dim)
-      // reference. The ratio is machine-independent, so this is robust on CI where
-      // the absolute wall-clock times vary widely.
-      expect(boundedElapsed * 2).toBeLessThan(naiveElapsed);
+      // reference. Gated behind a noise-floor: if naiveElapsed is too short
+      // (< 50 ms), scheduling jitter can flip the ratio even on correct code, so
+      // we skip the timing assertion rather than produce a false failure. The three
+      // correctness oracles above are the load-bearing assertions regardless.
+      if (naiveElapsed >= 50) {
+        expect(boundedElapsed * 2).toBeLessThan(naiveElapsed);
+      }
     },
   );
 });
