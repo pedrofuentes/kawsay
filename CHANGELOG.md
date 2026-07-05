@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   correction can't be saved (for example, another window is using the archive), Kawsay now shows a
   calm, retryable message instead of quietly leaving you unsure — and if you move to a different
   memory before an in-flight save answers back, its result no longer flashes on the new memory.
+- **"Try again" on a failed correction now actually retries** (#360): if two saves for the same
+  memory were racing and the earlier one finished while the later one hit a transient error, the
+  **Try again** button no longer silently no-ops — it now re-sends the correction you last made.
 - **A stalled model download no longer hangs**: if the optional smart-search model download
   opens a connection but then receives no data, Kawsay now ends it calmly with a clear message
   and releases the connection, instead of sitting stuck.
