@@ -145,11 +145,57 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
         ],
       });
 
-      const { records, skips } = await run(dir, depsForRealDir());
+      const { records, skips, result } = await run(dir, depsForRealDir());
 
       expect(records.map((r) => r.body)).toEqual(['after huge']);
       expect(skips).toContainEqual(
         expect.objectContaining({ ref: 'message:0', code: 'E_MESSAGE_TOO_LARGE' }),
+      );
+      // Stat-path: the returned ImportResult mirrors the skip callback and record counter.
+      expect(result.recordCount).toBe(1);
+      expect(result.skipped).toContainEqual(
+        expect.objectContaining({ ref: 'message:0', code: 'E_MESSAGE_TOO_LARGE' }),
+      );
+    } finally {
+      removeTmpDir(dir);
+    }
+  });
+
+  it('caps one deeply nested message object and keeps later Telegram messages', async () => {
+    const dir = makeTmpDir('telegram-depth-bounds-');
+    try {
+      // Nest well past MAX_JSON_NESTING_DEPTH (100) so the streaming parser trips the
+      // depth cap. JSON.parse handles this nesting fine, so without the cap the message
+      // would be emitted — this test fails if the cap is removed or raised unboundedly.
+      let deeplyNested: unknown = 'bottom';
+      for (let i = 0; i < 130; i++) deeplyNested = { nested: deeplyNested };
+      writeResult(dir, {
+        name: 'Mamá',
+        type: 'personal_chat',
+        id: 42,
+        messages: [
+          {
+            id: 1,
+            type: 'message',
+            date_unixtime: 1,
+            from: 'Mamá',
+            text: 'deep one',
+            nested: deeplyNested,
+          },
+          { id: 2, type: 'message', date_unixtime: 2, from: 'Mamá', text: 'after deep' },
+        ],
+      });
+
+      const { records, skips, result } = await run(dir, depsForRealDir());
+
+      expect(records.map((r) => r.body)).toEqual(['after deep']);
+      expect(skips).toContainEqual(
+        expect.objectContaining({ ref: 'message:0', code: 'E_MESSAGE_TOO_DEEP' }),
+      );
+      // Stat-path: the returned ImportResult mirrors the skip callback and record counter.
+      expect(result.recordCount).toBe(1);
+      expect(result.skipped).toContainEqual(
+        expect.objectContaining({ ref: 'message:0', code: 'E_MESSAGE_TOO_DEEP' }),
       );
     } finally {
       removeTmpDir(dir);
