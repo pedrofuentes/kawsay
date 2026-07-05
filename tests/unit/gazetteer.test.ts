@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -218,8 +219,11 @@ describe('resolveGazetteerAssetPath', () => {
 
   it('prefers the full asset under resourcesPath/gazetteer when packaged', () => {
     const path = resolveGazetteerAssetPath({ ...PACKAGED, exists: () => true });
+    // Build the expected path with the same OS-native `path.join` the module uses, so
+    // the assertion holds on both POSIX (`/`) and Windows (`\`) — the components (dir +
+    // subdir + full-asset filename) are still asserted exactly.
     expect(path).toBe(
-      `/Applications/Kawsay.app/Contents/Resources/${GAZETTEER_RESOURCE_SUBDIR}/${GAZETTEER_ASSET_FILENAME}`,
+      join(PACKAGED.resourcesPath, GAZETTEER_RESOURCE_SUBDIR, GAZETTEER_ASSET_FILENAME),
     );
   });
 
@@ -229,13 +233,15 @@ describe('resolveGazetteerAssetPath', () => {
       exists: (p) => p.endsWith(GAZETTEER_SAMPLE_FILENAME),
     });
     expect(path).toBe(
-      `/Applications/Kawsay.app/Contents/Resources/${GAZETTEER_RESOURCE_SUBDIR}/${GAZETTEER_SAMPLE_FILENAME}`,
+      join(PACKAGED.resourcesPath, GAZETTEER_RESOURCE_SUBDIR, GAZETTEER_SAMPLE_FILENAME),
     );
   });
 
   it('resolves under projectRoot/resources/gazetteer in dev', () => {
     const path = resolveGazetteerAssetPath({ ...DEV, exists: () => true });
-    expect(path).toBe(`/repo/resources/${GAZETTEER_RESOURCE_SUBDIR}/${GAZETTEER_ASSET_FILENAME}`);
+    expect(path).toBe(
+      join(DEV.projectRoot, 'resources', GAZETTEER_RESOURCE_SUBDIR, GAZETTEER_ASSET_FILENAME),
+    );
   });
 
   it('returns null when neither the full asset nor the sample exists', () => {
