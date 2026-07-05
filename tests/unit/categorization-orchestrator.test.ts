@@ -302,6 +302,50 @@ describe('createCategorizationStore', () => {
     const next = store.listPendingCategorization('b', 2);
     expect(next.map((i) => i.id)).toEqual(['c']);
   });
+
+  // Regression cover for #340: the pending keyset is served by a split first
+  // vs subsequent-page SQL (no `OR (@afterId IS NULL OR i.id > @afterId)`) so
+  // migration 005's partial `idx_items_category_queue` index can serve the
+  // ordered scan. The ordering / boundary semantics MUST be identical to a
+  // single-statement drain — this test walks every page and asserts the
+  // concatenation equals a single "all pending, ordered by id" read, and that
+  // an afterId equal to the last id yields no rows.
+  it('walks every keyset page in strict ascending id order across a mixed corpus', () => {
+    const db = freshCatalog();
+    const catalog = createCatalogRepo(db);
+    // Interleave non-pending statuses to prove the partial-index scan skips
+    // them and the split first/subsequent SQL still emits the SAME ordered
+    // sequence a single query would.
+    const ids = ['i1', 'i2', 'i3', 'i4', 'i5', 'i6', 'i7'];
+    for (const id of ids) catalog.insertItem({ id, mediaType: 'message' });
+    const store = createCategorizationStore(db);
+    // Flip a few out of the pending set: `i2` done, `i5` error, `i6` skipped.
+    store.markCategorized('i2');
+    store.markCategoryFailed('i5');
+    store.markCategorySkipped('i6');
+    const expectedPending = ['i1', 'i3', 'i4', 'i7'];
+
+    // A single-page read of every pending row (the reference ordering).
+    const oneShot = store.listPendingCategorization(null, 100).map((i) => i.id);
+    expect(oneShot).toEqual(expectedPending);
+
+    // Walk with batchSize 2 — exercises the first-page branch (afterId=null)
+    // AND the subsequent-page branch (afterId set) and must produce the same
+    // ordered sequence.
+    const walked: string[] = [];
+    let afterId: string | null = null;
+    for (;;) {
+      const page = store.listPendingCategorization(afterId, 2);
+      if (page.length === 0) break;
+      for (const item of page) walked.push(item.id);
+      afterId = page[page.length - 1].id;
+      if (page.length < 2) break;
+    }
+    expect(walked).toEqual(expectedPending);
+
+    // After the last id, the subsequent-page branch yields an empty page.
+    expect(store.listPendingCategorization('i7', 10)).toHaveLength(0);
+  });
 });
 
 // ── The gate: refuse with NO side effects ─────────────────────────────────────
@@ -416,6 +460,52 @@ describe('places pipeline', () => {
     expect(requests).toHaveLength(1);
     expect(requests[0].places?.points.map((pt) => pt.id).sort()).toEqual(['p1', 'p2', 'p3']);
     expect(requests[0].themes).toBeUndefined();
+  });
+
+  // Regression cover for #338: a gazetteer that returns an empty display label
+  // (`{ label: '', sourceKey }`) MUST fall back to the `coordLabel(centroid)`
+  // "lat, lon" name (4-decimal format), not a blank string. Without this cover
+  // a regression could silently produce blank place-category names.
+  it('falls back to a coordinate label when the gazetteer returns an empty label', async () => {
+    const sourceKey = placeSourceKey(9_999_001);
+    const fakeGazetteer: Gazetteer = {
+      size: 1,
+      reverseGeocode: () => ({ label: '', sourceKey }),
+    };
+    const { orchestrator, db, categories } = harness({
+      gazetteer: fakeGazetteer,
+      seed: [
+        { id: 'q1', gpsLat: CUSCO_A.lat, gpsLon: CUSCO_A.lon },
+        { id: 'q2', gpsLat: CUSCO_B.lat, gpsLon: CUSCO_B.lon },
+        { id: 'q3', gpsLat: CUSCO_C.lat, gpsLon: CUSCO_C.lon },
+      ],
+    });
+
+    const result = await orchestrator.run();
+
+    expect(result.outcome).toBe('completed');
+    expect(result.counts.categorized).toBe(3);
+    for (const id of ['q1', 'q2', 'q3']) expect(categoryStatusOf(db, id)).toBe('done');
+
+    const cats = allCategories(db);
+    expect(cats).toHaveLength(1);
+    expect(cats[0]).toMatchObject({ kind: 'place', source_key: sourceKey });
+
+    // The cluster centroid is the mean of the three CUSCO_* coords (all near
+    // -13.5321, -71.9675). Pin the CONCRETE coordLabel format: two numbers
+    // formatted with 4 decimals joined by ", " — not merely a non-empty string
+    // (the empty label itself is non-empty after concatenation).
+    expect(cats[0].name).toMatch(/^-?\d+\.\d{4}, -?\d+\.\d{4}$/);
+    const meanLat = (CUSCO_A.lat + CUSCO_B.lat + CUSCO_C.lat) / 3;
+    const meanLon = (CUSCO_A.lon + CUSCO_B.lon + CUSCO_C.lon) / 3;
+    expect(cats[0].name).toBe(`${meanLat.toFixed(4)}, ${meanLon.toFixed(4)}`);
+
+    // The assignment's explanation surfaces the coordinate label too (proving
+    // the fallback flows through to the per-member auto-assignment, not just
+    // the category row).
+    const assignment = categories.resolveAssignment('q1', cats[0].id);
+    expect(assignment).toMatchObject({ signal: 'gps', confidence: PLACE_ASSIGNMENT_CONFIDENCE });
+    expect(assignment?.explanation).toContain(cats[0].name);
   });
 });
 
