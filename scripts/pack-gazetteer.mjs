@@ -30,6 +30,7 @@
 // of the full asset's rows. Zero NEW dependencies: Node built-ins + the existing
 // `yauzl` (already a dependency for the archive importers).
 
+import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { get } from 'node:https';
@@ -39,6 +40,23 @@ import yauzl from 'yauzl';
 
 /** The canonical GeoNames dump (CC BY 4.0). */
 export const CITIES1000_URL = 'https://download.geonames.org/export/dump/cities1000.zip';
+
+/**
+ * Pinned SHA-256 of the authoritative upstream `cities1000.zip` (#330). The
+ * download is verified against this constant before it is passed to the ZIP
+ * reader, mirroring the checksum-verified whisper-ggml pattern
+ * (electron/main/transcription/model-integrity.ts). A mismatch aborts the pack
+ * with a clear error so a compromised distribution, a poisoned proxy, or a
+ * silent upstream re-publish CANNOT get packed into the shipped
+ * resources/gazetteer/cities1000.ndjson undetected.
+ *
+ * Provenance: computed by hashing the file served from CITIES1000_URL above
+ * (the upstream GeoNames cities1000.zip). GeoNames may republish the dump
+ * without changing the URL — when they do, this pin MUST be re-computed
+ * (`shasum -a 256 cities1000.zip`) and updated in the same commit that bumps
+ * the packed asset.
+ */
+export const CITIES1000_SHA256 = '145e192503f8aea97f5c1a9df1ebcb4b40d65f42bbb5319a1bab43852c6a9c6d';
 
 /** The single text file packed inside cities1000.zip. */
 const ZIP_ENTRY_NAME = 'cities1000.txt';
@@ -82,6 +100,22 @@ export function download(url) {
       response.on('error', reject);
     }).on('error', reject);
   });
+}
+
+/**
+ * Pure, network-free integrity check (#330). Compares the SHA-256 of `buffer`
+ * against `expectedHex` (case-insensitive) and throws on mismatch, naming both
+ * digests so the abort message tells the operator exactly what to
+ * re-verify/re-pin. Extracted so the accept/abort behaviour is unit-tested
+ * without going to the network.
+ */
+export function verifySha256(buffer, expectedHex) {
+  const actualHex = createHash('sha256').update(buffer).digest('hex');
+  const expected = expectedHex.toLowerCase();
+  if (actualHex !== expected) {
+    throw new Error(`SHA-256 mismatch: expected ${expected}, got ${actualHex}`);
+  }
+  return actualHex;
 }
 
 /** Extract the `cities1000.txt` payload from the zip Buffer as a string. */
@@ -186,7 +220,7 @@ async function writeNdjson(path, rows) {
   });
 }
 
-function parseSampleSize(args) {
+export function parseSampleSize(args) {
   const flag = args.find((arg) => arg === '--sample' || arg.startsWith('--sample='));
   if (flag === undefined) return null;
   const eq = flag.indexOf('=');
@@ -199,9 +233,9 @@ async function main() {
   const sampleSize = parseSampleSize(process.argv.slice(2));
   process.stdout.write(`Downloading ${CITIES1000_URL} ...\n`);
   const zipBuffer = await download(CITIES1000_URL);
-  process.stdout.write(
-    `Downloaded ${String(zipBuffer.length)} bytes; unpacking ${ZIP_ENTRY_NAME} ...\n`,
-  );
+  process.stdout.write(`Downloaded ${String(zipBuffer.length)} bytes; verifying SHA-256 ...\n`);
+  verifySha256(zipBuffer, CITIES1000_SHA256);
+  process.stdout.write(`SHA-256 OK (${CITIES1000_SHA256}); unpacking ${ZIP_ENTRY_NAME} ...\n`);
   const tsv = await readZipEntry(zipBuffer);
   const rows = trimRows(tsv);
   process.stdout.write(`Trimmed ${String(rows.length)} places.\n`);
