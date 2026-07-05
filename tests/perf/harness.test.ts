@@ -348,4 +348,36 @@ describe('formatMarkdownResults', () => {
     expect(md).toMatch(/\bes\b/);
     expect(md.toLowerCase()).toContain('overall');
   });
+
+  it('escapes backslashes as well as pipes in detail cells so the table stays unambiguous', () => {
+    const measurements: ClipMeasurement[] = [
+      {
+        ok: true,
+        id: 'es-1',
+        language: 'es',
+        detectedLanguage: 'es',
+        hypothesis: 'a\\|b',
+        referenceWordCount: 4,
+        errorCount: 1,
+        wer: 0.25,
+        audioDurationSec: 2,
+        inferenceMs: 1000,
+        rtf: 0.5,
+      },
+      {
+        ok: false,
+        id: 'es-2',
+        language: 'es',
+        reason: 'no-speech',
+        message: 'x\\|y',
+      },
+    ];
+    const summary = summarizeMeasurements(measurements);
+    const md = formatMarkdownResults(summary, measurements);
+    // A literal backslash must be escaped to `\\` before the pipe is escaped to
+    // `\|`, so `a\|b` renders as `a\\\|b` — never the ambiguous `a\\|b`, which a
+    // markdown reader would parse as an escaped backslash plus a cell delimiter.
+    expect(md).toContain('a\\\\\\|b');
+    expect(md).toContain('x\\\\\\|y');
+  });
 });

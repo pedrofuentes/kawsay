@@ -292,6 +292,15 @@ function pct(value: number): string {
 }
 
 /**
+ * Escape a value for a markdown table cell: the backslash is escaped first, then
+ * the pipe, so a literal `\` never combines with the following delimiter escape
+ * into an ambiguous sequence (CodeQL js/incomplete-sanitization).
+ */
+function escapeMarkdownCell(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
+}
+
+/**
  * Render the harness summary (and, when provided, the per-clip detail) as the
  * markdown tables committed to the results doc, so the cofounder sees real numbers.
  */
@@ -334,10 +343,12 @@ export function formatMarkdownResults(
         lines.push(
           `| ${m.id} | ${m.language} | ${m.detectedLanguage ?? '—'} | ${m.audioDurationSec.toFixed(2)} | ` +
             `${(m.inferenceMs / 1000).toFixed(2)} | ${m.rtf.toFixed(2)}× | ${pct(m.wer)} | ` +
-            `${m.errorCount}/${m.referenceWordCount} | ${m.hypothesis.replace(/\|/g, '\\|')} |`,
+            `${m.errorCount}/${m.referenceWordCount} | ${escapeMarkdownCell(m.hypothesis)} |`,
         );
       } else {
-        lines.push(`| ${m.id} | ${m.language} | — | — | — | — | skip (${m.reason}) | — | ${m.message.replace(/\|/g, '\\|')} |`);
+        lines.push(
+          `| ${m.id} | ${m.language} | — | — | — | — | skip (${m.reason}) | — | ${escapeMarkdownCell(m.message)} |`,
+        );
       }
     }
   }
