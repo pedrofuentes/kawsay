@@ -192,18 +192,36 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
         .applyCategoryCorrection(input)
         .then((refreshed) => {
           if (!mountedRef.current || currentItemIdRef.current !== capturedItemId) {
+            // Stale/unmounted resolve — drop it. Log for diagnostics so a
+            // silent drop is still traceable in this local-only, telemetry-
+            // free app.
+            console.debug(
+              '[kawsay] category correction result dropped; item switched or hook unmounted',
+            );
             return;
           }
           setCategories(refreshed);
           setCorrectionError(null);
-          lastCorrectionRef.current = null;
+          // Deliberately DO NOT clear `lastCorrectionRef` here: a sibling
+          // correction may still be in flight, and clearing on ANY success
+          // would strand its "Try again" button as a visible no-op (#360).
+          // `correctionError === null` already gates the button, and the
+          // ref is reset on item-switch (see the effect above), so a stale
+          // non-null retry target is harmless.
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (!mountedRef.current || currentItemIdRef.current !== capturedItemId) {
+            console.debug(
+              '[kawsay] category correction rejection dropped; item switched or hook unmounted',
+              error,
+            );
             return;
           }
           // Surface a calm, retryable failure — the current chips stay put
-          // because nothing on disk changed.
+          // because nothing on disk changed. Log the underlying error via
+          // the [kawsay] convention so support/dev can distinguish a
+          // transient SQLITE_BUSY from a programming error (#361).
+          console.warn('[kawsay] category correction failed; surfacing a retryable banner', error);
           setCorrectionError({ message: CORRECTION_FAILURE_MESSAGE });
         });
     },
