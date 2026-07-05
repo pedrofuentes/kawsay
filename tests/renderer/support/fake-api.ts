@@ -3,9 +3,14 @@
 // and lets a test drive the import-progress stream synchronously via emitProgress.
 import { vi } from 'vitest';
 import type {
+  CategorizationProgressEvent,
+  CategorizationStartResultDTO,
+  CategorizationStatusDTO,
+  CategorizationCorrectionDTO,
   ImportProgressEvent,
   ImportSummaryDTO,
   ItemCardDTO,
+  ItemCategoryDTO,
   KawsayAPI,
   LibrarySummaryDTO,
   ModelDownloadProgressEvent,
@@ -18,6 +23,7 @@ import type {
 export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 let itemCardSeq = 0;
+let itemCategorySeq = 0;
 
 /**
  * Build a renderer-shaped timeline/search tile. The id is unique per call so
@@ -121,6 +127,27 @@ export function makeTranscriptView(over: Partial<TranscriptViewDTO> = {}): Trans
   };
 }
 
+/**
+ * Build an explainable category chip (the `categorize:listForItem` element, #270).
+ * Defaults to an AUTO place assignment near Cusco with a GPS signal + confidence, so
+ * a chip test sees a realistic "Auto — near Cusco, Perú (photo GPS) · 0.92" tooltip;
+ * the `categoryId` is unique per call so list-key tests get distinct rows — pass
+ * `over` (e.g. `{ categoryId }`) to pin any field a test asserts on.
+ */
+export function makeItemCategory(over: Partial<ItemCategoryDTO> = {}): ItemCategoryDTO {
+  itemCategorySeq += 1;
+  return {
+    categoryId: `10000000-0000-4000-8000-${String(itemCategorySeq).padStart(12, '0')}`,
+    kind: 'place',
+    name: 'Cusco, Perú',
+    source: 'auto',
+    signal: 'gps',
+    confidence: 0.92,
+    explanation: 'Near Cusco, Perú (from photo GPS)',
+    ...over,
+  };
+}
+
 export interface FakeApi extends KawsayAPI {
   /** Push a progress event to every current onImportProgress subscriber. */
   emitProgress(event: ImportProgressEvent): void;
@@ -138,6 +165,10 @@ export interface FakeApi extends KawsayAPI {
   emitTranscriptionProgress(event: TranscriptionProgressEvent): void;
   /** Number of live transcription-progress subscribers (asserts clean unsubscribe). */
   transcriptionSubscriberCount(): number;
+  /** Push a categorization snapshot to every onCategorizationProgress subscriber. */
+  emitCategorizationProgress(event: CategorizationProgressEvent): void;
+  /** Number of live categorization-progress subscribers (asserts clean unsubscribe). */
+  categorizationSubscriberCount(): number;
 }
 
 export interface FakeApiOptions {
@@ -160,6 +191,12 @@ export interface FakeApiOptions {
   getTranscript?: KawsayAPI['getTranscript'];
   getSmartSearchStatus?: KawsayAPI['getSmartSearchStatus'];
   enableSmartSearch?: KawsayAPI['enableSmartSearch'];
+  getCategorizationStatus?: KawsayAPI['getCategorizationStatus'];
+  setCategorizationConsent?: KawsayAPI['setCategorizationConsent'];
+  listItemCategories?: KawsayAPI['listItemCategories'];
+  applyCategoryCorrection?: KawsayAPI['applyCategoryCorrection'];
+  startCategorization?: KawsayAPI['startCategorization'];
+  cancelCategorization?: KawsayAPI['cancelCategorization'];
 }
 
 /** A zero transcription tally (the calm default for status/start fakes). */
@@ -171,12 +208,21 @@ const ZERO_TRANSCRIPTION_COUNTS = {
   inFlight: 0,
 } as const;
 
+/** A zero categorization tally (the calm default for status/start fakes, #270). */
+const ZERO_CATEGORIZATION_COUNTS = {
+  categorized: 0,
+  skipped: 0,
+  failed: 0,
+  inFlight: 0,
+} as const;
+
 /** Build a fully typed fake KawsayAPI whose methods are spies (vi.fn). */
 export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
   const listeners = new Set<(event: ImportProgressEvent) => void>();
   const modelListeners = new Set<(event: ModelDownloadProgressEvent) => void>();
   const smartSearchModelListeners = new Set<(event: ModelDownloadProgressEvent) => void>();
   const transcriptionListeners = new Set<(event: TranscriptionProgressEvent) => void>();
+  const categorizationListeners = new Set<(event: CategorizationProgressEvent) => void>();
   const jobId = opts.jobId ?? FAKE_JOB_ID;
 
   return {
@@ -267,6 +313,34 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         smartSearchModelListeners.delete(listener);
       };
     },
+    // Categorization opt-in (M4-2h / #270) — the explainable-chips + consent UI drive
+    // these the same way transcription drives its run methods. Defaults stay calm and
+    // DEFAULT-OFF: not offered, not opted in, no chips, an idle run, a no-op cancel.
+    getCategorizationStatus:
+      opts.getCategorizationStatus ??
+      vi.fn(() => Promise.resolve({ optedIn: false, offered: false })),
+    setCategorizationConsent:
+      opts.setCategorizationConsent ??
+      vi.fn((input: { optedIn: boolean }) => Promise.resolve({ optedIn: input.optedIn })),
+    listItemCategories: opts.listItemCategories ?? vi.fn(() => Promise.resolve([])),
+    applyCategoryCorrection: opts.applyCategoryCorrection ?? vi.fn(() => Promise.resolve([])),
+    startCategorization:
+      opts.startCategorization ??
+      vi.fn(() =>
+        Promise.resolve({
+          outcome: 'idle' as const,
+          reason: null,
+          counts: { ...ZERO_CATEGORIZATION_COUNTS },
+        }),
+      ),
+    cancelCategorization:
+      opts.cancelCategorization ?? vi.fn(() => Promise.resolve({ cancelled: false })),
+    onCategorizationProgress: (listener) => {
+      categorizationListeners.add(listener);
+      return () => {
+        categorizationListeners.delete(listener);
+      };
+    },
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },
@@ -283,5 +357,9 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       for (const listener of [...transcriptionListeners]) listener(event);
     },
     transcriptionSubscriberCount: () => transcriptionListeners.size,
+    emitCategorizationProgress: (event) => {
+      for (const listener of [...categorizationListeners]) listener(event);
+    },
+    categorizationSubscriberCount: () => categorizationListeners.size,
   };
 }

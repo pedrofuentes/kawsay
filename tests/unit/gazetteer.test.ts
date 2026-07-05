@@ -9,6 +9,7 @@ import {
   PLACE_SOURCE_KEY_PREFIX,
   createGazetteer,
   formatPlaceLabel,
+  isGazetteerBundled,
   loadGazetteer,
   parseGazetteerNdjson,
   placeSourceKey,
@@ -246,6 +247,39 @@ describe('resolveGazetteerAssetPath', () => {
 
   it('returns null when neither the full asset nor the sample exists', () => {
     expect(resolveGazetteerAssetPath({ ...PACKAGED, exists: () => false })).toBeNull();
+  });
+});
+
+describe('isGazetteerBundled (the build-time opt-in gate signal, #270)', () => {
+  const PACKAGED = {
+    isPackaged: true,
+    resourcesPath: '/Applications/Kawsay.app/Contents/Resources',
+    projectRoot: '/unused/in/packaged',
+  };
+
+  it('is TRUE when a bundled asset (full or sample) is present — reveal the opt-in UI', () => {
+    expect(isGazetteerBundled({ ...PACKAGED, exists: () => true })).toBe(true);
+    expect(
+      isGazetteerBundled({ ...PACKAGED, exists: (p) => p.endsWith(GAZETTEER_SAMPLE_FILENAME) }),
+    ).toBe(true);
+  });
+
+  it('is FALSE when neither asset is present — keep the opt-in UI hidden', () => {
+    expect(isGazetteerBundled({ ...PACKAGED, exists: () => false })).toBe(false);
+  });
+
+  it('reads ONLY the asset presence — it never opens the network or parses bytes', () => {
+    // A pure path-presence probe: it must not need a readFile seam at all.
+    const calls: string[] = [];
+    const result = isGazetteerBundled({
+      ...PACKAGED,
+      exists: (p) => {
+        calls.push(p);
+        return true;
+      },
+    });
+    expect(result).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
   });
 });
 

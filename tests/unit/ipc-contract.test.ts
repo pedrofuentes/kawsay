@@ -4,6 +4,12 @@ import {
   CATALOG_SEARCH,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATEGORIZE_APPLY_CORRECTION,
+  CATEGORIZE_CANCEL,
+  CATEGORIZE_LIST_FOR_ITEM,
+  CATEGORIZE_SET_CONSENT,
+  CATEGORIZE_START,
+  CATEGORIZE_STATUS,
   DIALOG_OPEN_DIRECTORY,
   DIALOG_OPEN_FILE,
   IMPORT_CANCEL,
@@ -853,5 +859,123 @@ describe('ipcEventContract — smartSearch:modelDownloadProgress (M4-1b, separat
         rogue: true,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('ipcContract — categorize (M4-2h opt-in categorization surface)', () => {
+  const UUID_B = '5f2504e0-4f89-41d3-9a0c-0305e82c33aa';
+  const chip = {
+    categoryId: UUID,
+    kind: 'place',
+    name: 'Cusco, Perú',
+    source: 'auto',
+    signal: 'gps',
+    confidence: 0.92,
+    explanation: 'Near Cusco, Perú (from photo GPS)',
+  };
+
+  it('categorize:status — empty request; {optedIn, offered} response, strict', () => {
+    expect(reqOk(CATEGORIZE_STATUS, {})).toBe(true);
+    expect(reqOk(CATEGORIZE_STATUS, { rogue: 1 })).toBe(false);
+    expect(resOk(CATEGORIZE_STATUS, { optedIn: false, offered: true })).toBe(true);
+    expect(resOk(CATEGORIZE_STATUS, { optedIn: 'yes', offered: true })).toBe(false);
+    expect(resOk(CATEGORIZE_STATUS, { optedIn: false })).toBe(false);
+  });
+
+  it('categorize:setConsent — boolean optedIn only', () => {
+    expect(reqOk(CATEGORIZE_SET_CONSENT, { optedIn: true })).toBe(true);
+    expect(reqOk(CATEGORIZE_SET_CONSENT, { optedIn: 1 })).toBe(false);
+    expect(reqOk(CATEGORIZE_SET_CONSENT, {})).toBe(false);
+    expect(reqOk(CATEGORIZE_SET_CONSENT, { optedIn: true, rogue: 1 })).toBe(false);
+    expect(resOk(CATEGORIZE_SET_CONSENT, { optedIn: true })).toBe(true);
+    expect(resOk(CATEGORIZE_SET_CONSENT, { optedIn: 'no' })).toBe(false);
+  });
+
+  it('categorize:listForItem — a uuid item id (never a path)', () => {
+    expect(reqOk(CATEGORIZE_LIST_FOR_ITEM, { itemId: UUID })).toBe(true);
+    expect(reqOk(CATEGORIZE_LIST_FOR_ITEM, { itemId: '../../etc/passwd' })).toBe(false);
+    expect(reqOk(CATEGORIZE_LIST_FOR_ITEM, {})).toBe(false);
+  });
+
+  it('categorize:listForItem — validates the chip array response', () => {
+    expect(resOk(CATEGORIZE_LIST_FOR_ITEM, [chip])).toBe(true);
+    expect(resOk(CATEGORIZE_LIST_FOR_ITEM, [])).toBe(true);
+    expect(resOk(CATEGORIZE_LIST_FOR_ITEM, [{ ...chip, kind: 'hologram' }])).toBe(false);
+    expect(resOk(CATEGORIZE_LIST_FOR_ITEM, [{ ...chip, confidence: 1.5 }])).toBe(false);
+    expect(resOk(CATEGORIZE_LIST_FOR_ITEM, [{ ...chip, categoryId: 'not-a-uuid' }])).toBe(false);
+  });
+
+  it('categorize:applyCorrection — a discriminated union on kind, strict per variant', () => {
+    expect(
+      reqOk(CATEGORIZE_APPLY_CORRECTION, { kind: 'confirm', itemId: UUID, categoryId: UUID_B }),
+    ).toBe(true);
+    expect(
+      reqOk(CATEGORIZE_APPLY_CORRECTION, { kind: 'remove', itemId: UUID, categoryId: UUID_B }),
+    ).toBe(true);
+    expect(
+      reqOk(CATEGORIZE_APPLY_CORRECTION, {
+        kind: 'reassign',
+        itemId: UUID,
+        fromCategoryId: UUID_B,
+        toCategoryId: UUID,
+      }),
+    ).toBe(true);
+    expect(
+      reqOk(CATEGORIZE_APPLY_CORRECTION, {
+        kind: 'rename',
+        itemId: UUID,
+        categoryId: UUID_B,
+        name: 'Beach days',
+      }),
+    ).toBe(true);
+    expect(
+      reqOk(CATEGORIZE_APPLY_CORRECTION, { kind: 'merge', itemId: UUID, categoryId: UUID_B }),
+    ).toBe(false);
+    expect(reqOk(CATEGORIZE_APPLY_CORRECTION, { kind: 'confirm', itemId: UUID })).toBe(false);
+    expect(
+      reqOk(CATEGORIZE_APPLY_CORRECTION, {
+        kind: 'rename',
+        itemId: UUID,
+        categoryId: UUID_B,
+        name: '',
+      }),
+    ).toBe(false);
+    expect(
+      reqOk(CATEGORIZE_APPLY_CORRECTION, {
+        kind: 'remove',
+        itemId: UUID,
+        categoryId: UUID_B,
+        rogue: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('categorize:applyCorrection — validates the refreshed chip array response', () => {
+    expect(resOk(CATEGORIZE_APPLY_CORRECTION, [chip])).toBe(true);
+    expect(resOk(CATEGORIZE_APPLY_CORRECTION, [{ ...chip, source: 'ghost' }])).toBe(false);
+  });
+
+  it('categorize:start — empty request; a discriminated-union run result', () => {
+    expect(reqOk(CATEGORIZE_START, {})).toBe(true);
+    const counts = { categorized: 3, skipped: 1, failed: 0, inFlight: 0 };
+    expect(resOk(CATEGORIZE_START, { outcome: 'completed', reason: null, counts })).toBe(true);
+    expect(resOk(CATEGORIZE_START, { outcome: 'idle', reason: null, counts })).toBe(true);
+    expect(resOk(CATEGORIZE_START, { outcome: 'refused', reason: 'not-opted-in', counts })).toBe(
+      true,
+    );
+    expect(resOk(CATEGORIZE_START, { outcome: 'refused', reason: 'no-signal', counts })).toBe(true);
+    expect(resOk(CATEGORIZE_START, { outcome: 'completed', reason: 'not-opted-in', counts })).toBe(
+      false,
+    );
+    expect(resOk(CATEGORIZE_START, { outcome: 'refused', reason: 'model-not-ready', counts })).toBe(
+      false,
+    );
+    expect(resOk(CATEGORIZE_START, { outcome: 'exploded', reason: null, counts })).toBe(false);
+  });
+
+  it('categorize:cancel — empty request; {cancelled} response', () => {
+    expect(reqOk(CATEGORIZE_CANCEL, {})).toBe(true);
+    expect(resOk(CATEGORIZE_CANCEL, { cancelled: true })).toBe(true);
+    expect(resOk(CATEGORIZE_CANCEL, { cancelled: 'no' })).toBe(false);
   });
 });
