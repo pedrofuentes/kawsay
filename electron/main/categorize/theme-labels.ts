@@ -155,9 +155,10 @@ export function deriveThemeLabels(
   corpus: readonly ThemeLabelCorpusItem[],
   options: DeriveThemeLabelsOptions = {},
 ): DeriveThemeLabelsResult {
+  const rawMax = options.maxLabelTerms ?? THEME_LABEL_DEFAULTS.maxLabelTerms;
   const maxLabelTerms = Math.max(
     1,
-    Math.trunc(options.maxLabelTerms ?? THEME_LABEL_DEFAULTS.maxLabelTerms),
+    Math.trunc(Number.isFinite(rawMax) ? rawMax : THEME_LABEL_DEFAULTS.maxLabelTerms),
   );
 
   // ── Index the corpus once: per-doc term counts, corpus DF, surface spellings ──
