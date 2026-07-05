@@ -300,12 +300,19 @@ const catalogSession = createCatalogSession({
   // embedder, so the gate degrades to places-only when the embedder is unavailable.
   // The cluster passes run through the deterministic INLINE transport — real
   // worker-thread packaging is a deferred build-config concern (out of scope here),
-  // so this wires the transport abstraction without spawning a thread.
-  categorization: ({ db, embedderAvailable }) =>
-    createCategorizationLibraryPort({
+  // so this wires the transport abstraction without spawning a thread. The transport
+  // cooperatively yields to the event loop between passes (see #344 interim fix in
+  // categorization-worker.ts) and is fed a per-library cancel flag that the wrapped
+  // `start`/`cancel` toggle: `start` clears it, `cancel` sets it, so a
+  // `categorize:cancel` serviced during a yield stops the next pass mid-run.
+  categorization: ({ db, embedderAvailable }) => {
+    let cancelRequested = false;
+    const port = createCategorizationLibraryPort({
       db,
       gazetteer: loadGazetteer(gazetteerResolveOptions()),
-      transport: createInlineClusterTransport(),
+      transport: createInlineClusterTransport({
+        isCancelled: () => cancelRequested,
+      }),
       getStatus: () =>
         resolveCategorizationStatus({
           optedIn: requireCategorizationConsentStore().isOptedIn(),
@@ -313,7 +320,19 @@ const catalogSession = createCatalogSession({
           themesAvailable: embedderAvailable(),
         }),
       onProgress: (snapshot) => emitEvent(CATEGORIZE_PROGRESS, snapshot),
-    }),
+    });
+    return {
+      ...port,
+      start: () => {
+        cancelRequested = false;
+        return port.start();
+      },
+      cancel: () => {
+        cancelRequested = true;
+        return port.cancel();
+      },
+    };
+  },
   // The per-library SUGGESTED-COLLECTIONS tray port (M4-3c / #273), built once per
   // open library. A read-then-curate surface over the derivation (#271) + curation
   // repo (#272); it needs only the live DB (no embedder/gazetteer gate — the tray's

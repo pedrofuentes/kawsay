@@ -50,13 +50,73 @@ export function runClusterRequest(request: ClusterRequest): ClusterResponse {
   return response;
 }
 
+/** Options for {@link createInlineClusterTransport} (the interim fix for #344). */
+export interface InlineClusterTransportOptions {
+  /**
+   * Probe consulted at each cooperative yield point; when it returns `true` the
+   * transport bails without running further passes and resolves with whatever
+   * passes have already completed. The orchestrator's post-transport cancel check
+   * discards partial writes, so a partial response is safe.
+   */
+  readonly isCancelled?: () => boolean;
+  /**
+   * How to surrender to the event loop between passes. Defaults to a macrotask
+   * (`setImmediate`) — the ONLY primitive that lets Node service pending IPC
+   * (crucially `categorize:cancel`) between slices. A microtask (`queueMicrotask`,
+   * `Promise.resolve`) does NOT, so the pre-#344 wrapper starved the event loop.
+   * Injected in tests to make the yield synchronous and deterministic.
+   */
+  readonly yield?: () => Promise<void>;
+}
+
+/** The default macrotask yield: `setImmediate` (see {@link InlineClusterTransportOptions.yield}). */
+function defaultYield(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 /**
- * An in-process {@link ClusterTransport} that runs the passes synchronously on the
- * calling thread. The default for tests (and any non-Electron caller); production
- * injects {@link createWorkerThreadClusterTransport} instead.
+ * An in-process {@link ClusterTransport} that runs the passes on the calling thread
+ * but COOPERATIVELY chunks between passes so the Electron main process can service
+ * pending IPC (crucially `categorize:cancel`) between slices — the interim fix for
+ * #344 while the full worker-thread wiring (#269 / #270) stays deferred. The default
+ * for tests (and any non-Electron caller); production wires it with a cancel probe
+ * so a cancel requested mid-run stops further passes.
+ *
+ * Contract:
+ *   - Yield once BEFORE each pass and check `isCancelled` — a cancel already set
+ *     at entry skips both passes; a cancel flipped between the places and themes
+ *     passes skips themes. The individual cluster leaves (`clusterPlaces`,
+ *     `clusterThemes`) remain atomic — chunking inside them would require touching
+ *     the deterministic algorithms and is intentionally out of scope for the interim.
+ *   - When NOT cancelled the result is byte-for-byte identical to
+ *     {@link runClusterRequest} (determinism preserved).
+ *   - Returns a partial response on cancel; the orchestrator's post-transport
+ *     `isCancelled()` check discards any partial writes.
  */
-export function createInlineClusterTransport(): ClusterTransport {
-  return { run: (request) => Promise.resolve(runClusterRequest(request)) };
+export function createInlineClusterTransport(
+  options: InlineClusterTransportOptions = {},
+): ClusterTransport {
+  const yieldOnce = options.yield ?? defaultYield;
+  const isCancelled = options.isCancelled ?? (() => false);
+
+  return {
+    async run(request) {
+      const response: ClusterResponse = {};
+      if (request.places !== undefined) {
+        await yieldOnce();
+        if (isCancelled()) return response;
+        response.places = clusterPlaces(request.places.points, request.places.options);
+      }
+      if (request.themes !== undefined) {
+        await yieldOnce();
+        if (isCancelled()) return response;
+        response.themes = clusterThemes(request.themes.items, request.themes.options);
+      }
+      return response;
+    },
+  };
 }
 
 /**

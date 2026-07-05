@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Organizing stays responsive on big libraries — and cancel now works while it clusters**
+  (M4-2h · #344): when you turn on organizing and Kawsay is grouping many memories into places
+  and themes, the app no longer feels frozen — it now pauses briefly between passes so it can
+  answer you, and if you press **Cancel** during clustering it stops promptly instead of finishing
+  the whole pass first.
 - **Failed corrections now tell you, and can be retried** (M4-2h · #346): when a place/theme
   correction can't be saved (for example, another window is using the archive), Kawsay now shows a
   calm, retryable message instead of quietly leaving you unsure — and if you move to a different
