@@ -317,14 +317,88 @@ describe('useItemCategories — concurrent-correction retry survives a sibling s
   });
 });
 
-describe('useItemCategories — logs correction failures via the [kawsay] convention (#361)', () => {
-  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+describe('useItemCategories — supersedes a stale rejection after a later success (#383)', () => {
+  it('drops a rejection from correction A when a later correction B on the same item already resolved successfully — no spurious banner, no redundant replay', async () => {
+    // Symmetric residual of #360: two corrections A then B are in flight on
+    // the SAME item. B (the later) resolves successfully and applies state,
+    // THEN A (the earlier) rejects. On-disk + displayed state already reflect
+    // the user's latest intent (B), so A's late rejection MUST be dropped —
+    // otherwise a spurious retryable banner appears and any auto/user retry
+    // would redundantly re-apply the already-successful B.
+    const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
+    const refreshedAfterB: ItemCategoryDTO[] = [
+      makeItemCategory({
+        categoryId: CATEGORY_ID,
+        name: 'Cusco, Perú',
+        source: 'user',
+        confidence: null,
+      }),
+    ];
 
+    const pendingA = deferred<ItemCategoryDTO[]>();
+    const pendingB = deferred<ItemCategoryDTO[]>();
+    const applyCategoryCorrection = vi
+      .fn<(input: CategorizationCorrectionDTO) => Promise<ItemCategoryDTO[]>>()
+      // First call = correction A (will reject LATE, after B has succeeded).
+      .mockImplementationOnce(() => pendingA.promise)
+      // Second call = correction B (will succeed FIRST).
+      .mockImplementationOnce(() => pendingB.promise);
+    const api = makeFakeApi({
+      listItemCategories: vi.fn(() => Promise.resolve([initial])),
+      applyCategoryCorrection,
+    });
+
+    const { result } = renderHook(() => useItemCategories(ITEM_A, true), { wrapper: wrapper(api) });
+    await waitFor(() => expect(result.current.categories).toEqual([initial]));
+
+    // Fire A, then B — both in flight against the same item.
+    act(() => result.current.applyCorrection(CONFIRM));
+    act(() => result.current.applyCorrection(REMOVE));
+    expect(applyCategoryCorrection).toHaveBeenCalledTimes(2);
+    expect(applyCategoryCorrection).toHaveBeenNthCalledWith(1, CONFIRM);
+    expect(applyCategoryCorrection).toHaveBeenNthCalledWith(2, REMOVE);
+
+    // Resolve B first — successfully. State reflects the user's latest intent.
+    await act(async () => {
+      pendingB.resolve(refreshedAfterB);
+      await pendingB.promise;
+    });
+    expect(result.current.correctionError).toBeNull();
+    expect(result.current.categories).toEqual(refreshedAfterB);
+
+    // NOW A rejects — this is stale (superseded by B's success). The fix
+    // must DROP it: no banner, no state churn, no redundant replay.
+    await act(async () => {
+      pendingA.reject(new Error('DB busy'));
+      await pendingA.promise.catch(() => undefined);
+      // Flush any subsequent microtasks so a would-be setState has time to land.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // No spurious retryable banner — B already saved successfully.
+    expect(result.current.correctionError).toBeNull();
+    // Chips still reflect B's already-applied refresh.
+    expect(result.current.categories).toEqual(refreshedAfterB);
+    // And no redundant replay was triggered — call count stayed at 2.
+    expect(applyCategoryCorrection).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('useItemCategories — logs correction failures via the [kawsay] convention (#361)', () => {
+  // Restore any test-installed spies (e.g. the console.warn spy in the it()
+  // below) between tests. Installing spies at describe-collection time with
+  // vi.spyOn(...).mockImplementation(...) and only .mockClear()-ing in
+  // afterEach would keep console.warn mocked for the ENTIRE FILE (and any
+  // later file that inherits a hot module cache), silently masking any
+  // future warn-based assertion (#384). Scoping the spy inside the it()
+  // plus vi.restoreAllMocks() keeps console.warn honest across the suite.
   afterEach(() => {
-    warnSpy.mockClear();
+    vi.restoreAllMocks();
   });
 
   it('emits a tagged console.warn carrying the original error when the correction rejects', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
     const failure = new Error('SQLITE_BUSY: database is locked');
     const applyCategoryCorrection = vi.fn(() => Promise.reject(failure));
