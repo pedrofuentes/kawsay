@@ -111,10 +111,7 @@ describe('deriveThemeLabels — TF-in-cluster ÷ DF-in-corpus labelling (ADR-003
       doc('d2', 'mountain trail'),
       doc('o1', 'random note'),
     ];
-    const clusters = [
-      cluster('theme:zeta', ['d1', 'd2']),
-      cluster('theme:alpha', ['c1', 'c2']),
-    ];
+    const clusters = [cluster('theme:zeta', ['d1', 'd2']), cluster('theme:alpha', ['c1', 'c2'])];
     const shuffledCorpus = [corpus[4], corpus[2], corpus[0], corpus[3], corpus[1]];
     const shuffledClusters = [clusters[1], clusters[0]];
 
