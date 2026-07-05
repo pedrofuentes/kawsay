@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Hardened the publish-embed-model workflow least-privilege lock: the top-level `permissions:` assertion now uses an indent-0–anchored helper (`parseTopLevelPermissions`) so absent, scalar (`write-all`), or inline-map forms are detected as policy violations rather than silently falling through to a job-level block (fixes #277).
 - **A stalled model download no longer hangs**: if the optional smart-search model download
   opens a connection but then receives no data, Kawsay now ends it calmly with a clear message
   and releases the connection, instead of sitting stuck.
