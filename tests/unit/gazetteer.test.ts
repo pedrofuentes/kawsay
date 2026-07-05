@@ -360,12 +360,15 @@ describe('loadGazetteer (asset loading + graceful degrade)', () => {
       });
       loadGazetteer({ ...OPTIONS, exists: () => true, readFile });
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      const [msg, ...args] = warnSpy.mock.calls[0]!;
+      const call = warnSpy.mock.calls[0];
+      expect(call).toBeDefined();
+      const [msg, ...args] = call ?? [];
       expect(typeof msg).toBe('string');
       expect((msg as string).toLowerCase()).toContain('gazetteer');
       // The resolved path must appear in the warning so triage can locate the asset.
-      const resolvedPath = resolveGazetteerAssetPath({ ...OPTIONS, exists: () => true })!;
-      expect(msg as string).toContain(resolvedPath);
+      const resolvedPath = resolveGazetteerAssetPath({ ...OPTIONS, exists: () => true });
+      expect(resolvedPath).not.toBeNull();
+      expect(msg as string).toContain(resolvedPath as string);
       // The caught error must be forwarded as well.
       expect(args).toContain(diskError);
     });
