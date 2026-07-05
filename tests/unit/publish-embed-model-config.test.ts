@@ -97,6 +97,27 @@ function parseTopLevelPermissions(yaml: string): Record<string, string> | null {
   return result;
 }
 
+/**
+ * Extract the body of a top-level (indent-0) block by key (e.g. `concurrency:`).
+ * Anchored strictly to column 0 in block form: returns null when the key is absent
+ * at indent 0, so a nested/job-level or commented-out block of the same name can
+ * never satisfy a check made against the returned body.
+ */
+function topLevelBlockBody(yaml: string, key: string): string | null {
+  const lines = yaml.split('\n');
+  const startIdx = lines.findIndex((l) => new RegExp(`^${key}:\\s*$`).test(l));
+  if (startIdx === -1) return null;
+  const body: string[] = [];
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0) break; // next top-level key
+    body.push(line);
+  }
+  return body.join('\n');
+}
+
 describe('publish-embed-model workflow exists and is workflow_dispatch-only (M4-1b, ADR-0029)', () => {
   it('exists as its own workflow file', () => {
     expect(publishYml).not.toBe('');
@@ -110,8 +131,12 @@ describe('publish-embed-model workflow exists and is workflow_dispatch-only (M4-
   });
 
   it('serializes dispatches and never cancels an in-progress publish', () => {
-    expect(publishYml).toMatch(/concurrency:/);
-    expect(publishYml).toMatch(/cancel-in-progress:\s*false/);
+    // #235: anchor to the TOP-LEVEL concurrency block (indent 0). A nested/job-level
+    // `concurrency:` or a commented-out mention must never satisfy this — the
+    // serialize-and-never-cancel guarantee lives at the workflow scope, not a job.
+    const concurrencyBlock = topLevelBlockBody(publishYml, 'concurrency');
+    expect(concurrencyBlock).not.toBeNull();
+    expect(concurrencyBlock).toMatch(/^ {2}cancel-in-progress:\s*false\s*$/m);
   });
 });
 
@@ -302,5 +327,42 @@ describe('parseTopLevelPermissions anchors to indent 0 — fail-open regression 
 
   it('returns null for inline-map top-level permissions (not a block — not least-privilege)', () => {
     expect(parseTopLevelPermissions(withTopLevelInlineMap)).toBeNull();
+  });
+});
+
+describe('permissions parsers accumulate EVERY key of a multi-key block (drops-after-first regression, #297)', () => {
+  // The real top-level block carries a single scope (contents: read), so each parser's
+  // accumulation loop is only ever exercised with ONE key — a break-after-first-key
+  // mutation still satisfies every single-key lock. These 2-key fixtures force the full
+  // loop to run so silently dropping any scope after the first is caught (fail-open guard).
+  const twoTopLevelScopes = [
+    'permissions:',
+    '  contents: read',
+    '  id-token: write',
+    '',
+    'on:',
+    '  workflow_dispatch:',
+  ].join('\n');
+
+  const twoJobScopes = [
+    '    permissions:',
+    '      contents: read',
+    '      packages: write',
+    '    steps:',
+    '      - run: echo hi',
+  ].join('\n');
+
+  it('parseTopLevelPermissions returns BOTH keys of a 2-key top-level block', () => {
+    expect(parseTopLevelPermissions(twoTopLevelScopes)).toEqual({
+      contents: 'read',
+      'id-token': 'write',
+    });
+  });
+
+  it('parsePermissions returns BOTH keys of a 2-key job-level block', () => {
+    expect(parsePermissions(twoJobScopes)).toEqual({
+      contents: 'read',
+      packages: 'write',
+    });
   });
 });
