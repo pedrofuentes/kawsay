@@ -20,6 +20,10 @@ import {
   LIBRARY_OPEN,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
+  SUGGESTIONS_ACCEPT,
+  SUGGESTIONS_DISMISS,
+  SUGGESTIONS_LIST,
+  SUGGESTIONS_MERGE,
   TRANSCRIPTION_CANCEL,
   TRANSCRIPTION_DOWNLOAD_MODEL,
   TRANSCRIPTION_MODEL_STATUS,
@@ -198,6 +202,30 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(calls[21].payload).toEqual({ kind: 'confirm', itemId: UUID, categoryId: UUID });
     expect(calls[22].payload).toEqual({});
     expect(calls[23].payload).toEqual({});
+  });
+
+  it('maps each suggestions method to its exact channel and payload (#351 #7)', async () => {
+    // The typed surface pins channel + payload TYPES; this pins the runtime WIRING
+    // string-for-string, so a mis-routed suggestions method (e.g. accept → the list
+    // channel) is caught here rather than only by an end-to-end test.
+    const { invoke, calls } = fakeInvoke();
+    const api = createKawsayApi(invoke, vi.fn(() => () => {}) as never);
+
+    await api.listSuggestions();
+    await api.acceptSuggestion({ categoryId: UUID, name: 'Cusco, Perú' });
+    await api.mergeSuggestion({ categoryId: UUID, intoCollectionId: UUID });
+    await api.dismissSuggestion({ categoryId: UUID });
+
+    expect(calls.map((c) => c.channel)).toEqual([
+      SUGGESTIONS_LIST,
+      SUGGESTIONS_ACCEPT,
+      SUGGESTIONS_MERGE,
+      SUGGESTIONS_DISMISS,
+    ]);
+    expect(calls[0].payload).toEqual({});
+    expect(calls[1].payload).toEqual({ categoryId: UUID, name: 'Cusco, Perú' });
+    expect(calls[2].payload).toEqual({ categoryId: UUID, intoCollectionId: UUID });
+    expect(calls[3].payload).toEqual({ categoryId: UUID });
   });
 
   it('wires onModelDownloadProgress onto the model-download event subscription', () => {

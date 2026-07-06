@@ -7,14 +7,16 @@
 //   1. suggestions surface for review (derived, ordered, with example items);
 //   2. a suggestion becomes a real `collections` row ONLY on explicit accept — mere
 //      derivation / tray display writes NOTHING (the main list is byte-identical);
-//   3. a dismiss is durable — a fresh port over the same on-disk catalog (a
-//      "relaunch") never re-proposes it;
+//   3. a dismiss is durable — after closing and reopening the on-disk catalog (a
+//      literal "relaunch") the tombstone still never re-proposes it;
 //   4. a merge moves the members into the survivor and tombstones the source
 //      category so it is not re-proposed.
 
 import { afterEach, describe, expect, it } from 'vitest';
 import Database, { type Database as Db } from 'better-sqlite3';
+import { join } from 'node:path';
 import { runMigrations } from '../../electron/main/db/migrate';
+import { openCatalog } from '../../electron/main/db/connection';
 import { createCatalogRepo } from '../../electron/main/db/catalog-repo';
 import {
   createCategoriesRepo,
@@ -22,6 +24,7 @@ import {
   type CategoryKind,
 } from '../../electron/main/categorize/categories-repo';
 import { createSuggestionsLibraryPort } from '../../electron/main/categorize/suggestions-library';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
 // Five photos "at" Cusco → a place category with five effective members.
 const PLACE_ITEMS = [
@@ -45,9 +48,11 @@ const THEME_CATEGORY = 'cccc0002-0000-4000-8000-000000000002';
 const USER_COLLECTION = 'dddd0001-0000-4000-8000-000000000001';
 
 const openDbs: Db[] = [];
+const tmpDirs: string[] = [];
 
 afterEach(() => {
   for (const db of openDbs.splice(0)) db.close();
+  for (const dir of tmpDirs.splice(0)) removeTmpDir(dir);
 });
 
 function freshCatalog(): Db {
@@ -56,6 +61,21 @@ function freshCatalog(): Db {
   runMigrations(db);
   openDbs.push(db);
   return db;
+}
+
+/**
+ * A fresh ON-DISK catalog (WAL journalling + FKs, via the production openCatalog)
+ * that can be closed and reopened to model a real relaunch — a reopened file, not
+ * a shared in-memory handle. Returns the connection and its file path. Callers that
+ * close it themselves (to simulate app quit) must not also register it in openDbs.
+ */
+function freshOnDiskCatalog(): { db: Db; path: string } {
+  const dir = makeTmpDir('kawsay-ac32-');
+  tmpDirs.push(dir);
+  const path = join(dir, 'catalog.sqlite3');
+  const db = openCatalog(path);
+  runMigrations(db);
+  return { db, path };
 }
 
 const SIGNAL_BY_KIND: Record<CategoryKind, 'gps' | 'theme-cluster' | 'face-cluster'> = {
@@ -246,8 +266,13 @@ describe('AC-32 — accept materialises a suggestion into a listed collection', 
 });
 
 describe('AC-32 — dismiss is durable across a relaunch', () => {
-  it('drops a member-less tombstone the derivation never re-proposes — even for a fresh port', () => {
-    const db = freshCatalog();
+  it('drops a member-less tombstone the derivation never re-proposes — even after a real reopen', () => {
+    // A literal relaunch: seed + dismiss on an ON-DISK catalog, close the
+    // connection (app quit), then reopen a BRAND-NEW connection over the same file
+    // (app relaunch). This is stricter than a fresh port over the same in-memory
+    // handle — it proves the tombstone is durable on disk, not just in a shared
+    // connection's cache.
+    const { db, path } = freshOnDiskCatalog();
     seedCorpus(db);
     const port = createSuggestionsLibraryPort({ db });
 
@@ -260,9 +285,15 @@ describe('AC-32 — dismiss is durable across a relaunch', () => {
     // The tombstone is NOT a materialised collection (never a merge target).
     expect(afterDismiss.collections).toEqual([]);
 
-    // "Relaunch": a brand-new port over the SAME on-disk catalog still never re-proposes it.
-    const relaunched = createSuggestionsLibraryPort({ db });
-    expect(relaunched.list().suggestions.map((s) => s.categoryId)).toEqual([THEME_CATEGORY]);
+    // "Relaunch": close the connection, then reopen a fresh one over the same FILE.
+    db.close();
+    const relaunched = openCatalog(path);
+    openDbs.push(relaunched);
+    expect(
+      createSuggestionsLibraryPort({ db: relaunched })
+        .list()
+        .suggestions.map((s) => s.categoryId),
+    ).toEqual([THEME_CATEGORY]);
   });
 });
 

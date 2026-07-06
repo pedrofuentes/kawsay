@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   chose to merge a suggestion into is no longer available at the moment you accept, Kawsay now
   cancels the whole step cleanly — the suggestion stays in the review tray so you can pick a
   different target, instead of quietly appearing as its own new collection.
+- **The review tray now tells you if a change didn't go through** (M4-3c · #351): if accepting,
+  merging, or dismissing a suggested collection can't be saved (for example, another window is
+  using the archive), Kawsay now shows a calm note so you can try again — instead of quietly doing
+  nothing. Nothing on your computer changes until it succeeds, and it all stays on this device.
 - **Failed corrections now tell you, and can be retried** (M4-2h · #346): when a place/theme
   correction can't be saved (for example, another window is using the archive), Kawsay now shows a
   calm, retryable message instead of quietly leaving you unsure — and if you move to a different

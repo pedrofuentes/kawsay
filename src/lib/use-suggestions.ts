@@ -24,6 +24,13 @@ export interface UseSuggestionsResult {
   collections: SuggestionMergeTargetDTO[];
   /** True while the first suggestions read is in flight. */
   loading: boolean;
+  /**
+   * True when the LAST curation action (accept/merge/dismiss) failed. Nothing
+   * changed on disk (the action is atomic) and the tray is untouched, so this is a
+   * NON-BLOCKING hint the UI can show to invite a retry. Cleared by the next
+   * successful action or when the feature is disabled. Local-only — never reported.
+   */
+  actionError: boolean;
   /** Accept a suggestion (optionally renamed) — materialises the collection; refreshes the tray. */
   accept(input: { categoryId: string; name?: string }): void;
   /** Merge a suggestion into an existing collection; refreshes the tray. */
@@ -36,6 +43,7 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
   const api = useKawsayApi();
   const [view, setView] = useState<SuggestionsViewDTO>(EMPTY_VIEW);
   const [loading, setLoading] = useState(false);
+  const [actionError, setActionError] = useState(false);
 
   useEffect(() => {
     // DEFAULT-OFF: while disabled we never ask for suggestions, and we drop any we
@@ -43,6 +51,7 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
     if (api === undefined || !enabled) {
       setView(EMPTY_VIEW);
       setLoading(false);
+      setActionError(false);
       return undefined;
     }
     let active = true;
@@ -74,10 +83,14 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
       }
       void api
         .acceptSuggestion(input)
-        .then(setView)
+        .then((next) => {
+          setView(next);
+          setActionError(false);
+        })
         .catch(() => {
-          // A rejected action leaves the tray untouched; the user can retry, and
-          // nothing on disk changed.
+          // A rejected action leaves the tray untouched and nothing on disk changed
+          // (the action is atomic); surface a calm hint so the user can retry.
+          setActionError(true);
         });
     },
     [api],
@@ -90,8 +103,13 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
       }
       void api
         .mergeSuggestion(input)
-        .then(setView)
-        .catch(() => {});
+        .then((next) => {
+          setView(next);
+          setActionError(false);
+        })
+        .catch(() => {
+          setActionError(true);
+        });
     },
     [api],
   );
@@ -103,8 +121,13 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
       }
       void api
         .dismissSuggestion(input)
-        .then(setView)
-        .catch(() => {});
+        .then((next) => {
+          setView(next);
+          setActionError(false);
+        })
+        .catch(() => {
+          setActionError(true);
+        });
     },
     [api],
   );
@@ -113,6 +136,7 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
     suggestions: view.suggestions,
     collections: view.collections,
     loading,
+    actionError,
     accept,
     merge,
     dismiss,
