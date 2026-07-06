@@ -715,8 +715,12 @@ describe('embedder-model publish workflow hash-pins its Python conversion deps (
     // pin is safe and byte-reproducible for the revision-pinned model download — now also
     // hash-verified (#247). Every requirement in a --require-hashes file carries a sha256.
     expect(publishEmbedConvertLock).toMatch(/^huggingface[-_]hub==\d+\.\d+(\.\d+)?\b/m);
+    // Anchor the hash to huggingface_hub's OWN block: the pin line ends with a ` \`
+    // continuation and its first `--hash=sha256:` is the very next (indented) line — uv
+    // emits one hash per line. Matching only that adjacent line is tighter than a wide
+    // `[\s\S]{0,600}` bridge, which could stray into a neighbouring requirement's hashes.
     expect(publishEmbedConvertLock).toMatch(
-      /huggingface[-_]hub==0\.\d+(\.\d+)?[\s\S]{0,600}--hash=sha256:[0-9a-f]{64}/,
+      /^huggingface[-_]hub==0\.\d+(\.\d+)? \\\n[ \t]+--hash=sha256:[0-9a-f]{64}/m,
     );
   });
 
@@ -735,10 +739,15 @@ describe('embedder-model publish workflow hash-pins its Python conversion deps (
     // workflow level (this restores + strengthens the #233 1.x regression guard). (#233, #247)
     expect(publishEmbedModelYml).not.toMatch(/pip install[^\n]*\bhuggingface[-_]hub\b/);
     // Explicit 1.x regression guard (the exact bug #233 tracked), at the workflow level.
-    expect(publishEmbedModelYml).not.toMatch(/pip install[^\n]*\bhuggingface[-_]hub\s*(==|>=)\s*1\./);
+    expect(publishEmbedModelYml).not.toMatch(
+      /pip install[^\n]*\bhuggingface[-_]hub\s*(==|>=)\s*1\./,
+    );
   });
 
   it('drops the unpinned `pip install --upgrade pip` self-upgrade', () => {
+    // A `pip install --upgrade pip` step would fetch an unpinned, unhashed pip before the
+    // --require-hashes install, reintroducing a supply-chain hole the lockfile closes; the
+    // runner's setup-python pip is used as-is (#247).
     expect(publishEmbedModelYml).not.toMatch(/pip install --upgrade pip\b/);
   });
 });
