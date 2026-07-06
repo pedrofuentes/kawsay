@@ -121,8 +121,12 @@ export function themeSourceKey(memberIds: readonly string[]): string {
  * Cluster items into themes by greedy threshold agglomeration over cosine
  * similarity (see the module header). Pure and deterministic: the output depends
  * only on the items and options, never on input order. Empty input degrades to
- * an empty result (no themes, no crash). Throws on malformed input since each
- * is a programming error that would make results ill-defined or nondeterministic:
+ * an empty result (no themes, no crash). A zero-MAGNITUDE vector (all elements
+ * finite but 0) is accepted, not rejected: inheriting `cosineSimilarity`'s
+ * contract it has cosine 0 to every vector — including another zero vector — so
+ * such items never join any cluster (not even each other) and surface as
+ * singletons. Throws on malformed input since each is a programming error that
+ * would make results ill-defined or nondeterministic:
  * - an empty vector (zero-length Float32Array)
  * - a dimension mismatch (vectors of differing lengths)
  * - a duplicate id
@@ -307,11 +311,17 @@ function cumulativeSquaredNorms(v: Float32Array, dim: number): Float64Array {
  * both cumulative-norm arrays are computed with the same Float32-to-Float64
  * pattern as the naive cosine's magASquared/magBSquared.
  *
- * The prune is EXACT (never approximate): Cauchy-Schwarz gives
+ * The prune is SOUND — it never drops a true match, so the ASSIGNMENT output is
+ * bit-identical to the naive scan. Cauchy-Schwarz gives
  *   dot_full = dot_partial + Σ_tail q_j·c_j ≤ dot_partial + √(qRem·cRem)
  * so cos_full ≤ (dot_partial + √(qRem·cRem)) / (‖q‖·‖c‖). If that upper bound
  * is strictly less than `skipBar`, this candidate cannot beat the current best
- * or clear τ, so skipping it does not change the argmax nor the assignment.
+ * or clear τ, so skipping it does not change the argmax nor the assignment. The
+ * bound is exact in real arithmetic; in IEEE-754 the tail norms `qRem`/`cRem`
+ * are prefix-sum subtractions carrying ≤ ~1.4e-15 of cancellation (~8 orders
+ * below Float32 embedding noise), and the `qRem <= 0 || cRem <= 0` bail keeps a
+ * near-zero tail from loosening the bound — so it is exact within Float32
+ * tolerance, never an over-tight (match-dropping) estimate.
  *
  * `STEP` sizes the batch between bound checks: too small ⇒ per-batch overhead
  * dominates; too large ⇒ we do wasted mult-adds before pruning. 64 keeps the
