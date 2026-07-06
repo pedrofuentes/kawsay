@@ -289,6 +289,30 @@ describe('createWorkerThreadClusterTransport', () => {
     expect(link.terminate).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores a terminate-triggered exit that arrives AFTER a successful result (settled guard, #341)', async () => {
+    const link = linkedWorker();
+    bindClusterWorker(link.port);
+    const transport = createWorkerThreadClusterTransport({
+      scriptPath: 'unused.js',
+      createWorker: () => link.worker,
+    });
+
+    // The run resolves on the worker's `result` reply; `finish` flips `settled` and
+    // terminates the worker exactly once.
+    const response = await transport.run(PLACES_REQUEST);
+    expect(response.places).toBeDefined();
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+
+    // A REAL worker fires `exit` shortly after terminate(). That late exit MUST be
+    // swallowed by the `settled` guard: it must neither re-terminate the worker nor
+    // reject the already-resolved promise (which would surface as an unhandled
+    // rejection). Without the guard, this exit would call terminate a 2nd time.
+    expect(() => link.fireExit(0)).not.toThrow();
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+    // The resolved value is unaffected by the late exit.
+    await expect(Promise.resolve(response)).resolves.toBe(response);
+  });
+
   it('rejects and tears down when the worker replies with an unrecognized message type (must not hang the drain)', async () => {
     const link = linkedWorker();
     // Deliberately DO NOT bind the port — we drive the transport with a hand-crafted

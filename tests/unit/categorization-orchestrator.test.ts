@@ -627,6 +627,37 @@ describe('themes pipeline', () => {
   });
 });
 
+describe('progress inFlight (distinct-count de-dup, #341)', () => {
+  it('counts an item carrying BOTH signals once in the in-flight corpus, not twice', async () => {
+    const { orchestrator, emitted } = harness({
+      seed: [
+        // 'x' carries BOTH a GPS signal AND an embedding, so it lands in the places
+        // pass AND the themes pass — a naive places(2) + themes(2) sum would be 4.
+        {
+          id: 'x',
+          gpsLat: CUSCO_A.lat,
+          gpsLon: CUSCO_A.lon,
+          embed: 0.5,
+          description: 'plaza trip',
+        },
+        { id: 'g', gpsLat: CUSCO_B.lat, gpsLon: CUSCO_B.lon },
+        { id: 'e', embed: 0.5, description: 'plaza trip' },
+      ],
+    });
+
+    const result = await orchestrator.run();
+    expect(result.outcome).toBe('completed');
+
+    // During the clustering pass inFlight is set to the DISTINCT corpus size and
+    // then reset to 0, so the peak emitted inFlight is the distinct count. The
+    // both-signals item 'x' is de-duped by the `distinct` Set: 3 ids in flight,
+    // NOT the naive 4. A double-count regression (gps + theme length) fails here.
+    const peakInFlight = Math.max(...emitted.map((snapshot) => snapshot.counts.inFlight));
+    expect(peakInFlight).toBe(3);
+    expect(emitted.some((snapshot) => snapshot.counts.inFlight === 4)).toBe(false);
+  });
+});
+
 describe('the category_status drain', () => {
   it('skips an item with neither GPS nor an embedding', async () => {
     const { orchestrator, db, requests } = harness({
@@ -769,6 +800,41 @@ describe('resilience', () => {
     expect(categoryStatusOf(db, 'a')).toBe('error');
     expect(categoryStatusOf(db, 'b')).toBe('error');
     expect(allCategories(db)).toHaveLength(0);
+  });
+
+  it('logs a local diagnostic (no telemetry, no raw-error leak) when the whole clustering pass throws (#374)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { orchestrator, db } = harness({
+      seed: [
+        { id: 'a', gpsLat: CUSCO_A.lat, gpsLon: CUSCO_A.lon },
+        { id: 'b', gpsLat: CUSCO_B.lat, gpsLon: CUSCO_B.lon },
+      ],
+      // The rejection message deliberately carries a file path + free text so the
+      // test can prove neither leaks into the log line.
+      transport: {
+        run: () => Promise.reject(new Error('worker crashed near /Users/someone/photo.jpg')),
+      },
+    });
+
+    const result = await orchestrator.run();
+
+    // The recovery behaviour is unchanged — every read item still errors and the
+    // run carries on to a terminal state.
+    expect(result.counts.failed).toBe(2);
+    expect(categoryStatusOf(db, 'a')).toBe('error');
+
+    // The pass no longer fails SILENTLY: exactly one main-process diagnostic is
+    // emitted, carrying the kawsay prefix and naming the clustering pass so a
+    // field report can distinguish a worker crash from a clean drain.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0];
+    expect(String(message)).toContain('[kawsay]');
+    expect(String(message)).toMatch(/clustering/i);
+    // Local-only + privacy: the raw error message (which can carry a file path or
+    // item text) MUST NOT reach the log — only a name/code diagnostic crosses it.
+    const serialized = JSON.stringify(warn.mock.calls);
+    expect(serialized).not.toContain('worker crashed');
+    expect(serialized).not.toContain('photo.jpg');
   });
 
   it('contains a throw from the failure-marker and still settles the run', async () => {

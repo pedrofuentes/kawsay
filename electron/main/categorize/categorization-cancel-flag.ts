@@ -46,8 +46,14 @@ export function createCancelFlaggedCategorizationPort(
       cancelRequested = false;
       const result = await port.start();
       if (result.outcome === 'busy') {
-        // A start racing an in-flight run did NOT begin a fresh run, so the
-        // cancel that preceded it stays armed for the still-running transport.
+        // A start racing an in-flight run did NOT begin a fresh run, so the cancel
+        // that preceded it stays armed for the still-running transport. This is a
+        // DEFENSIVE guard: with today's timing the clobber is unreachable — a
+        // `categorize:cancel`/`categorize:start` pair are IPC macrotasks while this
+        // `busy` short-circuit resolves in a microtask, so the outstanding cancel is
+        // already observed before a racing start could de-arm it. The guard keeps the
+        // invariant (an in-flight cancel is never de-armed by a busy start) holding if
+        // that timing model ever changes (#377, #386).
         cancelRequested = prior;
       }
       return result;

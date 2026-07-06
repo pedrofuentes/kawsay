@@ -267,6 +267,21 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/**
+ * A privacy-preserving diagnostic projection of an error for a LOCAL console line
+ * (no telemetry, no egress): only the error `name` and an optional errno `code` —
+ * never the raw `message`/`stack`, which can carry a file path or item text. Mirrors
+ * the transcription orchestrator's helper so the two orchestrators log worker faults
+ * the same shape.
+ */
+function diagnosticError(error: unknown): { code?: string; name: string } {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === undefined ? { name: error.name } : { name: error.name, code };
+  }
+  return { name: typeof error };
+}
+
 export function createCategorizationOrchestrator(
   options: CategorizationOrchestratorOptions,
 ): CategorizationOrchestrator {
@@ -500,11 +515,19 @@ export function createCategorizationOrchestrator(
       emit();
       try {
         response = await transport.run(request);
-      } catch {
+      } catch (error) {
         // A whole-run clustering failure (worker crash / timeout) is the corpus-scale
         // analogue of the embedding drain's per-batch failure: mark every read item
         // 'error' and carry on. Semi-terminal — errors leave the pending set; an
-        // explicit reset (successor slice) is required to retry.
+        // explicit reset (successor slice) is required to retry. Leave a LOCAL
+        // diagnostic (no telemetry) so the fault is not swallowed silently — a
+        // field report can then distinguish a worker crash from a clean drain; the
+        // raw error is projected to name/code only (never message/stack), so no
+        // path or item text leaks off the log line (#374).
+        console.warn(
+          `[kawsay] categorization clustering pass failed; marking ${items.length} item(s) as error`,
+          diagnosticError(error),
+        );
         counts = { ...counts, inFlight: 0 };
         for (const item of items) recordFailed(item.id);
         return;
@@ -642,11 +665,16 @@ export function createCategorizationStore(
      ORDER BY i.id
      LIMIT @limit
   `);
-  // Subsequent-page (seekable) statement — split from the first-page statement
-  // so migration 005's partial `idx_items_category_queue` (on category_status
-  // WHERE category_status='pending') can serve the ordered scan without a
-  // temp-sort per page (#340). Ordering + boundaries match the first-page
-  // statement exactly; only the id-cursor predicate differs.
+  // Subsequent-page (seekable) statement — split from the first-page statement so
+  // neither carries the `(@afterId IS NULL OR i.id > @afterId)` disjunction that
+  // would defeat index use; the hot path (pages 2..N) then range-seeks on the id
+  // cursor instead of re-scanning already-drained rows (#340). NOTE: migration 005's
+  // partial `idx_items_category_queue` covers `(category_status)`, NOT `(id)`, so an
+  // `ORDER BY id` may still take a temp B-tree sort on the first page — the split
+  // narrows the scan, it does not guarantee a sort-free plan (a covering
+  // `(category_status, id)` index would, but that is a migration and out of scope).
+  // Ordering + boundaries match the first-page statement exactly; only the id-cursor
+  // predicate differs.
   const listPendingAfterStmt = db.prepare(`
     SELECT i.id AS id, i.gps_lat AS gps_lat, i.gps_lon AS gps_lon,
            i.description AS description, i.search_meta AS search_meta,

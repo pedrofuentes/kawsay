@@ -212,4 +212,45 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
       listener?.({ senderFrame: { url: 'http://localhost:5173/index.html' } }, {}),
     ).resolves.toEqual({ version: '0.1.0' });
   });
+
+  it('logs a local diagnostic (no telemetry) when a handler throws, and still propagates (#373)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // A handler business-logic fault (e.g. acceptAndMerge on a stale collection id)
+      // whose message deliberately carries an id so the test can prove it never leaks.
+      const boom = vi.fn(() => {
+        throw new Error('stale intoCollectionId 7f3c-secret');
+      });
+      const ipcMain = fakeIpcMain();
+      registerIpcHandlers(
+        ipcMain,
+        { ...otherHandlers, [APP_GET_VERSION]: boom },
+        trustedSenderOptions,
+      );
+      const listener = ipcMain.listeners.get(APP_GET_VERSION);
+
+      // The error STILL propagates to the renderer (the trust-boundary contract is
+      // unchanged — the shim only observes, it does not swallow).
+      await expect(listener?.(trustedEvent, {})).rejects.toThrow('stale intoCollectionId');
+      expect(boom).toHaveBeenCalledTimes(1);
+
+      // ...but a main-process handler fault no longer leaves ZERO local trace: exactly
+      // one diagnostic is emitted, carrying the kawsay prefix and naming the channel.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const call = errorSpy.mock.calls[0];
+      expect(String(call[0])).toContain('[kawsay]');
+      expect(String(call[0])).toContain(APP_GET_VERSION);
+      // Local-only + privacy: only a name/code diagnostic crosses the line — the raw
+      // error message (which can carry ids / paths / item text) MUST NOT be logged.
+      expect(JSON.stringify(call)).not.toContain('secret');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('registers exactly the contract channel set — the log shim adds no channel (#373)', () => {
+    const ipcMain = fakeIpcMain();
+    registerIpcHandlers(ipcMain, handlers, trustedSenderOptions);
+    expect([...ipcMain.listeners.keys()].sort()).toEqual(Object.keys(ipcContract).sort());
+  });
 });
