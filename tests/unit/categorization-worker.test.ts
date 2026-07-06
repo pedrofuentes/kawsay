@@ -341,6 +341,88 @@ describe('createWorkerThreadClusterTransport', () => {
     });
     await expect(transport2.run(PLACES_REQUEST)).resolves.toBeDefined();
   });
+
+  it('terminates the in-flight worker and resolves with an empty response on a mid-run cancel (#402)', async () => {
+    const link = linkedWorker();
+    // Deliberately DO NOT bind the port ⇒ the worker never posts a result; the ONLY
+    // settle path is the injected cancel poll, so the assertion isolates cancellation.
+    let cancelled = false;
+    let poll: (() => void) | undefined;
+    const stopPoll = vi.fn();
+    const transport = createWorkerThreadClusterTransport({
+      scriptPath: 'unused.js',
+      createWorker: () => link.worker,
+      isCancelled: () => cancelled,
+      startCancelPoll: (onPoll) => {
+        poll = onPoll;
+        return stopPoll;
+      },
+    });
+
+    const pending = transport.run(PLACES_REQUEST);
+
+    if (poll === undefined) throw new Error('expected the transport to start a cancel poll');
+    // A poll tick BEFORE cancel must not settle the run or tear anything down.
+    poll();
+    expect(stopPoll).not.toHaveBeenCalled();
+    expect(link.terminate).not.toHaveBeenCalled();
+
+    // Cancel is requested; the next poll tick must terminate the worker and settle
+    // as cancelled — resolving (a cancel is not a failure), not rejecting.
+    cancelled = true;
+    poll();
+
+    const response = await pending;
+    expect(response).toEqual({});
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+    // The poll timer is cleared exactly once on the cancel settle path (no leak).
+    expect(stopPoll).toHaveBeenCalledTimes(1);
+
+    // A late worker exit after the cancel settle MUST be swallowed by the guard:
+    // no double-settle, no second terminate, no second poll-stop.
+    expect(() => link.fireExit(0)).not.toThrow();
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+    expect(stopPoll).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the cancel poll and resolves with the worker result when no cancel is signalled (#402)', async () => {
+    const link = linkedWorker();
+    bindClusterWorker(link.port);
+    const stopPoll = vi.fn();
+    const transport = createWorkerThreadClusterTransport({
+      scriptPath: 'unused.js',
+      createWorker: () => link.worker,
+      isCancelled: () => false,
+      startCancelPoll: () => stopPoll,
+    });
+
+    const response = await transport.run(PLACES_REQUEST);
+
+    // The non-cancel path is unchanged: the worker's result resolves the run and the
+    // worker is torn down once — and the cancel poll is cleared so no timer leaks.
+    expect(response.places).toBeDefined();
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+    expect(stopPoll).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start a cancel poll when no isCancelled probe is provided (#402)', async () => {
+    const link = linkedWorker();
+    bindClusterWorker(link.port);
+    let pollStarted = false;
+    const transport = createWorkerThreadClusterTransport({
+      scriptPath: 'unused.js',
+      createWorker: () => link.worker,
+      startCancelPoll: () => {
+        pollStarted = true;
+        return () => {};
+      },
+    });
+
+    await transport.run(PLACES_REQUEST);
+
+    // With no cancel probe there is nothing to poll for — the seam must stay unused.
+    expect(pollStarted).toBe(false);
+  });
 });
 
 describe('categorization cluster worker bootstrap entry (#344 off-thread wiring)', () => {
@@ -445,6 +527,81 @@ describe('createProductionClusterTransport (#344 worker transport with inline fa
 
     expect(response.places).toBeUndefined();
     expect(response.themes).toBeUndefined();
+  });
+
+  it('warns once about the degraded inline fallback when the worker entry is missing (#401)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const transport = createProductionClusterTransport({
+        scriptPath: '/out/main/categorization-cluster-worker.js',
+        scriptExists: () => false,
+      });
+
+      // Constructing the transport (once per port) emits a single degraded-mode warning.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        '[kawsay] categorization worker entry missing; falling back to inline main-thread clustering',
+      );
+      // Zero-egress diagnostics: the message must NOT leak the worker script path.
+      const logged = warn.mock.calls[0]?.[0];
+      expect(String(logged)).not.toContain('categorization-cluster-worker.js');
+
+      // The degraded transport still works — it is the inline main-thread one.
+      await expect(transport.run(BOTH_REQUEST)).resolves.toEqual(runClusterRequest(BOTH_REQUEST));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not warn when the worker entry resolves (#401)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const link = linkedWorker();
+      bindClusterWorker(link.port);
+      const transport = createProductionClusterTransport({
+        scriptPath: '/out/main/categorization-cluster-worker.js',
+        scriptExists: () => true,
+        createWorker: () => link.worker,
+      });
+
+      await transport.run(PLACES_REQUEST);
+
+      // The healthy off-thread path must stay silent (no degraded-mode noise).
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('threads the cancel probe into the worker transport so a mid-run cancel stops the worker (#402)', async () => {
+    const link = linkedWorker();
+    // Unbound port ⇒ the worker never replies; the forwarded cancel poll settles the run.
+    let cancelled = false;
+    let poll: (() => void) | undefined;
+    const stopPoll = vi.fn();
+    const transport = createProductionClusterTransport({
+      scriptPath: '/out/main/categorization-cluster-worker.js',
+      scriptExists: () => true,
+      isCancelled: () => cancelled,
+      createWorker: () => link.worker,
+      startCancelPoll: (onPoll) => {
+        poll = onPoll;
+        return stopPoll;
+      },
+    });
+
+    const pending = transport.run(PLACES_REQUEST);
+
+    if (poll === undefined) {
+      throw new Error('expected the production worker path to forward the cancel probe');
+    }
+    cancelled = true;
+    poll();
+
+    const response = await pending;
+    expect(response).toEqual({});
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+    expect(stopPoll).toHaveBeenCalledTimes(1);
   });
 });
 
