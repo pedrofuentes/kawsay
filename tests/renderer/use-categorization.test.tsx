@@ -383,6 +383,80 @@ describe('useItemCategories — supersedes a stale rejection after a later succe
     // And no redundant replay was triggered — call count stayed at 2.
     expect(applyCategoryCorrection).toHaveBeenCalledTimes(2);
   });
+
+  it('drops an out-of-order older success from correction A when a later correction B on the same item already succeeded — chips are not regressed (#388)', async () => {
+    // The success-side mirror of the rejection drop above: two corrections A
+    // then B are in flight on the SAME item. B (the later, higher-seq)
+    // resolves SUCCESSFULLY first and applies its refresh; THEN A (the
+    // earlier, lower-seq) resolves SUCCESSFULLY second. A's refresh is now
+    // stale — applying it would regress the visible chips back to an older
+    // state — so the advance-only successor guard MUST drop it and leave B's
+    // chips in place.
+    const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
+    // A's (confirm) and B's (remove) refreshes are deliberately DISTINCT: if
+    // A's older success were NOT dropped, the chips would visibly regress from
+    // B's refresh to A's — the assertion that makes this test discriminating
+    // against a removed or inverted guard.
+    const refreshedAfterA: ItemCategoryDTO[] = [
+      makeItemCategory({
+        categoryId: CATEGORY_ID,
+        name: 'Cusco, Perú',
+        source: 'user',
+        confidence: null,
+      }),
+    ];
+    const refreshedAfterB: ItemCategoryDTO[] = [
+      makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú (removed)' }),
+    ];
+
+    const pendingA = deferred<ItemCategoryDTO[]>();
+    const pendingB = deferred<ItemCategoryDTO[]>();
+    const applyCategoryCorrection = vi
+      .fn<(input: CategorizationCorrectionDTO) => Promise<ItemCategoryDTO[]>>()
+      // First call = correction A (older seq; will succeed SECOND).
+      .mockImplementationOnce(() => pendingA.promise)
+      // Second call = correction B (newer seq; will succeed FIRST).
+      .mockImplementationOnce(() => pendingB.promise);
+    const api = makeFakeApi({
+      listItemCategories: vi.fn(() => Promise.resolve([initial])),
+      applyCategoryCorrection,
+    });
+
+    const { result } = renderHook(() => useItemCategories(ITEM_A, true), { wrapper: wrapper(api) });
+    await waitFor(() => expect(result.current.categories).toEqual([initial]));
+
+    // Fire A, then B — both in flight against the same item.
+    act(() => result.current.applyCorrection(CONFIRM));
+    act(() => result.current.applyCorrection(REMOVE));
+    expect(applyCategoryCorrection).toHaveBeenCalledTimes(2);
+    expect(applyCategoryCorrection).toHaveBeenNthCalledWith(1, CONFIRM);
+    expect(applyCategoryCorrection).toHaveBeenNthCalledWith(2, REMOVE);
+
+    // Resolve B (the later, higher-seq) FIRST — successfully. Its refresh is
+    // applied and it becomes the highest successfully-settled attempt.
+    await act(async () => {
+      pendingB.resolve(refreshedAfterB);
+      await pendingB.promise;
+    });
+    expect(result.current.correctionError).toBeNull();
+    expect(result.current.categories).toEqual(refreshedAfterB);
+
+    // NOW A (the earlier, lower-seq) resolves successfully SECOND. It is an
+    // out-of-order older success — the guard drops it so B's newer chips stay.
+    await act(async () => {
+      pendingA.resolve(refreshedAfterA);
+      await pendingA.promise;
+      // Flush any subsequent microtasks so a would-be setState has time to land.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Chips still reflect B's refresh — A's stale success was dropped, not applied.
+    expect(result.current.categories).toEqual(refreshedAfterB);
+    // Still no error banner, and no redundant replay was triggered.
+    expect(result.current.correctionError).toBeNull();
+    expect(applyCategoryCorrection).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('useItemCategories — logs correction failures via the [kawsay] convention (#361)', () => {
