@@ -187,10 +187,12 @@ class DegreeGrid {
  * Dense-cell bound: bit-identical coordinates (e.g. thousands of photos taken
  * at one home GPS) are folded into a single WEIGHTED representative before
  * DBSCAN runs. Clones share every haversine distance by definition, so this
- * fold is a pure algorithmic optimisation — output ids, membership, cluster
- * ids, and centroids are byte-identical to the pre-fold behaviour — that
- * bounds neighbourhood queries by the number of unique coordinates rather
- * than the number of input points.
+ * fold is a pure algorithmic optimisation — output ids, membership, and
+ * cluster ids are identical to the pre-fold behaviour, and centroids are
+ * identical up to floating-point rounding (a weighted `rep.lat * weight` sum
+ * can differ from adding each member individually by ≤1 ULP — ≪1 mm) — that
+ * bounds neighbourhood queries by the number of unique coordinates rather than
+ * the number of input points.
  */
 export function clusterPlaces(
   points: readonly GpsPoint[],
@@ -243,6 +245,19 @@ function runClusterPlaces(
 ): { result: PlacesClusterResult; stats: ClusterPlacesStats } {
   const epsMeters = options.epsMeters ?? DEFAULT_EPS_METERS;
   const minPts = options.minPts ?? DEFAULT_MIN_PTS;
+
+  // Reject programmer misuse early with a clear error rather than silently
+  // building a degenerate grid (eps ≤ 0/NaN) or applying an impossible density
+  // threshold (minPts < 1 or fractional). Both defaults are valid, so callers
+  // that omit the options never trip these guards.
+  if (!Number.isFinite(epsMeters) || epsMeters <= 0) {
+    throw new RangeError(
+      `clusterPlaces: epsMeters must be a finite number > 0 (got ${epsMeters}).`,
+    );
+  }
+  if (!Number.isInteger(minPts) || minPts < 1) {
+    throw new RangeError(`clusterPlaces: minPts must be an integer >= 1 (got ${minPts}).`);
+  }
 
   const byId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
