@@ -204,24 +204,47 @@ describe('SuggestionsTray — curation actions call the API with the right ids',
   });
 });
 
-describe('SuggestionsTray — a failed curation action surfaces a calm, non-blocking notice (#351 #5)', () => {
-  it('shows a gentle status message and keeps the card when an action rejects', async () => {
-    const api = enabledApi(placeView(), {
-      acceptSuggestion: vi.fn(() => Promise.reject(new Error('curation failed'))),
-    });
-    const { user } = setup(api);
+describe('SuggestionsTray — a failed curation action surfaces a calm, non-blocking notice (#351 #5, #408)', () => {
+  // Pin the error-surfacing guarantee for ALL THREE verbs — not just accept — so
+  // a regression that re-swallows merge's or dismiss's errors can't pass CI green
+  // (#408).
+  it.each([
+    { verb: 'accept', method: 'acceptSuggestion' },
+    { verb: 'merge', method: 'mergeSuggestion' },
+    { verb: 'dismiss', method: 'dismissSuggestion' },
+  ] as const)(
+    'shows a gentle status message and keeps the card when $verb rejects',
+    async ({ verb, method }) => {
+      const api = enabledApi(placeView(), {
+        [method]: vi.fn(() => Promise.reject(new Error('curation failed'))),
+      });
+      const { user } = setup(api);
 
-    const region = await screen.findByRole('region', { name: /suggested collections/i });
-    await user.click(within(region).getByRole('button', { name: /accept|add to collections/i }));
+      const region = await screen.findByRole('region', { name: /suggested collections/i });
+      const card = within(region).getByRole('listitem');
+      if (verb === 'accept') {
+        await user.click(within(card).getByRole('button', { name: /accept|add to collections/i }));
+      } else if (verb === 'merge') {
+        await user.selectOptions(
+          within(card).getByRole('combobox', { name: /merge into/i }),
+          COLLECTION,
+        );
+        await user.click(within(card).getByRole('button', { name: /^merge$/i }));
+      } else {
+        await user.click(within(card).getByRole('button', { name: /dismiss|not now/i }));
+      }
 
-    // A calm, local-only-framed notice appears for the user to retry…
-    const notice = await screen.findByRole('status');
-    expect(notice).toHaveTextContent(/couldn.t|nothing.*changed|try again/i);
-    // …and it is NON-BLOCKING: the tray and the card stay put (nothing changed on disk).
-    expect(screen.getByRole('region', { name: /suggested collections/i })).toBeInTheDocument();
-    expect(screen.getByRole('listitem')).toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: /name/i })).toHaveValue('Cusco, Perú');
-  });
+      // A calm, local-only-framed notice appears for the user to retry — neutral
+      // wording that never over-promises "nothing changed" (#409).
+      const notice = await screen.findByRole('status');
+      expect(notice).toHaveTextContent(/couldn.t confirm that change/i);
+      expect(notice).toHaveTextContent(/refresh or try again/i);
+      // …and it is NON-BLOCKING: the tray and the card stay put.
+      expect(screen.getByRole('region', { name: /suggested collections/i })).toBeInTheDocument();
+      expect(screen.getByRole('listitem')).toBeInTheDocument();
+      expect(within(card).getByRole('textbox', { name: /name/i })).toHaveValue('Cusco, Perú');
+    },
+  );
 
   it('clears the notice once a later action succeeds', async () => {
     const remaining = makeSuggestionsView({

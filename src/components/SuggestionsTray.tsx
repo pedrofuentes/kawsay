@@ -66,8 +66,7 @@ export function SuggestionsTray(): ReactElement | null {
           role="status"
           className="rounded-xl border border-error-border bg-error-bg px-4 py-3 font-body text-sm text-error-text"
         >
-          Sorry, we couldn&apos;t save that change just now. Nothing on your computer changed —
-          please try again.
+          Sorry, we couldn&apos;t confirm that change just now — please refresh or try again.
         </p>
       )}
 

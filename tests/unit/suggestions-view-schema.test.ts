@@ -39,6 +39,14 @@ describe('suggestionsViewSchema — top-level array bounds (#351 #4)', () => {
     expect(SUGGESTIONS_VIEW_MAX).toBeGreaterThanOrEqual(10_000);
   });
 
+  it('accepts arrays exactly at the ceiling (the bound is inclusive, not exclusive)', () => {
+    const atLimit = {
+      suggestions: Array.from({ length: SUGGESTIONS_VIEW_MAX }, () => SUGGESTION),
+      collections: Array.from({ length: SUGGESTIONS_VIEW_MAX }, () => MERGE_TARGET),
+    };
+    expect(suggestionsViewSchema.safeParse(atLimit).success).toBe(true);
+  });
+
   it('rejects a suggestions array longer than the ceiling', () => {
     const overLimit = {
       suggestions: Array.from({ length: SUGGESTIONS_VIEW_MAX + 1 }, () => SUGGESTION),
