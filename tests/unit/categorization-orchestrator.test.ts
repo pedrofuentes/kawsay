@@ -627,6 +627,37 @@ describe('themes pipeline', () => {
   });
 });
 
+describe('progress inFlight (distinct-count de-dup, #341)', () => {
+  it('counts an item carrying BOTH signals once in the in-flight corpus, not twice', async () => {
+    const { orchestrator, emitted } = harness({
+      seed: [
+        // 'x' carries BOTH a GPS signal AND an embedding, so it lands in the places
+        // pass AND the themes pass — a naive places(2) + themes(2) sum would be 4.
+        {
+          id: 'x',
+          gpsLat: CUSCO_A.lat,
+          gpsLon: CUSCO_A.lon,
+          embed: 0.5,
+          description: 'plaza trip',
+        },
+        { id: 'g', gpsLat: CUSCO_B.lat, gpsLon: CUSCO_B.lon },
+        { id: 'e', embed: 0.5, description: 'plaza trip' },
+      ],
+    });
+
+    const result = await orchestrator.run();
+    expect(result.outcome).toBe('completed');
+
+    // During the clustering pass inFlight is set to the DISTINCT corpus size and
+    // then reset to 0, so the peak emitted inFlight is the distinct count. The
+    // both-signals item 'x' is de-duped by the `distinct` Set: 3 ids in flight,
+    // NOT the naive 4. A double-count regression (gps + theme length) fails here.
+    const peakInFlight = Math.max(...emitted.map((snapshot) => snapshot.counts.inFlight));
+    expect(peakInFlight).toBe(3);
+    expect(emitted.some((snapshot) => snapshot.counts.inFlight === 4)).toBe(false);
+  });
+});
+
 describe('the category_status drain', () => {
   it('skips an item with neither GPS nor an embedding', async () => {
     const { orchestrator, db, requests } = harness({
