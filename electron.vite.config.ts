@@ -18,6 +18,10 @@ export default defineConfig({
             __dirname,
             'electron/main/transcription/workers/transcription-worker.ts',
           ),
+          'categorization-cluster-worker': resolve(
+            __dirname,
+            'electron/main/categorize/workers/categorization-cluster-worker.ts',
+          ),
         },
       },
       rollupOptions: {
