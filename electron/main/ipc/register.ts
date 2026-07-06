@@ -61,7 +61,10 @@ export function registerIpcHandlers(
         // the trust-boundary contract is unchanged (the error still reaches the
         // renderer). Local console only — no telemetry; the raw error is projected to
         // name/code (never message/stack), so a fault can't leak ids/paths/item text.
-        console.error(`[kawsay] IPC handler for "${channel}" failed`, diagnosticError(error));
+        // Semgrep's unsafe-formatstring (CWE-134) match below is a false positive: a JS
+        // template literal is not a printf format string, and `channel` is an internal
+        // IPC channel name, never user/attacker input (#406).
+        console.error(`[kawsay] IPC handler for "${channel}" failed`, diagnosticError(error)); // nosemgrep: unsafe-formatstring
         throw error;
       }
     });
