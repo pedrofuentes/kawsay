@@ -204,6 +204,63 @@ describe('SuggestionsTray — curation actions call the API with the right ids',
   });
 });
 
+describe('SuggestionsTray — a failed curation action surfaces a calm, non-blocking notice (#351 #5)', () => {
+  it('shows a gentle status message and keeps the card when an action rejects', async () => {
+    const api = enabledApi(placeView(), {
+      acceptSuggestion: vi.fn(() => Promise.reject(new Error('curation failed'))),
+    });
+    const { user } = setup(api);
+
+    const region = await screen.findByRole('region', { name: /suggested collections/i });
+    await user.click(within(region).getByRole('button', { name: /accept|add to collections/i }));
+
+    // A calm, local-only-framed notice appears for the user to retry…
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(/couldn.t|nothing.*changed|try again/i);
+    // …and it is NON-BLOCKING: the tray and the card stay put (nothing changed on disk).
+    expect(screen.getByRole('region', { name: /suggested collections/i })).toBeInTheDocument();
+    expect(screen.getByRole('listitem')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /name/i })).toHaveValue('Cusco, Perú');
+  });
+
+  it('clears the notice once a later action succeeds', async () => {
+    const remaining = makeSuggestionsView({
+      suggestions: [
+        makeSuggestion({ categoryId: THEME_CATEGORY, kind: 'theme', name: 'Family birthdays' }),
+      ],
+    });
+    const api = enabledApi(
+      makeSuggestionsView({
+        suggestions: [
+          makeSuggestion({ categoryId: CATEGORY, name: 'Cusco, Perú' }),
+          makeSuggestion({ categoryId: THEME_CATEGORY, kind: 'theme', name: 'Family birthdays' }),
+        ],
+      }),
+      {
+        acceptSuggestion: vi.fn(() => Promise.reject(new Error('boom'))),
+        dismissSuggestion: vi.fn(() => Promise.resolve(remaining)),
+      },
+    );
+    const { user } = setup(api);
+
+    const region = await screen.findByRole('region', { name: /suggested collections/i });
+    const firstCard = () =>
+      within(screen.getByRole('region', { name: /suggested collections/i })).getAllByRole(
+        'listitem',
+      )[0];
+    // Accept fails on the first (place) card → the notice appears.
+    await user.click(
+      within(firstCard()).getByRole('button', { name: /accept|add to collections/i }),
+    );
+    expect(await screen.findByRole('status')).toBeInTheDocument();
+
+    // Dismiss then succeeds (refreshes the tray) → the notice clears.
+    await user.click(within(firstCard()).getByRole('button', { name: /dismiss|not now/i }));
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    expect(within(region).getAllByRole('listitem')).toHaveLength(1);
+  });
+});
+
 describe('SuggestionsTray — accessibility (WCAG 2.1 AA)', () => {
   it('the tray and its action controls have no axe violations', async () => {
     const { container } = setup(enabledApi(placeView()));
