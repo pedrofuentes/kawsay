@@ -194,6 +194,14 @@ describe('createGazetteer + reverseGeocode (nearest gazetteer entry)', () => {
 });
 
 describe('parseGazetteerNdjson', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
   it('parses one entry per line', () => {
     const text = [
       '{"id":1,"name":"A","lat":1.5,"lon":2.5,"admin1":"X","country":"ZZ"}',
@@ -220,6 +228,45 @@ describe('parseGazetteerNdjson', () => {
     const entries = parseGazetteerNdjson(text);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe(1);
+  });
+
+  it('logs a skip count on the local console when malformed rows are dropped (#333)', () => {
+    // A truncated/corrupt pack yields fewer rows than a legitimately smaller sample.
+    // Surfacing the dropped-row count makes the two distinguishable. Local console
+    // ONLY — never telemetry (strict local-only guarantee).
+    const text = [
+      '{"id":1,"name":"A","lat":0,"lon":0,"admin1":"X","country":"ZZ"}',
+      'garbage — not json at all', // JSON.parse failure (e.g. a truncated final line)
+      '{"id":2,"name":"B"}', // narrowing failure: missing coordinates
+      '{"id":3,"name":"C","lat":1,"lon":1,"admin1":"Y","country":"YY"}',
+    ].join('\n');
+    const entries = parseGazetteerNdjson(text);
+    // Resilience is preserved: the two valid rows still load.
+    expect(entries.map((entry) => entry.id)).toEqual([1, 3]);
+    // Exactly ONE summary warning (not one-per-row spam), naming the dropped count.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const call = warnSpy.mock.calls[0];
+    expect(call).toBeDefined();
+    const [message] = call ?? [];
+    expect(typeof message).toBe('string');
+    expect((message as string).toLowerCase()).toContain('gazetteer');
+    expect(message as string).toMatch(/skip/i);
+    expect(message as string).toContain('2'); // two rows were skipped
+  });
+
+  it('does NOT warn when every row is valid (skip count zero)', () => {
+    const text = [
+      '{"id":1,"name":"A","lat":0,"lon":0,"admin1":"X","country":"ZZ"}',
+      '{"id":2,"name":"B","lat":1,"lon":1,"admin1":"Y","country":"YY"}',
+    ].join('\n');
+    expect(parseGazetteerNdjson(text)).toHaveLength(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT count blank lines / trailing whitespace as skipped rows', () => {
+    const text = '\n  \n{"id":1,"name":"A","lat":0,"lon":0,"admin1":"X","country":"ZZ"}\n\n';
+    expect(parseGazetteerNdjson(text)).toHaveLength(1);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -373,14 +420,20 @@ describe('loadGazetteer (asset loading + graceful degrade)', () => {
       expect(args).toContain(diskError);
     });
 
-    it('emits ONE console.warn when the asset is present but JSON is corrupt', () => {
+    it('emits ONE console.warn (with skip count) when the asset is present but its rows are malformed (#333)', () => {
       const readFile = vi.fn(() => 'not-valid-json-at-all\x00\x01\x02');
-      loadGazetteer({ ...OPTIONS, exists: () => true, readFile });
-      // parseGazetteerNdjson is resilient (skips malformed lines) so this may not throw;
-      // the file IS readable but produces an empty gazetteer — no warn expected here.
-      // A truly corrupt/truncated binary that causes readFile to throw IS the warn case.
-      // This test verifies the non-throw empty-parse path does NOT warn.
-      expect(warnSpy).not.toHaveBeenCalled();
+      const gazetteer = loadGazetteer({ ...OPTIONS, exists: () => true, readFile });
+      // The file IS readable but every row is malformed, so it parses to an EMPTY
+      // gazetteer. Rather than degrading silently (indistinguishable from a legitimately
+      // empty/absent asset), parseGazetteerNdjson surfaces the dropped-row count on the
+      // local console so a truncated/corrupt pack is diagnosable. Never telemetry (#333).
+      expect(gazetteer.size).toBe(0);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const call = warnSpy.mock.calls[0];
+      expect(call).toBeDefined();
+      const [message] = call ?? [];
+      expect((message as string).toLowerCase()).toContain('gazetteer');
+      expect(message as string).toMatch(/skip/i);
     });
 
     it('does NOT warn when the asset is simply absent (dev checkout)', () => {

@@ -108,10 +108,15 @@ export function download(url) {
  * digests so the abort message tells the operator exactly what to
  * re-verify/re-pin. Extracted so the accept/abort behaviour is unit-tested
  * without going to the network.
+ *
+ * @returns The computed lowercase SHA-256 hex digest.
  */
 export function verifySha256(buffer, expectedHex) {
   const actualHex = createHash('sha256').update(buffer).digest('hex');
   const expected = expectedHex.toLowerCase();
+  // Plain `!==` is intentional: a one-shot CLI with no oracle loop, and `expected` is a
+  // hardcoded PUBLIC pin (nothing secret to leak via timing). Only switch to
+  // crypto.timingSafeEqual if this is ever reused where the compare is an oracle (#366).
   if (actualHex !== expected) {
     throw new Error(`SHA-256 mismatch: expected ${expected}, got ${actualHex}`);
   }

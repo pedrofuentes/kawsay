@@ -56,6 +56,10 @@ const GAZETTEER_INITIAL_SEARCH_METERS = 50_000;
 /** Growth factor applied to the search radius each time a scan finds no candidate. */
 const GAZETTEER_SEARCH_GROWTH = 4;
 
+// These three search-tuning constants are intentionally kept in-source rather than
+// externalized to config: retuning is a rebuild, which is acceptable for a fully-local
+// app and keeps each value reviewable next to the rationale above (#333 — no action).
+
 // IUGG mean Earth radius — the SAME sphere `places-cluster.ts` uses, so the grid's
 // metre↔degree conversions are exactly consistent with the imported haversine metric.
 const EARTH_RADIUS_METERS = 6_371_008.8;
@@ -262,9 +266,17 @@ function toGazetteerEntry(value: unknown): GazetteerEntry | null {
  * or malformed line is skipped rather than aborting the load (one bad row never sinks
  * the dataset), mirroring the "one bad item never aborts the run" ethos of the M4-1
  * orchestrators.
+ *
+ * When one or more NON-BLANK rows are dropped (a JSON parse error, or a row that fails
+ * narrowing), the total skip count is surfaced ONCE on the local console. Because
+ * `Gazetteer.size` counts only the rows that loaded, this diagnostic is what lets an
+ * operator tell a truncated/corrupt pack apart from a legitimately smaller sample
+ * (#333) — mirroring the skip-count reporting of the sibling importers. Local console
+ * ONLY; it never emits telemetry, honouring the strict local-only guarantee.
  */
 export function parseGazetteerNdjson(text: string): GazetteerEntry[] {
   const entries: GazetteerEntry[] = [];
+  let skipped = 0;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
@@ -272,10 +284,19 @@ export function parseGazetteerNdjson(text: string): GazetteerEntry[] {
     try {
       parsed = JSON.parse(trimmed);
     } catch {
+      skipped += 1;
       continue;
     }
     const entry = toGazetteerEntry(parsed);
     if (entry !== null) entries.push(entry);
+    else skipped += 1;
+  }
+  if (skipped > 0) {
+    // Local-only diagnostic (never telemetry): a non-zero skip count means the pack
+    // lost rows to corruption/truncation, so its `size` under-reports the source.
+    console.warn(
+      `[kawsay] gazetteer: skipped ${skipped} malformed NDJSON row(s) while parsing; ${entries.length} row(s) loaded — a truncated or corrupt pack loads fewer entries than expected.`,
+    );
   }
   return entries;
 }
