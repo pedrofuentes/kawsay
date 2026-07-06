@@ -277,7 +277,7 @@ export type TranscriptViewDTO = z.infer<typeof transcriptViewSchema>;
 // ── Explainable categorization (M4-2h, #270 — ADR-0030 / AC-30·33) ────────────
 //
 // The renderer-facing projection of the categorizer (#264/#269): per-item
-// explainable CHIPS (place/theme groupings with WHY + HOW-SURE), the opt-in gate
+// explainable CHIPS (category groupings with WHY + HOW-SURE), the opt-in gate
 // snapshot, and the run result/snapshot. Like the transcription DTOs these carry
 // no paths, no vectors, no gazetteer bytes — only the calm, correctable facts the
 // item view paints. The enums mirror the categories-repo CHECK domains exactly, so
@@ -287,7 +287,11 @@ export type TranscriptViewDTO = z.infer<typeof transcriptViewSchema>;
 export const CATEGORY_NAME_MAX_LENGTH = 200;
 export const CATEGORY_EXPLANATION_MAX_LENGTH = 512;
 
-/** The category groupings (mirrors the categories.kind CHECK). */
+/**
+ * The category kinds (mirrors the categories.kind CHECK). `place` and `theme` are
+ * what the shipped categorizer produces today; `person` is a valid kind in the CHECK
+ * domain (paired with the `face-cluster` signal) but is not yet surfaced.
+ */
 export const categoryKindSchema = z.enum(['person', 'place', 'theme']);
 export type CategoryKindDTO = z.infer<typeof categoryKindSchema>;
 
@@ -368,7 +372,8 @@ export type CategorizationSnapshotDTO = z.infer<typeof categorizationSnapshotSch
 
 /**
  * Why a gated `categorize:start` refused — a calm, branchable reason: the user has
- * not opted in, or there is no place/theme signal at all. Mirrors the orchestrator's
+ * not opted in, or there is no usable signal at all (`no-signal` is kind-agnostic;
+ * today's signals derive place & theme). Mirrors the orchestrator's
  * `CategorizationUnavailableReason`.
  */
 export const categorizationRefusalReasonSchema = z.enum(['not-opted-in', 'no-signal']);
