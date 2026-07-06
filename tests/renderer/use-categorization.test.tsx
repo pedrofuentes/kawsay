@@ -143,6 +143,70 @@ describe('useItemCategories — staleness guard on applyCorrection (#346 a)', ()
   });
 });
 
+describe('useItemCategories — staleness guard also disarms on unmount (#362)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('drops a correction result that resolves AFTER the hook unmounted — the mountedRef cleanup gate fires, so nothing setState-s on a dead tree', async () => {
+    // Mirrors the stale-item-switch pattern (#346 a) but exercises the OTHER
+    // arm of the SAME guard: `!mountedRef.current`. The item never switches, so
+    // the only way this in-flight result can be dropped is the unmount cleanup
+    // effect flipping mountedRef to false. A regression removing or misordering
+    // that effect would let the late resolve run setState on an unmounted tree —
+    // an item-switch test cannot catch it, but the drop-trace assertion below
+    // can, because a live tree would instead paint the ghost refresh.
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
+    // The refresh the in-flight correction is about to hand back — if the guard
+    // were missing on the unmount arm, a live tree would paint this ghost.
+    const postUnmountRefresh: ItemCategoryDTO[] = [
+      makeItemCategory({ categoryId: CATEGORY_ID, name: 'GHOST — resolved after unmount' }),
+    ];
+    const pending = deferred<ItemCategoryDTO[]>();
+    const applyCategoryCorrection = vi.fn(() => pending.promise);
+    const api = makeFakeApi({
+      listItemCategories: vi.fn(() => Promise.resolve([initial])),
+      applyCategoryCorrection,
+    });
+
+    const { result, unmount } = renderHook(() => useItemCategories(ITEM_A, true), {
+      wrapper: wrapper(api),
+    });
+    await waitFor(() => expect(result.current.categories).toEqual([initial]));
+
+    // Fire the correction on item A; it does not resolve yet.
+    act(() => result.current.applyCorrection(CONFIRM));
+    expect(applyCategoryCorrection).toHaveBeenCalledWith(CONFIRM);
+
+    // The user closes the memory (or the tree tears down) before the local IPC
+    // resolves — the cleanup effect must disarm the pending write.
+    unmount();
+
+    // NOW item A's in-flight correction finally resolves against a dead tree.
+    await act(async () => {
+      pending.resolve(postUnmountRefresh);
+      await pending.promise;
+      // Flush the resolve handler's follow-up microtasks.
+      await Promise.resolve();
+    });
+
+    // The guard's unmount arm dropped the result — traced via the shared
+    // [kawsay] debug convention. Because the item never switched, this trace can
+    // ONLY come from `!mountedRef.current`.
+    const droppedAfterUnmount = debugSpy.mock.calls.some(
+      (args) => typeof args[0] === 'string' && args[0].includes('unmounted'),
+    );
+    expect(droppedAfterUnmount).toBe(true);
+    // The last committed chips never became the ghost, and no failure path ran.
+    expect(result.current.categories).toEqual([initial]);
+    expect(result.current.correctionError).toBeNull();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('useItemCategories — surfaces a retryable failure instead of swallowing it (#346 b)', () => {
   it('exposes a calm, non-technical correctionError message when applyCategoryCorrection rejects', async () => {
     const initial = makeItemCategory({ categoryId: CATEGORY_ID, name: 'Cusco, Perú' });
