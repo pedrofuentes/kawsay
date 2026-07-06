@@ -267,13 +267,6 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
     [api],
   );
 
-  const applyCorrection = useCallback(
-    (input: CategorizationCorrectionDTO): void => {
-      runCorrection(input);
-    },
-    [runCorrection],
-  );
-
   const retryCorrection = useCallback((): void => {
     const previous = lastCorrectionRef.current;
     if (previous === null) {
@@ -282,5 +275,8 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
     runCorrection(previous);
   }, [runCorrection]);
 
-  return { categories, loading, applyCorrection, correctionError, retryCorrection };
+  // `runCorrection` is already memoized on `[api]`; a passthrough `useCallback`
+  // would add an identical-identity wrapper with no extra semantics, so expose
+  // it directly as the public `applyCorrection`.
+  return { categories, loading, applyCorrection: runCorrection, correctionError, retryCorrection };
 }
