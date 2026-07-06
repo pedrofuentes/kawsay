@@ -320,6 +320,50 @@ describe('clusterPlaces — border-point reclaim (mutation-discriminating)', () 
   });
 });
 
+describe('clusterPlaces — near-pole longitude ring (high-latitude coverage, #315)', () => {
+  // Near a pole the eps-neighbourhood spans the whole longitude ring, so the
+  // grid switches to scanning every longitude cell in a latitude row (the ring
+  // branch). No mid-latitude fixture reaches that branch; these points sit
+  // within ~0.01° of the North Pole to drive it and confirm correct behaviour.
+  it('clusters points within eps at extreme latitude (drives the ring branch)', () => {
+    const eps = 1500;
+    const p1 = pt('p1', 89.99, 0);
+    const p2 = pt('p2', 89.99, 20);
+    const p3 = pt('p3', 89.99, 40);
+
+    // Guard (against unit drift): near the pole, tens of degrees of longitude
+    // are only hundreds of metres apart, so all three are pairwise within eps.
+    expect(haversineDistanceMeters(p1, p2)).toBeLessThan(eps);
+    expect(haversineDistanceMeters(p2, p3)).toBeLessThan(eps);
+    expect(haversineDistanceMeters(p1, p3)).toBeLessThan(eps);
+
+    const { clusters, noise } = clusterPlaces([p1, p2, p3], { epsMeters: eps, minPts: 3 });
+    expect(noise).toEqual([]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.memberIds).toEqual(['p1', 'p2', 'p3']);
+  });
+
+  it('leaves a far-apart high-latitude point as noise (ring scan stays exact)', () => {
+    // The ring branch scans every longitude cell in the row, but the exact
+    // haversine check must still exclude a point ~2.2 km away on the tiny polar
+    // ring — the branch widens the candidate set, it does not weaken membership.
+    const eps = 1500;
+    const a = pt('a', 89.99, 0);
+    const b = pt('b', 89.99, 20);
+    const c = pt('c', 89.99, 40);
+    const far = pt('z', 89.99, 200);
+
+    expect(haversineDistanceMeters(a, far)).toBeGreaterThan(eps);
+    expect(haversineDistanceMeters(b, far)).toBeGreaterThan(eps);
+    expect(haversineDistanceMeters(c, far)).toBeGreaterThan(eps);
+
+    const { clusters, noise } = clusterPlaces([a, b, c, far], { epsMeters: eps, minPts: 3 });
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.memberIds).toEqual(['a', 'b', 'c']);
+    expect(noise).toEqual(['z']);
+  });
+});
+
 describe('clusterPlaces — dense-cell complexity bound (#313)', () => {
   // A single coordinate holding many photos (a home GPS) is folded to one
   // representative before DBSCAN so grid.neighbours() runs O(unique-coords)
@@ -371,8 +415,20 @@ describe('clusterPlaces — dense-cell complexity bound (#313)', () => {
     expect(result.clusters[1]?.size).toBe(park.length);
     expect(result.noise).toEqual(['zzz-lonely']);
 
-    // The public entry point returns the identical result.
+    // Independent reference: every home photo shares one coordinate and every
+    // park photo another, so each centroid must equal that shared coordinate
+    // (within floating-point rounding) — asserted directly, not by comparing two
+    // callers that both delegate to the same routine (which excludes centroids).
+    expect(result.clusters[0]?.centroid.lat).toBeCloseTo(40.4168, 10);
+    expect(result.clusters[0]?.centroid.lon).toBeCloseTo(-3.7038, 10);
+    expect(result.clusters[1]?.centroid.lat).toBeCloseTo(40.5, 10);
+    expect(result.clusters[1]?.centroid.lon).toBeCloseTo(-3.7, 10);
+
+    // The public entry point returns the identical result, centroids included
+    // (the snapshot helper omits them).
     const publicResult = clusterPlaces(input, { epsMeters: 1500, minPts: 3 });
     expect(snapshot(publicResult)).toEqual(snapshot(result));
+    expect(publicResult.clusters[0]?.centroid).toEqual(result.clusters[0]?.centroid);
+    expect(publicResult.clusters[1]?.centroid).toEqual(result.clusters[1]?.centroid);
   });
 });
