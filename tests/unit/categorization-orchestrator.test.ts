@@ -771,6 +771,41 @@ describe('resilience', () => {
     expect(allCategories(db)).toHaveLength(0);
   });
 
+  it('logs a local diagnostic (no telemetry, no raw-error leak) when the whole clustering pass throws (#374)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { orchestrator, db } = harness({
+      seed: [
+        { id: 'a', gpsLat: CUSCO_A.lat, gpsLon: CUSCO_A.lon },
+        { id: 'b', gpsLat: CUSCO_B.lat, gpsLon: CUSCO_B.lon },
+      ],
+      // The rejection message deliberately carries a file path + free text so the
+      // test can prove neither leaks into the log line.
+      transport: {
+        run: () => Promise.reject(new Error('worker crashed near /Users/someone/photo.jpg')),
+      },
+    });
+
+    const result = await orchestrator.run();
+
+    // The recovery behaviour is unchanged — every read item still errors and the
+    // run carries on to a terminal state.
+    expect(result.counts.failed).toBe(2);
+    expect(categoryStatusOf(db, 'a')).toBe('error');
+
+    // The pass no longer fails SILENTLY: exactly one main-process diagnostic is
+    // emitted, carrying the kawsay prefix and naming the clustering pass so a
+    // field report can distinguish a worker crash from a clean drain.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0];
+    expect(String(message)).toContain('[kawsay]');
+    expect(String(message)).toMatch(/clustering/i);
+    // Local-only + privacy: the raw error message (which can carry a file path or
+    // item text) MUST NOT reach the log — only a name/code diagnostic crosses it.
+    const serialized = JSON.stringify(warn.mock.calls);
+    expect(serialized).not.toContain('worker crashed');
+    expect(serialized).not.toContain('photo.jpg');
+  });
+
   it('contains a throw from the failure-marker and still settles the run', async () => {
     let served = false;
     const item: CategorizableItem = {
