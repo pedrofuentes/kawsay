@@ -92,7 +92,12 @@ export interface UseItemCategoriesResult {
   categories: ItemCategoryDTO[];
   /** True while the first chip read is in flight. */
   loading: boolean;
-  /** Apply a user correction and refresh the chips straight from the returned list. */
+  /**
+   * Apply a user correction and refresh the chips straight from the returned
+   * list. On a rejected save nothing on disk changes and the visible chips stay
+   * put: {@link correctionError} then carries the calm retry copy and
+   * {@link retryCorrection} replays the attempt.
+   */
   applyCorrection(input: CategorizationCorrectionDTO): void;
   /**
    * Non-null when the most recent correction did NOT save (e.g. DB busy, no
