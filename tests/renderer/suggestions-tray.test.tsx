@@ -261,6 +261,48 @@ describe('SuggestionsTray — a failed curation action surfaces a calm, non-bloc
   });
 });
 
+describe('SuggestionsTray — an action repaints the tray from the returned view (#351 #8)', () => {
+  it('drops the acted-on card from the refreshed view the action resolves (no manual re-fetch)', async () => {
+    const refreshed = makeSuggestionsView({
+      suggestions: [
+        makeSuggestion({ categoryId: THEME_CATEGORY, kind: 'theme', name: 'Family birthdays' }),
+      ],
+    });
+    const api = enabledApi(
+      makeSuggestionsView({
+        suggestions: [
+          makeSuggestion({ categoryId: CATEGORY, name: 'Cusco, Perú' }),
+          makeSuggestion({ categoryId: THEME_CATEGORY, kind: 'theme', name: 'Family birthdays' }),
+        ],
+      }),
+      { acceptSuggestion: vi.fn(() => Promise.resolve(refreshed)) },
+    );
+    const { user } = setup(api);
+
+    const region = await screen.findByRole('region', { name: /suggested collections/i });
+    expect(within(region).getAllByRole('listitem')).toHaveLength(2);
+
+    // Accept the first (place) card → the action resolves a view WITHOUT it.
+    await user.click(
+      within(within(region).getAllByRole('listitem')[0]).getByRole('button', {
+        name: /accept|add to collections/i,
+      }),
+    );
+
+    // The tray repaints straight from that returned view (setView): the accepted
+    // card drops out, the other remains, and listSuggestions is NOT called again.
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('region', { name: /suggested collections/i })).getAllByRole(
+          'listitem',
+        ),
+      ).toHaveLength(1),
+    );
+    expect(screen.getByRole('textbox', { name: /name/i })).toHaveValue('Family birthdays');
+    expect(api.listSuggestions).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('SuggestionsTray — accessibility (WCAG 2.1 AA)', () => {
   it('the tray and its action controls have no axe violations', async () => {
     const { container } = setup(enabledApi(placeView()));
