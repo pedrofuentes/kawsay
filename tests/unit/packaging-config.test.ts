@@ -117,7 +117,16 @@ const electronViteConfig = readFileSync(repoRoot('electron.vite.config.ts'), 'ut
  * multi-line `pip install \` … `huggingface_hub` commands (#391).
  */
 function hasInlineHuggingfaceHubInstall(workflow: string): boolean {
-  return /pip install[^\n]*\bhuggingface[-_]hub\b/.test(workflow);
+  // Strip `#` comments first so explanatory prose naming huggingface_hub (e.g. the
+  // lockfile-install rationale) can never false-positive as an install command.
+  const stripped = stripYamlComments(workflow);
+  // Collapse backslash line-continuations so a multi-line `pip install \` … command
+  // is matched as one logical line rather than hiding the dep behind a newline.
+  const joined = stripped.replace(/\\\r?\n[ \t]*/g, ' ');
+  // Catch every install invocation form: pip / pip3 / python[3] -m pip.
+  return /\b(?:pip[0-9]*|python[0-9]*\s+-m\s+pip)\s+install\b[^\n]*\bhuggingface[-_]hub\b/.test(
+    joined,
+  );
 }
 
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
