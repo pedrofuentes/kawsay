@@ -98,6 +98,36 @@ const ac4EgressYml = readFileSync(repoRoot('.github/workflows/ac4-egress.yml'), 
   /\r\n/g,
   '\n',
 );
+// The electron-vite build config. Its main.build.lib.entry must register the
+// off-thread categorization worker so `out/main/categorization-cluster-worker.js`
+// is emitted; a dropped entry would silently reintroduce main-thread clustering
+// (#401). Normalize CRLF→LF once (Windows-checkout safe) as with the reads above.
+const electronViteConfig = readFileSync(repoRoot('electron.vite.config.ts'), 'utf8').replace(
+  /\r\n/g,
+  '\n',
+);
+
+/**
+ * Detect an INLINE `huggingface_hub` install in a workflow's shell steps — any
+ * install that names huggingface_hub directly rather than resolving it from the
+ * hash-pinned `--require-hashes` lockfile. Such an inline install bypasses the
+ * lockfile's sha256 verification (and a 1.x form also breaks the pinned-transformers
+ * convert import), so the guard must reject every equivalent invocation form:
+ * `pip install`, `pip3 install`, `python -m pip install`, and backslash-continued
+ * multi-line `pip install \` … `huggingface_hub` commands (#391).
+ */
+function hasInlineHuggingfaceHubInstall(workflow: string): boolean {
+  // Strip `#` comments first so explanatory prose naming huggingface_hub (e.g. the
+  // lockfile-install rationale) can never false-positive as an install command.
+  const stripped = stripYamlComments(workflow);
+  // Collapse backslash line-continuations so a multi-line `pip install \` … command
+  // is matched as one logical line rather than hiding the dep behind a newline.
+  const joined = stripped.replace(/\\\r?\n[ \t]*/g, ' ');
+  // Catch every install invocation form: pip / pip3 / python[3] -m pip.
+  return /\b(?:pip[0-9]*|python[0-9]*\s+-m\s+pip)\s+install\b[^\n]*\bhuggingface[-_]hub\b/.test(
+    joined,
+  );
+}
 
 /** Return the body lines of a `jobs:` entry (a 2-space-indented id) by job id. */
 function releaseJobBlock(jobId: string): string {
@@ -818,5 +848,45 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
     for (const block of blocks) {
       assertPersistCredentialsFalse(block);
     }
+  });
+});
+
+describe('inline huggingface_hub install guard resists bypass forms (#391)', () => {
+  // The workflow-level guard forbidding an inline huggingface_hub install (which
+  // would bypass the --require-hashes lockfile's sha256 verification) must catch
+  // not just a bare `pip install …` but every equivalent invocation form. Each
+  // string below is a real inline install that still sidesteps the hash-pinned
+  // lockfile, so the guard MUST flag it.
+  const bypassInstalls = [
+    'pip3 install huggingface_hub',
+    'python -m pip install huggingface_hub',
+    'pip install \\\n  huggingface_hub==1.0',
+  ];
+
+  it.each(bypassInstalls)('flags the inline install bypass: %j', (command) => {
+    expect(hasInlineHuggingfaceHubInstall(command)).toBe(true);
+  });
+
+  it('does not flag the approved --require-hashes lockfile install (real workflow)', () => {
+    // The real workflow installs huggingface_hub ONLY via the hash-pinned lockfile,
+    // so the guard must NOT false-positive on it (the dep name lives in the lockfile
+    // and in an explanatory comment, never on an inline install line).
+    expect(hasInlineHuggingfaceHubInstall(publishEmbedModelYml)).toBe(false);
+  });
+});
+
+describe('electron-vite registers the off-thread categorization worker entry (#401)', () => {
+  // The categorization clustering runs off the UI thread and requires
+  // `out/main/categorization-cluster-worker.js` to be emitted. That artifact only
+  // exists if the source entry is registered under main.build.lib.entry; a build
+  // regression that dropped it would silently reintroduce main-thread clustering.
+  it('declares the categorization-cluster-worker build entry', () => {
+    expect(electronViteConfig).toMatch(/['"]categorization-cluster-worker['"]\s*:\s*resolve\(/);
+  });
+
+  it('points the entry at the categorization worker source module', () => {
+    expect(electronViteConfig).toMatch(
+      /electron\/main\/categorize\/workers\/categorization-cluster-worker\.ts/,
+    );
   });
 });

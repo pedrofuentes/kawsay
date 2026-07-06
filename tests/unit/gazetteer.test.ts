@@ -251,7 +251,9 @@ describe('parseGazetteerNdjson', () => {
     expect(typeof message).toBe('string');
     expect((message as string).toLowerCase()).toContain('gazetteer');
     expect(message as string).toMatch(/skip/i);
-    expect(message as string).toContain('2'); // two rows were skipped
+    // Uniquely pin the SKIP count (2) — the loaded count is also 2 here, so a bare
+    // `toContain('2')` would match either. Bind the digit to the "skipped" token (#404).
+    expect(message as string).toMatch(/skipped\s+2\b/i);
   });
 
   it('does NOT warn when every row is valid (skip count zero)', () => {
