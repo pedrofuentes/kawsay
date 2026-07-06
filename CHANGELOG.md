@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Security
+
+### Removed
+
+## [0.5.0] - 2026-07-06
+
+### Added
+
 - **Suggested collections, only when you say so** (M4-3c · ADR-0030): when organizing is on,
   Kawsay gently gathers the places and themes it noticed into a **review tray** in Settings, kept
   apart from your real collections. Each suggestion shows its name, how many memories it holds, and
