@@ -51,12 +51,37 @@ export function registerIpcHandlers(
         );
       }
       const request = requestSchema.parse(payload);
-      const response = await handler(request as never);
-      return responseSchema.parse(response);
+      try {
+        const response = await handler(request as never);
+        return responseSchema.parse(response);
+      } catch (error) {
+        // Log-on-error shim (#373): a main-process handler / response-shape fault
+        // otherwise leaves NO local trace, so field debugging would rely on renderer
+        // traces only. Emit ONE local diagnostic naming the channel, then re-throw so
+        // the trust-boundary contract is unchanged (the error still reaches the
+        // renderer). Local console only — no telemetry; the raw error is projected to
+        // name/code (never message/stack), so a fault can't leak ids/paths/item text.
+        console.error(`[kawsay] IPC handler for "${channel}" failed`, diagnosticError(error));
+        throw error;
+      }
     });
   }
 }
 
 function ipcChannels(): IpcChannel[] {
   return Object.keys(ipcContract) as IpcChannel[];
+}
+
+/**
+ * A privacy-preserving projection of an error for a LOCAL diagnostic line (no
+ * telemetry, no egress): only the error `name` and an optional errno `code` — never
+ * the raw `message`/`stack`, which can carry an id, a file path, or item text.
+ * Mirrors the orchestrators' helper so main-process faults log the same shape.
+ */
+function diagnosticError(error: unknown): { code?: string; name: string } {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === undefined ? { name: error.name } : { name: error.name, code };
+  }
+  return { name: typeof error };
 }
