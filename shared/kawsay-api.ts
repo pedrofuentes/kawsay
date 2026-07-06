@@ -228,8 +228,11 @@ export interface KawsayAPI {
    * derived place/theme grouping with its proposed name, effective member count, and
    * a few example items, plus the real collections a merge may target. READ-ONLY —
    * calling this creates NO collection, so the main list stays byte-identical until
-   * the user explicitly accepts. Returns empty lists when the feature is off. No path
-   * or vector crosses back (AC-4).
+   * the user explicitly accepts. The DEFAULT-OFF emptiness is enforced RENDERER-side:
+   * `useSuggestions` never calls this while the feature is off (opted out or not yet
+   * offered) and drops any prior view — the channel itself is a pure projection of
+   * whatever the local catalog derives, not a consent self-check. No path or vector
+   * crosses back (AC-4).
    */
   listSuggestions(): Promise<SuggestionsViewDTO>;
 
