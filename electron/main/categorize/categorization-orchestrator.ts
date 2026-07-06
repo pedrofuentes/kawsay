@@ -523,9 +523,12 @@ export function createCategorizationOrchestrator(
         // diagnostic (no telemetry) so the fault is not swallowed silently — a
         // field report can then distinguish a worker crash from a clean drain; the
         // raw error is projected to name/code only (never message/stack), so no
-        // path or item text leaks off the log line (#374).
+        // path or item text leaks off the log line (#374). Semgrep's unsafe-formatstring
+        // (CWE-134) match on the message below is a false positive: a JS template literal
+        // is not a printf format string, and `items.length` is an internal count (a
+        // number), never user/attacker input (#406).
         console.warn(
-          `[kawsay] categorization clustering pass failed; marking ${items.length} item(s) as error`,
+          `[kawsay] categorization clustering pass failed; marking ${items.length} item(s) as error`, // nosemgrep: unsafe-formatstring
           diagnosticError(error),
         );
         counts = { ...counts, inFlight: 0 };
