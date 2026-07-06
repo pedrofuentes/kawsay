@@ -1,7 +1,7 @@
 // Hand-written type declarations for scripts/pack-gazetteer.mjs (a plain ESM
 // release-tooling script run under bare `node`), so tests/unit/pack-gazetteer.test.ts
 // can import its exports under `tsc --strict`. Same approach as the other
-// type-only shims in the repo (e.g. scripts/verify-media-binaries.d.mts). Keep in
+// type-only shims in the repo (e.g. scripts/stage-media-binaries.d.mts). Keep in
 // lock-step with the .mjs module's exports.
 
 export interface TrimmedRow {
