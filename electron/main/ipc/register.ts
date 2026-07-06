@@ -61,7 +61,7 @@ export function registerIpcHandlers(
         // the trust-boundary contract is unchanged (the error still reaches the
         // renderer). Local console only — no telemetry; the raw error is projected to
         // name/code (never message/stack), so a fault can't leak ids/paths/item text.
-        console.error(`[kawsay] IPC handler for "${channel}" failed`, diagnosticError(error));
+        console.error('[kawsay] IPC handler for "%s" failed', channel, diagnosticError(error));
         throw error;
       }
     });

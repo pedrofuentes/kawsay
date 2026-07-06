@@ -525,7 +525,8 @@ export function createCategorizationOrchestrator(
         // raw error is projected to name/code only (never message/stack), so no
         // path or item text leaks off the log line (#374).
         console.warn(
-          `[kawsay] categorization clustering pass failed; marking ${items.length} item(s) as error`,
+          '[kawsay] categorization clustering pass failed; marking %d item(s) as error',
+          items.length,
           diagnosticError(error),
         );
         counts = { ...counts, inFlight: 0 };
