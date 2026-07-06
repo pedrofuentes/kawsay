@@ -239,7 +239,9 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const call = errorSpy.mock.calls[0];
       expect(String(call[0])).toContain('[kawsay]');
-      expect(String(call[0])).toContain(APP_GET_VERSION);
+      // Constant %s format string (Semgrep unsafe-formatstring / CWE-134): the channel is
+      // passed as an argument (not interpolated), so it is named in the diagnostic call.
+      expect(call).toContain(APP_GET_VERSION);
       // Local-only + privacy: only a name/code diagnostic crosses the line — the raw
       // error message (which can carry ids / paths / item text) MUST NOT be logged.
       expect(JSON.stringify(call)).not.toContain('secret');
