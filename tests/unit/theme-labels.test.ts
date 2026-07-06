@@ -197,6 +197,36 @@ describe('deriveThemeLabels — TF-in-cluster ÷ DF-in-corpus labelling (ADR-003
     expect(wordCount).toBe(THEME_LABEL_DEFAULTS.maxLabelTerms);
   });
 
+  it('clamps maxLabelTerms 0 up to 1 (zero-length label guard)', () => {
+    // 0 truncates to 0, then the Math.max(1, …) clamp lifts it to a single top term —
+    // never an empty slice(0, 0) → '' label. Pins the finite lower-bound clamp that the
+    // in-range { maxLabelTerms: 1 } option test never exercises (Sentinel #328(c)).
+    const corpus = [doc('c1', 'beach beach beach sea sea sun')];
+    const result = deriveThemeLabels([cluster('theme:x', ['c1'])], corpus, { maxLabelTerms: 0 });
+    expect(result.labels[0].label).toBe('Beach');
+    expect(result.labels[0].confidence).toBe(THEME_LABEL_CONFIDENCE);
+    // The full ranked term list is retained regardless of the label-length cap.
+    expect(termNames(result)).toEqual(['beach', 'sea', 'sun']);
+  });
+
+  it('clamps a negative maxLabelTerms up to 1', () => {
+    const corpus = [doc('c1', 'beach beach beach sea sea sun')];
+    const result = deriveThemeLabels([cluster('theme:x', ['c1'])], corpus, { maxLabelTerms: -3 });
+    expect(result.labels[0].label).toBe('Beach');
+  });
+
+  it('truncates a fractional maxLabelTerms toward zero (2.9 → 2 terms)', () => {
+    const corpus = [doc('c1', 'beach beach beach sea sea sun')];
+    const result = deriveThemeLabels([cluster('theme:x', ['c1'])], corpus, { maxLabelTerms: 2.9 });
+    expect(result.labels[0].label).toBe('Beach sea');
+  });
+
+  it('truncates a sub-one fractional maxLabelTerms then clamps to 1 (0.5 → 1 term)', () => {
+    const corpus = [doc('c1', 'beach beach beach sea sea sun')];
+    const result = deriveThemeLabels([cluster('theme:x', ['c1'])], corpus, { maxLabelTerms: 0.5 });
+    expect(result.labels[0].label).toBe('Beach');
+  });
+
   it('marks text-derived labels with a low, sub-gazetteer confidence; empty when none', () => {
     // The label is a weak suggestion (user renames in M4-2h): strictly below a
     // precise gazetteer place label, which is a high-confidence geographic match.
@@ -208,6 +238,14 @@ describe('deriveThemeLabels — TF-in-cluster ÷ DF-in-corpus labelling (ADR-003
     expect(result.labels[0].label).toBe('');
     expect(result.labels[0].terms).toEqual([]);
     expect(result.labels[0].confidence).toBe(0);
+  });
+
+  it('pins the exact sub-gazetteer confidence constant (guards silent drift from 0.5)', () => {
+    // A range-only assertion (0 < c < 1) would miss a drift to e.g. 0.95 that breaks the
+    // documented "theme < place" ordering (ADR-0030 Decision 2). Pin the exact value so
+    // any change is deliberate. The cross-module "theme < place" guard lands with the
+    // gazetteer place confidence (M4-2d), per Sentinel #328(d).
+    expect(THEME_LABEL_CONFIDENCE).toBe(0.5);
   });
 
   it('excludes English stopwords', () => {
@@ -267,6 +305,19 @@ describe('deriveThemeLabels — TF-in-cluster ÷ DF-in-corpus labelling (ADR-003
     expect(label.terms[0]).toMatchObject({ term: 'peru', display: 'perú', tf: 3, df: 2 });
     // Display restores the most common diacritic spelling; only the head is capitalized.
     expect(label.label).toBe('Perú');
+  });
+
+  it('breaks an equal-frequency surface-spelling tie by ascending order (locale-independent)', () => {
+    // Two spellings fold to the SAME token 'peru' and tie at frequency 2: 'perú' (seen
+    // first) and 'peru'. The display must be the ascending-smaller 'peru' ('peru' < 'perú'),
+    // NOT the first-seen 'perú' — pinning the equal-count surface tie-break (Sentinel
+    // #328(b): the MUT5 mutation-survivor). Cosmetic display only; ranking is unaffected.
+    const corpus = [doc('c1', 'Perú Perú PERU PERU')];
+    const result = deriveThemeLabels([cluster('theme:peru', ['c1'])], corpus);
+    const top = result.labels[0].terms[0];
+    expect(top).toMatchObject({ term: 'peru', tf: 4, df: 1 });
+    expect(top.display).toBe('peru');
+    expect(result.labels[0].label).toBe('Peru');
   });
 
   it('does not throw when a cluster member is missing from the corpus', () => {
