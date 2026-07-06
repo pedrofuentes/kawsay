@@ -244,6 +244,19 @@ function runClusterPlaces(
   const epsMeters = options.epsMeters ?? DEFAULT_EPS_METERS;
   const minPts = options.minPts ?? DEFAULT_MIN_PTS;
 
+  // Reject programmer misuse early with a clear error rather than silently
+  // building a degenerate grid (eps ≤ 0/NaN) or applying an impossible density
+  // threshold (minPts < 1 or fractional). Both defaults are valid, so callers
+  // that omit the options never trip these guards.
+  if (!Number.isFinite(epsMeters) || epsMeters <= 0) {
+    throw new RangeError(
+      `clusterPlaces: epsMeters must be a finite number > 0 (got ${epsMeters}).`,
+    );
+  }
+  if (!Number.isInteger(minPts) || minPts < 1) {
+    throw new RangeError(`clusterPlaces: minPts must be an integer >= 1 (got ${minPts}).`);
+  }
+
   const byId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
   // Stable processing order: ascending id. Cluster ids follow discovery order,
