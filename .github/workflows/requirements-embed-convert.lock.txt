@@ -18,7 +18,15 @@
 #   wheels; regenerate on any other platform/Python.
 #
 # REGENERATE (must be re-run if LLAMA_CPP_COMMIT, the model, or huggingface_hub
-# change — otherwise the closure drifts from what the convert step needs):
+# change — otherwise the closure drifts from what the convert step needs).
+# The `requirements-convert_hf_to_gguf.txt` input below is NOT in this repo: it (and the
+# `-r requirements-convert_legacy_llama.txt` it includes) ship in ggml-org/llama.cpp at
+# LLAMA_CPP_COMMIT. Fetch that pinned tree first — the SAME clone the convert job does
+# into .llama-cpp-src — and compile from its requirements/ dir so the bare filename and
+# its `-r` sibling include both resolve:
+#   git clone --depth 1 --branch b9848 https://github.com/ggml-org/llama.cpp .llama-cpp-src
+#   git -C .llama-cpp-src rev-parse HEAD   # must == 931eb37f8cac5a6ca84d5641445d460af2a9d7dd
+#   cd .llama-cpp-src/requirements
 #   uv pip compile --generate-hashes --emit-index-url \
 #     --index-strategy unsafe-best-match \
 #     --python-version 3.11 --python-platform x86_64-unknown-linux-gnu \
@@ -34,6 +42,12 @@
 #    uv pip compile --generate-hashes --emit-index-url --index-strategy unsafe-best-match --python-version 3.11 --python-platform x86_64-unknown-linux-gnu requirements-convert_hf_to_gguf.txt hf.in -o embed-convert.lock.txt
 --index-url https://pypi.org/simple
 --extra-index-url https://download.pytorch.org/whl/cpu
+# The nightly index below is inherited from the upstream requirements' s390x-only torch
+# entry (a marker-gated `torch ...; platform_machine == "s390x"` line that sources from
+# .../whl/nightly). It is unused for THIS x86_64/CPython-3.11 closure — torch resolves to
+# 2.11.0+cpu from .../whl/cpu above — but uv's --emit-index-url records every index seen
+# during the resolve. Kept (not hand-removed) so this file stays a faithful regen of the
+# command above; harmless because no pinned wheel here is fetched from the nightly index.
 --extra-index-url https://download.pytorch.org/whl/nightly
 
 certifi==2026.6.17 \
