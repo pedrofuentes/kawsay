@@ -452,6 +452,16 @@ export const SUGGESTION_EXAMPLES_MAX = 4;
 /** Defence-in-depth cap for a merge-target collection name (mirrors the collections.name budget). */
 export const COLLECTION_NAME_MAX_LENGTH = 200;
 
+/**
+ * Generous defence-in-depth ceiling on the review-tray's two TOP-LEVEL arrays
+ * (`suggestions` / `collections`). Both derive from a deterministic local SELECT
+ * (one row per place/theme category, one per materialised collection), so this is
+ * far above any realistic loved-one's archive — it never rejects a real library,
+ * only a corrupt or adversarial response. Mirrors the sibling per-response caps
+ * (e.g. {@link TRANSCRIPT_SEGMENTS_MAX}) so no array crosses the boundary unbounded.
+ */
+export const SUGGESTIONS_VIEW_MAX = 100_000;
+
 /** The suggestible category kinds — places and themes only ('person' is out of scope). */
 export const suggestionKindSchema = z.enum(['place', 'theme']);
 export type SuggestionKindDTO = z.infer<typeof suggestionKindSchema>;
@@ -505,7 +515,7 @@ export type SuggestionMergeTargetDTO = z.infer<typeof suggestionMergeTargetSchem
  * with no manual re-fetch — the same shape `categorize:applyCorrection` uses.
  */
 export const suggestionsViewSchema = z.strictObject({
-  suggestions: z.array(suggestionSchema),
-  collections: z.array(suggestionMergeTargetSchema),
+  suggestions: z.array(suggestionSchema).max(SUGGESTIONS_VIEW_MAX),
+  collections: z.array(suggestionMergeTargetSchema).max(SUGGESTIONS_VIEW_MAX),
 });
 export type SuggestionsViewDTO = z.infer<typeof suggestionsViewSchema>;
