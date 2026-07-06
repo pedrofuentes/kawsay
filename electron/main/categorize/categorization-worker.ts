@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads';
+import { existsSync } from 'node:fs';
 import { clusterPlaces } from './places-cluster';
 import { clusterThemes } from './themes-cluster';
 import type {
@@ -196,4 +197,45 @@ export function createWorkerThreadClusterTransport(
       });
     },
   };
+}
+
+/** Options for {@link createProductionClusterTransport} (the resolver/spawn seams are the test hooks). */
+export interface ProductionClusterTransportOptions {
+  /** Absolute path to the built worker entry (out/main/categorization-cluster-worker.js). */
+  readonly scriptPath: string;
+  /**
+   * The per-library cancel probe, forwarded to the inline fallback so a cancel
+   * requested mid-run still stops the next pass when no worker is available. The
+   * worker transport does NOT need it — the main thread stays responsive off-thread
+   * and the orchestrator's post-transport `isCancelled()` check discards any writes.
+   */
+  readonly isCancelled?: () => boolean;
+  /** Probe whether the built worker entry exists; defaults to `fs.existsSync`. Injected in tests. */
+  readonly scriptExists?: (scriptPath: string) => boolean;
+  /** Worker spawn seam forwarded to {@link createWorkerThreadClusterTransport}; injected in tests. */
+  readonly createWorker?: (scriptPath: string) => WorkerLike;
+}
+
+/**
+ * The PRODUCTION {@link ClusterTransport} selector (#344): prefer the real off-thread
+ * worker_thread transport when the built worker entry resolves, and degrade — lazily
+ * and non-throwing, mirroring the ffmpeg/embedder degrade in `index.ts` — to the
+ * in-process inline transport when it doesn't (a dev/CI checkout without a built
+ * worker). A packaged build always ships the entry, so production takes the
+ * off-thread path; the fallback only keeps unbuilt checkouts working.
+ */
+export function createProductionClusterTransport(
+  options: ProductionClusterTransportOptions,
+): ClusterTransport {
+  const scriptExists = options.scriptExists ?? existsSync;
+  if (!scriptExists(options.scriptPath)) {
+    return createInlineClusterTransport(
+      options.isCancelled === undefined ? {} : { isCancelled: options.isCancelled },
+    );
+  }
+  return createWorkerThreadClusterTransport(
+    options.createWorker === undefined
+      ? { scriptPath: options.scriptPath }
+      : { scriptPath: options.scriptPath, createWorker: options.createWorker },
+  );
 }

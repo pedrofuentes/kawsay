@@ -83,7 +83,7 @@ import { createCategorizationLibraryPort } from './categorize/categorization-lib
 import { createCancelFlaggedCategorizationPort } from './categorize/categorization-cancel-flag';
 import { createSuggestionsLibraryPort } from './categorize/suggestions-library';
 import { isGazetteerBundled, loadGazetteer } from './categorize/gazetteer';
-import { createInlineClusterTransport } from './categorize/categorization-worker';
+import { createProductionClusterTransport } from './categorize/categorization-worker';
 import { resolveCategorizationStatus } from './categorize/categorization-orchestrator';
 import type { ImageThumbnailer, VideoThumbnailer } from './library/thumbnail-service';
 import { createModelDownloader } from './transcription/model-download';
@@ -299,20 +299,24 @@ const catalogSession = createCatalogSession({
   // The per-library categorization port (M4-2h / #270), built once per open library.
   // Places need only the bundled gazetteer; themes additionally need the opted-in
   // embedder, so the gate degrades to places-only when the embedder is unavailable.
-  // The cluster passes run through the deterministic INLINE transport — real
-  // worker-thread packaging is a deferred build-config concern (out of scope here),
-  // so this wires the transport abstraction without spawning a thread. The transport
-  // cooperatively yields to the event loop between passes (see #344 interim fix in
-  // categorization-worker.ts) and is fed a per-library cancel flag that the wrapped
-  // `start`/`cancel` toggle: `start` clears it (restoring it on a `busy` outcome so
-  // an in-flight cancel isn't de-armed by a racing start — #377), `cancel` sets it,
-  // so a `categorize:cancel` serviced during a yield stops the next pass mid-run.
+  // The cluster passes run OFF the main thread through the real worker_thread
+  // transport (#344): each run spawns a fresh worker (out/main/categorization-cluster-
+  // worker.js) and terminates it afterward, so IPC/window responsiveness — crucially
+  // `categorize:cancel` — never stalls while clustering runs. Resolution is LAZY and
+  // NON-throwing (mirroring the ffmpeg/embedder degrade): a dev/CI checkout without a
+  // built worker falls back to the in-process inline transport. The per-library cancel
+  // flag the wrapped `start`/`cancel` toggle is threaded into the inline fallback; the
+  // worker path doesn't need it because the orchestrator's post-transport
+  // `isCancelled()` check discards any writes when a cancel lands mid-run.
   categorization: ({ db, embedderAvailable }) =>
     createCancelFlaggedCategorizationPort((isCancelled) =>
       createCategorizationLibraryPort({
         db,
         gazetteer: loadGazetteer(gazetteerResolveOptions()),
-        transport: createInlineClusterTransport({ isCancelled }),
+        transport: createProductionClusterTransport({
+          scriptPath: join(moduleDir, 'categorization-cluster-worker.js'),
+          isCancelled,
+        }),
         getStatus: () =>
           resolveCategorizationStatus({
             optedIn: requireCategorizationConsentStore().isOptedIn(),

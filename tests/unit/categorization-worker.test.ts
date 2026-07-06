@@ -11,10 +11,16 @@ import { clusterThemes } from '../../electron/main/categorize/themes-cluster';
 import {
   bindClusterWorker,
   createInlineClusterTransport,
+  createProductionClusterTransport,
   createWorkerThreadClusterTransport,
   runClusterRequest,
 } from '../../electron/main/categorize/categorization-worker';
+import { bindCategorizationClusterWorkerEntry } from '../../electron/main/categorize/workers/categorization-cluster-worker';
 import { createCancelFlaggedCategorizationPort } from '../../electron/main/categorize/categorization-cancel-flag';
+import type {
+  ClusterWorkerReply,
+  ClusterWorkerRequest,
+} from '../../electron/main/categorize/categorization-worker';
 import type {
   CategorizationRunResult,
   ClusterRequest,
@@ -310,6 +316,111 @@ describe('createWorkerThreadClusterTransport', () => {
       createWorker: () => link2.worker,
     });
     await expect(transport2.run(PLACES_REQUEST)).resolves.toBeDefined();
+  });
+});
+
+describe('categorization cluster worker bootstrap entry (#344 off-thread wiring)', () => {
+  // The top-level worker ENTRY (out/main/categorization-cluster-worker.js) that
+  // electron-vite builds and the host forks with worker_threads. It must bind the
+  // shared `bindClusterWorker` onto the real `parentPort` — proven here with a fake
+  // in-process port (no real thread) — and refuse to run on the main thread.
+
+  it('binds bindClusterWorker onto the parent port and round-trips a cluster request→result', () => {
+    const posts: unknown[] = [];
+    const listeners: ((value: unknown) => void)[] = [];
+
+    bindCategorizationClusterWorkerEntry({
+      parentPort: {
+        postMessage: (value) => posts.push(value),
+        on: (_event, listener) => listeners.push(listener),
+      },
+    });
+
+    expect(listeners).toHaveLength(1);
+
+    const request: ClusterWorkerRequest = { type: 'cluster', request: PLACES_REQUEST };
+    listeners[0](request);
+
+    expect(posts).toHaveLength(1);
+    const reply = posts[0] as ClusterWorkerReply;
+    if (reply.type !== 'result') throw new Error(`expected a result reply, got ${reply.type}`);
+    expect(reply.response.places).toBeDefined();
+    expect(reply.response.places?.clusters.map((c) => [...c.memberIds])).toEqual(
+      clusterPlaces(PLACES_INPUT.points, PLACES_INPUT.options).clusters.map((c) => [
+        ...c.memberIds,
+      ]),
+    );
+  });
+
+  it('refuses to run without a parent worker port (never on the main thread)', () => {
+    expect(() => bindCategorizationClusterWorkerEntry({ parentPort: null })).toThrow(
+      'categorization-cluster-worker must be run as a worker thread',
+    );
+  });
+});
+
+describe('createProductionClusterTransport (#344 worker transport with inline fallback)', () => {
+  // The production wiring seam: prefer the real off-thread worker_thread transport
+  // when the built worker entry resolves, and degrade — lazily and non-throwing,
+  // mirroring the ffmpeg/embedder degrade — to the in-process inline transport when
+  // it doesn't (dev/CI without a built worker). The `scriptExists` + `createWorker`
+  // seams keep this drivable in-process, so no real OS thread is spawned here.
+
+  it('selects the worker-thread transport when the built worker script resolves', async () => {
+    const link = linkedWorker();
+    bindClusterWorker(link.port);
+    let created = 0;
+    let probedPath: string | undefined;
+    const transport = createProductionClusterTransport({
+      scriptPath: '/out/main/categorization-cluster-worker.js',
+      scriptExists: (path) => {
+        probedPath = path;
+        return true;
+      },
+      createWorker: () => {
+        created += 1;
+        return link.worker;
+      },
+    });
+
+    const response = await transport.run(PLACES_REQUEST);
+
+    expect(probedPath).toBe('/out/main/categorization-cluster-worker.js');
+    expect(created).toBe(1);
+    expect(link.terminate).toHaveBeenCalledTimes(1);
+    expect(response.places).toBeDefined();
+  });
+
+  it('falls back to the inline transport when the worker script cannot be resolved', async () => {
+    let created = 0;
+    const transport = createProductionClusterTransport({
+      scriptPath: '/out/main/categorization-cluster-worker.js',
+      scriptExists: () => false,
+      createWorker: () => {
+        created += 1;
+        throw new Error('must not spawn a worker on the inline fallback path');
+      },
+    });
+
+    const response = await transport.run(BOTH_REQUEST);
+
+    expect(created).toBe(0);
+    expect(response).toEqual(runClusterRequest(BOTH_REQUEST));
+  });
+
+  it('threads the cancel probe into the inline fallback transport', async () => {
+    // A cancel already set at entry skips both passes (the inline transport
+    // contract) — proving the fallback carries the host cancel flag through.
+    const transport = createProductionClusterTransport({
+      scriptPath: '/out/main/categorization-cluster-worker.js',
+      scriptExists: () => false,
+      isCancelled: () => true,
+    });
+
+    const response = await transport.run(BOTH_REQUEST);
+
+    expect(response.places).toBeUndefined();
+    expect(response.themes).toBeUndefined();
   });
 });
 
