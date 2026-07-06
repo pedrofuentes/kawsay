@@ -92,7 +92,12 @@ export interface UseItemCategoriesResult {
   categories: ItemCategoryDTO[];
   /** True while the first chip read is in flight. */
   loading: boolean;
-  /** Apply a user correction and refresh the chips straight from the returned list. */
+  /**
+   * Apply a user correction and refresh the chips straight from the returned
+   * list. On a rejected save nothing on disk changes and the visible chips stay
+   * put: {@link correctionError} then carries the calm retry copy and
+   * {@link retryCorrection} replays the attempt.
+   */
   applyCorrection(input: CategorizationCorrectionDTO): void;
   /**
    * Non-null when the most recent correction did NOT save (e.g. DB busy, no
@@ -267,13 +272,6 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
     [api],
   );
 
-  const applyCorrection = useCallback(
-    (input: CategorizationCorrectionDTO): void => {
-      runCorrection(input);
-    },
-    [runCorrection],
-  );
-
   const retryCorrection = useCallback((): void => {
     const previous = lastCorrectionRef.current;
     if (previous === null) {
@@ -282,5 +280,8 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
     runCorrection(previous);
   }, [runCorrection]);
 
-  return { categories, loading, applyCorrection, correctionError, retryCorrection };
+  // `runCorrection` is already memoized on `[api]`; a passthrough `useCallback`
+  // would add an identical-identity wrapper with no extra semantics, so expose
+  // it directly as the public `applyCorrection`.
+  return { categories, loading, applyCorrection: runCorrection, correctionError, retryCorrection };
 }

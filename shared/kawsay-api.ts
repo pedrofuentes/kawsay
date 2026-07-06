@@ -186,10 +186,12 @@ export interface KawsayAPI {
 
   /**
    * List ONE item's explainable category chips by its opaque catalog id (#270).
-   * Resolves the place/theme groupings with their provenance (source/signal/
-   * confidence/explanation), USER decisions winning over AUTO. The renderer passes
-   * only the id (never a path); returns `[]` when the feature is off or the item is
-   * uncategorized. No path or vector crosses back (AC-4).
+   * Resolves the item's category groupings with their provenance (source/signal/
+   * confidence/explanation), USER decisions winning over AUTO. Each chip's `kind` is
+   * a {@link CategoryKindDTO} — `person`, `place`, or `theme` per the categories
+   * CHECK domain, though the shipped categorizer produces place & theme only. The
+   * renderer passes only the id (never a path); returns `[]` when the feature is off
+   * or the item is uncategorized. No path or vector crosses back (AC-4).
    */
   listItemCategories(input: { itemId: string }): Promise<ItemCategoriesDTO>;
 
@@ -204,7 +206,8 @@ export interface KawsayAPI {
   /**
    * Start the gated categorization run over the library (#270 / ADR-0030). This is
    * the CALLER-INITIATED capability only — it refuses unless the user opted in AND
-   * there is a place/theme signal, and it never auto-runs. Idempotent. Resolves the
+   * there is at least one usable signal (the `no-signal` refusal is kind-agnostic —
+   * today's signals derive place & theme), and it never auto-runs. Idempotent. Resolves the
    * run result (`completed`/`idle`/`cancelled`/`busy`/`refused` + counts); per-item
    * progress arrives via {@link onCategorizationProgress}. Originals are never
    * touched and the run makes no network call (AC-4).
