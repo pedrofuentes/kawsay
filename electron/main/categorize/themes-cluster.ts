@@ -304,6 +304,16 @@ function cumulativeSquaredNorms(v: Float32Array, dim: number): Float64Array {
 }
 
 /**
+ * Chunk size (vector elements) between Cauchy-Schwarz bound checks inside
+ * {@link boundedCosine}. Tunable knob: too small ⇒ per-batch check overhead
+ * dominates; too large ⇒ wasted mult-adds before a prune can fire. 64 bounds the
+ * per-cluster overhead to at most ⌈384/64⌉ − 1 = 5 checks at the production
+ * dim = 384 — the final full chunk reaches `dim` and breaks before its check —
+ * while prune-happy corpora (most pairs near-orthogonal) bail on the first check.
+ */
+const BOUNDED_COSINE_STEP = 64;
+
+/**
  * Compute cos(q, c) with a Cauchy-Schwarz early-termination prune: whenever the
  * upper bound on the remainder proves cos cannot reach `skipBar`, return
  * `NEGATIVE_INFINITY` so the caller drops this candidate. When we run to
@@ -323,10 +333,7 @@ function cumulativeSquaredNorms(v: Float32Array, dim: number): Float64Array {
  * near-zero tail from loosening the bound — so it is exact within Float32
  * tolerance, never an over-tight (match-dropping) estimate.
  *
- * `STEP` sizes the batch between bound checks: too small ⇒ per-batch overhead
- * dominates; too large ⇒ we do wasted mult-adds before pruning. 64 keeps the
- * per-cluster overhead to ⌈384/64⌉ = 6 checks in the production dim while
- * prune-happy corpora (most pairs orthogonal-ish) bail on the first check.
+ * The batch size between bound checks is {@link BOUNDED_COSINE_STEP}.
  */
 function boundedCosine(
   q: Float32Array,
@@ -343,10 +350,9 @@ function boundedCosine(
 
   const denom = Math.sqrt(qNormSq * cNormSq);
   let dot = 0;
-  const STEP = 64;
 
   for (let i = 0; i < dim;) {
-    const end = i + STEP < dim ? i + STEP : dim;
+    const end = i + BOUNDED_COSINE_STEP < dim ? i + BOUNDED_COSINE_STEP : dim;
     for (let j = i; j < end; j += 1) {
       dot += q[j] * c[j];
     }
