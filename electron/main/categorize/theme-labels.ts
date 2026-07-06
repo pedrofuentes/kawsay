@@ -86,7 +86,11 @@ export interface DeriveThemeLabelsResult {
 
 /** Tunables for {@link deriveThemeLabels}; omitted fields use {@link THEME_LABEL_DEFAULTS}. */
 export interface DeriveThemeLabelsOptions {
-  /** How many top terms compose the label string (coerced to an integer ≥ 1). */
+  /**
+   * How many top terms compose the label string (coerced to an integer ≥ 1). A
+   * non-finite value (NaN / ±Infinity) falls back to
+   * {@link THEME_LABEL_DEFAULTS}.maxLabelTerms (3), never an empty label.
+   */
   readonly maxLabelTerms?: number;
 }
 
@@ -155,6 +159,11 @@ export function deriveThemeLabels(
   corpus: readonly ThemeLabelCorpusItem[],
   options: DeriveThemeLabelsOptions = {},
 ): DeriveThemeLabelsResult {
+  // Coerce maxLabelTerms into an integer ≥ 1. A non-finite value (NaN / ±Infinity) is
+  // INTENTIONALLY and silently replaced with the documented default (never a throw or
+  // log): this module is deliberately pure with no logging/error infrastructure (see the
+  // module header), and a robust fallback keeps one misconfigured option from crashing an
+  // entire labelling pass over a user's memories. Silent fallback is by design (Sentinel #365).
   const rawMax = options.maxLabelTerms ?? THEME_LABEL_DEFAULTS.maxLabelTerms;
   const maxLabelTerms = Math.max(
     1,
