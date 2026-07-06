@@ -243,6 +243,42 @@ describe('clusterPlaces — configurable options with documented defaults', () =
   });
 });
 
+describe('clusterPlaces — options validation (rejects programmer misuse)', () => {
+  // Internal callers pass trusted options, but a nonsensical eps or minPts is
+  // programmer error: it should fail loudly rather than silently build a
+  // degenerate grid (eps ≤ 0/NaN) or apply an impossible density threshold
+  // (minPts < 1 or fractional). The documented defaults never trip these guards.
+  const pts = [pt('p1', 0, 0), pt('p2', metresToLatDeg(20), 0), pt('p3', 0, metresToLatDeg(20))];
+
+  it('rejects a non-positive epsMeters', () => {
+    expect(() => clusterPlaces(pts, { epsMeters: 0 })).toThrow(RangeError);
+    expect(() => clusterPlaces(pts, { epsMeters: -1500 })).toThrow(RangeError);
+  });
+
+  it('rejects a non-finite epsMeters', () => {
+    expect(() => clusterPlaces(pts, { epsMeters: Number.NaN })).toThrow(RangeError);
+    expect(() => clusterPlaces(pts, { epsMeters: Number.POSITIVE_INFINITY })).toThrow(RangeError);
+  });
+
+  it('rejects a minPts below 1 or non-integer', () => {
+    expect(() => clusterPlaces(pts, { minPts: 0 })).toThrow(RangeError);
+    expect(() => clusterPlaces(pts, { minPts: -3 })).toThrow(RangeError);
+    expect(() => clusterPlaces(pts, { minPts: 2.5 })).toThrow(RangeError);
+    expect(() => clusterPlaces(pts, { minPts: Number.NaN })).toThrow(RangeError);
+  });
+
+  it('accepts the documented defaults and valid overrides', () => {
+    expect(() => clusterPlaces(pts)).not.toThrow();
+    expect(() => clusterPlaces(pts, { epsMeters: 1500, minPts: 2 })).not.toThrow();
+    expect(() => clusterPlaces(pts, { epsMeters: 0.5, minPts: 1 })).not.toThrow();
+  });
+
+  it('validates through the stats entry point too', () => {
+    expect(() => clusterPlacesWithStats(pts, { epsMeters: -1 })).toThrow(RangeError);
+    expect(() => clusterPlacesWithStats(pts, { minPts: 0 })).toThrow(RangeError);
+  });
+});
+
 describe('clusterPlaces — border-point reclaim (mutation-discriminating)', () => {
   // A low-id, non-core point processed first — labelled NOISE — must be
   // reclaimed when a later, higher-id CORE point's expansion reaches it. If the
