@@ -146,6 +146,33 @@ export interface WorkerThreadClusterTransportOptions {
   readonly scriptPath: string;
   /** Spawns the worker (defaults to a real `node:worker_threads` Worker); injected in tests. */
   readonly createWorker?: (scriptPath: string) => WorkerLike;
+  /**
+   * The per-library cancel probe. When provided, the transport polls it while a
+   * worker run is in flight and, on cancel, terminates the worker and settles the
+   * run as cancelled (resolving with an empty response — a cancel is not a failure,
+   * and the orchestrator's post-transport check discards the writes). Absent ⇒ no
+   * polling, so the pre-#402 behavior is unchanged.
+   */
+  readonly isCancelled?: () => boolean;
+  /**
+   * How to poll {@link isCancelled} while a run is in flight: called with the poll
+   * callback, returns a stop function invoked on every settle path (result / error /
+   * exit / cancel) so the timer never leaks. Defaults to an unref'd `setInterval`.
+   * Injected in tests to drive cancellation deterministically without real timers.
+   */
+  readonly startCancelPoll?: (onPoll: () => void) => () => void;
+}
+
+/** How often the default cancel poll checks {@link WorkerThreadClusterTransportOptions.isCancelled}. */
+const CANCEL_POLL_INTERVAL_MS = 50;
+
+/** The default cancel poll: an unref'd `setInterval` (see {@link WorkerThreadClusterTransportOptions.startCancelPoll}). */
+function defaultStartCancelPoll(onPoll: () => void): () => void {
+  const timer = setInterval(onPoll, CANCEL_POLL_INTERVAL_MS);
+  timer.unref?.();
+  return () => {
+    clearInterval(timer);
+  };
 }
 
 /**
@@ -156,23 +183,39 @@ export interface WorkerThreadClusterTransportOptions {
  * bursty batch job, not a hot path. The unrecognized-reply guard is defensive: a
  * misbehaving worker entry (post-#270) MUST NOT be able to wedge the orchestrator's
  * drain by sending a reply the host doesn't understand.
+ *
+ * When an `isCancelled` probe is supplied it is polled while the run is in flight (#402):
+ * a cancel requested mid-run terminates the in-flight worker and settles the run as
+ * cancelled — resolving with an empty response rather than rejecting, because a cancel
+ * is not a failure and the orchestrator discards any partial writes. The poll is cleared
+ * on every settle path via the same `settled`/`finish()` guard, so there is no leak or
+ * double-settle.
  */
 export function createWorkerThreadClusterTransport(
   options: WorkerThreadClusterTransportOptions,
 ): ClusterTransport {
   const createWorker: (scriptPath: string) => WorkerLike =
     options.createWorker ?? ((scriptPath: string) => new Worker(scriptPath));
+  const isCancelled = options.isCancelled;
+  const startCancelPoll = options.startCancelPoll ?? defaultStartCancelPoll;
   return {
     run(request) {
       return new Promise<ClusterResponse>((resolve, reject) => {
         const worker = createWorker(options.scriptPath);
         let settled = false;
+        let stopPoll: (() => void) | undefined;
         const finish = (act: () => void): void => {
           if (settled) return;
           settled = true;
+          if (stopPoll !== undefined) stopPoll();
           worker.terminate();
           act();
         };
+        if (isCancelled !== undefined) {
+          stopPoll = startCancelPoll(() => {
+            if (isCancelled()) finish(() => resolve({}));
+          });
+        }
         worker.on('message', (value) => {
           const reply = value as ClusterWorkerReply;
           if (reply.type === 'result') finish(() => resolve(reply.response));
@@ -204,16 +247,18 @@ export interface ProductionClusterTransportOptions {
   /** Absolute path to the built worker entry (out/main/categorization-cluster-worker.js). */
   readonly scriptPath: string;
   /**
-   * The per-library cancel probe, forwarded to the inline fallback so a cancel
-   * requested mid-run still stops the next pass when no worker is available. The
-   * worker transport does NOT need it — the main thread stays responsive off-thread
-   * and the orchestrator's post-transport `isCancelled()` check discards any writes.
+   * The per-library cancel probe, forwarded to whichever transport is selected so a
+   * cancel requested mid-run stops work: the inline fallback skips its next pass and
+   * the worker transport terminates the in-flight worker (#402). The orchestrator's
+   * post-transport `isCancelled()` check discards any partial writes either way.
    */
   readonly isCancelled?: () => boolean;
   /** Probe whether the built worker entry exists; defaults to `fs.existsSync`. Injected in tests. */
   readonly scriptExists?: (scriptPath: string) => boolean;
   /** Worker spawn seam forwarded to {@link createWorkerThreadClusterTransport}; injected in tests. */
   readonly createWorker?: (scriptPath: string) => WorkerLike;
+  /** Cancel-poll seam forwarded to {@link createWorkerThreadClusterTransport}; injected in tests. */
+  readonly startCancelPoll?: (onPoll: () => void) => () => void;
 }
 
 /**
@@ -223,19 +268,28 @@ export interface ProductionClusterTransportOptions {
  * in-process inline transport when it doesn't (a dev/CI checkout without a built
  * worker). A packaged build always ships the entry, so production takes the
  * off-thread path; the fallback only keeps unbuilt checkouts working.
+ *
+ * The degrade emits a single one-time warning (#401): the selector is built once per
+ * port, so a packaged build that somehow omitted the worker entry — silently
+ * reintroducing main-thread clustering — is now surfaced. The message carries no path
+ * or id, per the zero-egress diagnostic convention.
  */
 export function createProductionClusterTransport(
   options: ProductionClusterTransportOptions,
 ): ClusterTransport {
   const scriptExists = options.scriptExists ?? existsSync;
   if (!scriptExists(options.scriptPath)) {
+    console.warn(
+      '[kawsay] categorization worker entry missing; falling back to inline main-thread clustering',
+    );
     return createInlineClusterTransport(
       options.isCancelled === undefined ? {} : { isCancelled: options.isCancelled },
     );
   }
-  return createWorkerThreadClusterTransport(
-    options.createWorker === undefined
-      ? { scriptPath: options.scriptPath }
-      : { scriptPath: options.scriptPath, createWorker: options.createWorker },
-  );
+  return createWorkerThreadClusterTransport({
+    scriptPath: options.scriptPath,
+    ...(options.createWorker === undefined ? {} : { createWorker: options.createWorker }),
+    ...(options.isCancelled === undefined ? {} : { isCancelled: options.isCancelled }),
+    ...(options.startCancelPoll === undefined ? {} : { startCancelPoll: options.startCancelPoll }),
+  });
 }
