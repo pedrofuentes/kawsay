@@ -82,7 +82,12 @@ describe('clusterThemes — threshold-agglomerative cosine clustering (ADR-0030 
     expect(clusterThemes(items, { threshold: 0.82, minClusterSize: 1 }).clusters).toHaveLength(2);
   });
 
-  it('clamps minClusterSize below 1 up to 1 (no pruning of singletons)', () => {
+  it('keeps a singleton when minClusterSize is below 1 (sub-1 values never prune)', () => {
+    // Behavior-level guarantee only (#320): any minClusterSize ≤ 1 retains every
+    // cluster, because each cluster has ≥ 1 member by construction. The internal
+    // `Math.max(1, …)` clamp is defensive and NOT independently observable via the
+    // public API — removing it leaves this (and every other) assertion green — so
+    // this pins the retain-singletons guarantee, not the clamp mechanism.
     const result = clusterThemes([item('solo', vec(1, 0))], { threshold: 0.82, minClusterSize: 0 });
     expect(membership(result)).toEqual([['solo']]);
   });
@@ -168,6 +173,22 @@ describe('clusterThemes — threshold-agglomerative cosine clustering (ADR-0030 
     const values = Object.values(expected);
     for (const value of values) expect(value).toBeLessThan(0.999);
     expect(new Set(values.map((value) => value.toFixed(4))).size).toBe(values.length);
+  });
+
+  it('does not merge all-zero vectors: a zero-magnitude operand has cosine 0 (never NaN), so each stays its own cluster', () => {
+    // Documents the inherited semantic.ts zero-magnitude contract (#320): a zero
+    // vector has cosine 0 to everything — including another zero vector — so
+    // all-zero items never cluster (not even with each other) and never crash.
+    const result = clusterThemes([item('z1', vec(0, 0)), item('z2', vec(0, 0))], {
+      threshold: 0.82,
+      minClusterSize: 1,
+    });
+    expect(membership(result)).toEqual([['z1'], ['z2']]);
+    for (const cluster of result.clusters) {
+      for (const member of cluster.members) {
+        expect(member.similarity).toBe(0);
+      }
+    }
   });
 
   it('throws on inconsistent vector dimensions (a programming error, per semantic.ts ethos)', () => {

@@ -121,8 +121,12 @@ export function themeSourceKey(memberIds: readonly string[]): string {
  * Cluster items into themes by greedy threshold agglomeration over cosine
  * similarity (see the module header). Pure and deterministic: the output depends
  * only on the items and options, never on input order. Empty input degrades to
- * an empty result (no themes, no crash). Throws on malformed input since each
- * is a programming error that would make results ill-defined or nondeterministic:
+ * an empty result (no themes, no crash). A zero-MAGNITUDE vector (all elements
+ * finite but 0) is accepted, not rejected: inheriting `cosineSimilarity`'s
+ * contract it has cosine 0 to every vector — including another zero vector — so
+ * such items never join any cluster (not even each other) and surface as
+ * singletons. Throws on malformed input since each is a programming error that
+ * would make results ill-defined or nondeterministic:
  * - an empty vector (zero-length Float32Array)
  * - a dimension mismatch (vectors of differing lengths)
  * - a duplicate id
@@ -300,6 +304,16 @@ function cumulativeSquaredNorms(v: Float32Array, dim: number): Float64Array {
 }
 
 /**
+ * Chunk size (vector elements) between Cauchy-Schwarz bound checks inside
+ * {@link boundedCosine}. Tunable knob: too small ⇒ per-batch check overhead
+ * dominates; too large ⇒ wasted mult-adds before a prune can fire. 64 bounds the
+ * per-cluster overhead to at most ⌈384/64⌉ − 1 = 5 checks at the production
+ * dim = 384 — the final full chunk reaches `dim` and breaks before its check —
+ * while prune-happy corpora (most pairs near-orthogonal) bail on the first check.
+ */
+const BOUNDED_COSINE_STEP = 64;
+
+/**
  * Compute cos(q, c) with a Cauchy-Schwarz early-termination prune: whenever the
  * upper bound on the remainder proves cos cannot reach `skipBar`, return
  * `NEGATIVE_INFINITY` so the caller drops this candidate. When we run to
@@ -307,16 +321,19 @@ function cumulativeSquaredNorms(v: Float32Array, dim: number): Float64Array {
  * both cumulative-norm arrays are computed with the same Float32-to-Float64
  * pattern as the naive cosine's magASquared/magBSquared.
  *
- * The prune is EXACT (never approximate): Cauchy-Schwarz gives
+ * The prune is SOUND — it never drops a true match, so the ASSIGNMENT output is
+ * bit-identical to the naive scan. Cauchy-Schwarz gives
  *   dot_full = dot_partial + Σ_tail q_j·c_j ≤ dot_partial + √(qRem·cRem)
  * so cos_full ≤ (dot_partial + √(qRem·cRem)) / (‖q‖·‖c‖). If that upper bound
  * is strictly less than `skipBar`, this candidate cannot beat the current best
- * or clear τ, so skipping it does not change the argmax nor the assignment.
+ * or clear τ, so skipping it does not change the argmax nor the assignment. The
+ * bound is exact in real arithmetic; in IEEE-754 the tail norms `qRem`/`cRem`
+ * are prefix-sum subtractions carrying ≤ ~1.4e-15 of cancellation (~8 orders
+ * below Float32 embedding noise), and the `qRem <= 0 || cRem <= 0` bail keeps a
+ * near-zero tail from loosening the bound — so it is exact within Float32
+ * tolerance, never an over-tight (match-dropping) estimate.
  *
- * `STEP` sizes the batch between bound checks: too small ⇒ per-batch overhead
- * dominates; too large ⇒ we do wasted mult-adds before pruning. 64 keeps the
- * per-cluster overhead to ⌈384/64⌉ = 6 checks in the production dim while
- * prune-happy corpora (most pairs orthogonal-ish) bail on the first check.
+ * The batch size between bound checks is {@link BOUNDED_COSINE_STEP}.
  */
 function boundedCosine(
   q: Float32Array,
@@ -333,10 +350,9 @@ function boundedCosine(
 
   const denom = Math.sqrt(qNormSq * cNormSq);
   let dot = 0;
-  const STEP = 64;
 
   for (let i = 0; i < dim;) {
-    const end = i + STEP < dim ? i + STEP : dim;
+    const end = i + BOUNDED_COSINE_STEP < dim ? i + BOUNDED_COSINE_STEP : dim;
     for (let j = i; j < end; j += 1) {
       dot += q[j] * c[j];
     }

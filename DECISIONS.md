@@ -236,8 +236,9 @@ Notes that make it buildable:
   no new dependency** — the embedder is already gated/opted-in for smart search.
 - **Clustering choice (pure).** **Threshold agglomerative / greedy online clustering over cosine
   distance** — assign each item (in stable id order) to the nearest existing cluster centroid when cosine
-  `≥ τ`, else start a new cluster; drop clusters below a min size — reusing `cosineSimilarity` from
-  `semantic.ts`. It needs **no pre-specified k** (k-means is rejected: k is unknown and seeding is
+  `≥ τ`, else start a new cluster; drop clusters below a min size — using a bounded, early-terminating
+  cosine (`boundedCosine`, output-identical to `cosineSimilarity` from `semantic.ts`, with a
+  Cauchy-Schwarz prune for the large-corpus hot path, #318). It needs **no pre-specified k** (k-means is rejected: k is unknown and seeding is
   non-deterministic) and is deterministic ⇒ testable with synthetic vectors. DBSCAN-over-cosine is the
   documented alternative if density beats a global threshold on real fixtures (settled in the card).
 - **Theme label derivation (offline, no LLM, no dependency).** A cluster has no inherent name, so derive
