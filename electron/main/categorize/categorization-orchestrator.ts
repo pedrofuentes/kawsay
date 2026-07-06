@@ -267,6 +267,21 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/**
+ * A privacy-preserving diagnostic projection of an error for a LOCAL console line
+ * (no telemetry, no egress): only the error `name` and an optional errno `code` —
+ * never the raw `message`/`stack`, which can carry a file path or item text. Mirrors
+ * the transcription orchestrator's helper so the two orchestrators log worker faults
+ * the same shape.
+ */
+function diagnosticError(error: unknown): { code?: string; name: string } {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === undefined ? { name: error.name } : { name: error.name, code };
+  }
+  return { name: typeof error };
+}
+
 export function createCategorizationOrchestrator(
   options: CategorizationOrchestratorOptions,
 ): CategorizationOrchestrator {
@@ -500,11 +515,19 @@ export function createCategorizationOrchestrator(
       emit();
       try {
         response = await transport.run(request);
-      } catch {
+      } catch (error) {
         // A whole-run clustering failure (worker crash / timeout) is the corpus-scale
         // analogue of the embedding drain's per-batch failure: mark every read item
         // 'error' and carry on. Semi-terminal — errors leave the pending set; an
-        // explicit reset (successor slice) is required to retry.
+        // explicit reset (successor slice) is required to retry. Leave a LOCAL
+        // diagnostic (no telemetry) so the fault is not swallowed silently — a
+        // field report can then distinguish a worker crash from a clean drain; the
+        // raw error is projected to name/code only (never message/stack), so no
+        // path or item text leaks off the log line (#374).
+        console.warn(
+          `[kawsay] categorization clustering pass failed; marking ${items.length} item(s) as error`,
+          diagnosticError(error),
+        );
         counts = { ...counts, inFlight: 0 };
         for (const item of items) recordFailed(item.id);
         return;
