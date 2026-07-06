@@ -24,7 +24,8 @@ import { useSuggestions } from '@renderer/lib/use-suggestions';
 export function SuggestionsTray(): ReactElement | null {
   const { offered, optedIn, loading: statusLoading } = useCategorizationStatus();
   const enabled = offered && optedIn;
-  const { suggestions, collections, loading, accept, merge, dismiss } = useSuggestions(enabled);
+  const { suggestions, collections, loading, actionError, accept, merge, dismiss } =
+    useSuggestions(enabled);
   const headingId = useId();
 
   // Stay hidden while the gate is resolving, while the feature is off, while the
@@ -59,6 +60,16 @@ export function SuggestionsTray(): ReactElement | null {
           </p>
         </div>
       </div>
+
+      {actionError && (
+        <p
+          role="status"
+          className="rounded-xl border border-error-border bg-error-bg px-4 py-3 font-body text-sm text-error-text"
+        >
+          Sorry, we couldn&apos;t save that change just now. Nothing on your computer changed —
+          please try again.
+        </p>
+      )}
 
       <ul className="flex flex-col gap-4">
         {suggestions.map((suggestion) => (
