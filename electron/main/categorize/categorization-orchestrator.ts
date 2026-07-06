@@ -665,11 +665,16 @@ export function createCategorizationStore(
      ORDER BY i.id
      LIMIT @limit
   `);
-  // Subsequent-page (seekable) statement — split from the first-page statement
-  // so migration 005's partial `idx_items_category_queue` (on category_status
-  // WHERE category_status='pending') can serve the ordered scan without a
-  // temp-sort per page (#340). Ordering + boundaries match the first-page
-  // statement exactly; only the id-cursor predicate differs.
+  // Subsequent-page (seekable) statement — split from the first-page statement so
+  // neither carries the `(@afterId IS NULL OR i.id > @afterId)` disjunction that
+  // would defeat index use; the hot path (pages 2..N) then range-seeks on the id
+  // cursor instead of re-scanning already-drained rows (#340). NOTE: migration 005's
+  // partial `idx_items_category_queue` covers `(category_status)`, NOT `(id)`, so an
+  // `ORDER BY id` may still take a temp B-tree sort on the first page — the split
+  // narrows the scan, it does not guarantee a sort-free plan (a covering
+  // `(category_status, id)` index would, but that is a migration and out of scope).
+  // Ordering + boundaries match the first-page statement exactly; only the id-cursor
+  // predicate differs.
   const listPendingAfterStmt = db.prepare(`
     SELECT i.id AS id, i.gps_lat AS gps_lat, i.gps_lon AS gps_lon,
            i.description AS description, i.search_meta AS search_meta,

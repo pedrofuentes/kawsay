@@ -19,6 +19,39 @@
 
 <!-- Add new learnings below this line, most recent first -->
 
+### [2026-07-05] Categorization `error` items are semi-terminal (no auto-retry); the host-owned cancel flag is retained on a `busy` start
+**Context**: M4 hardening follow-ups (#374, #386) on the categorization orchestrator and the interim
+off-thread cancel path (`createCancelFlaggedCategorizationPort`).
+**Learning**:
+- **Semi-terminal `error` items are NOT auto-retried.** When a per-item / per-cluster / whole-pass fault
+  drains an item to `category_status = 'error'`, that item leaves the pending keyset
+  (`idx_items_category_queue` and both pending statements filter `category_status = 'pending'`) and NO
+  drain path resets it — so a subsequent `run()` does **not** re-drive it. This deliberately mirrors the
+  embedding-orchestrator convention; recovering an `error` item requires an **explicit reset** to
+  `'pending'` (a successor slice), not just re-running the orchestrator. A whole-pass clustering failure
+  (worker crash/timeout) errors the *entire* read corpus the same way. As of #374 that catch also leaves a
+  **local** `console.warn` diagnostic (`[kawsay]` prefix, name/code only — never the raw message/stack, so
+  no path/item text leaks), so the fault is no longer swallowed silently while staying zero-egress.
+- **A total semi-terminal failure still reports `outcome: 'completed'`** (distinguishable only via
+  `counts`: `failed === read total && categorized === 0 && skipped === 0`). A distinct `'failed'` outcome
+  was considered (#374) but **declined**: `CategorizationRunResult` is parsed 1:1 by the `categorize:start`
+  handler against `categorizationStartResultSchema`, a **strict** discriminated union in
+  `shared/ipc/schemas.ts`; any new outcome value (or extra field, since the members are `strictObject`)
+  would throw at the IPC boundary, and that schema surface was out of scope.
+- **The host-owned cancel flag survives a `busy` start.** `createCancelFlaggedCategorizationPort` owns a
+  single `cancelRequested` boolean (`start` clears it, `cancel` sets it, the injected transport probes it).
+  On `start()`, it snapshots the prior flag and **restores it when `port.start()` resolves with `busy`** —
+  a start that hit the orchestrator's single-flight guard did NOT begin a fresh run, so it must not de-arm
+  an outstanding cancel. This is a **defensive** guard (#377/#386): with today's timing the clobber is
+  unreachable (cancel/start are IPC macrotasks; the `busy` short-circuit is a microtask), but it keeps the
+  invariant holding if the timing model changes. Strengthen, never weaken, this — the off-thread cancel
+  path (#344) relies on the probe reaching the in-flight transport.
+**Impact**: Any UI/consumer that wants a "nothing succeeded" signal must read `counts`, not a special
+outcome, until the IPC start-result schema is deliberately extended. When adding a run outcome or result
+field, remember the strict 1:1 IPC schema parse. Treat an `error` status as needing an explicit reset path,
+not an implicit retry. Keep worker-fault diagnostics local (`[kawsay]` prefix, name/code projection) to
+honour the zero-egress guarantee.
+
 ### [2026-06-25] whisper.cpp v1.9.1 `-oj` writes a JSON *sidecar file* (not stdout), offsets are ms, and CPU transcription can run slower than realtime
 **Context**: Card #134 (ADR-0027) — building the off-thread `whisper-cli` transcription executor + resilient
 batch that turns an extracted 16 kHz WAV into a typed transcript.
