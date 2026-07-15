@@ -1,7 +1,10 @@
+import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, renderHook, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ItemView } from '@renderer/views/ItemView';
+import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
+import { useFavourite } from '@renderer/lib/use-favourite';
 import type { ItemCardDTO, TranscriptionSnapshotDTO } from '@shared/kawsay-api';
 import { makeFakeApi, makeItemCard, makeTranscriptView } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
@@ -320,6 +323,130 @@ describe('ItemView — favourite toggle (#434, part of #434)', () => {
   });
 });
 
+/** A promise whose resolution the test controls, so a test can force a specific
+ *  IPC response ORDER — `ipcRenderer.invoke` guarantees no such order itself. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (err: unknown) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('ItemView — favourite toggle race + lifecycle guards (#434)', () => {
+  // Flush pending microtasks + the timer tick, so a late promise settlement runs
+  // its handlers before assertions.
+  async function flushPending(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it('drops a late save settlement after the item unmounts — no throw, and no "reverting" reaction', async () => {
+    // The REAL reachable case: toggle, then click Back → ItemView unmounts while
+    // catalog:setFavourite is still pending. The late REJECT must not run the
+    // revert/announce reaction on the dead component. (MainApp keys ItemView by
+    // item id, so the item-id guard can never fire — only a mount guard covers
+    // this.) An unguarded hook logs the "reverting" warn + calls setState; a
+    // guarded hook drops it silently. We assert on the observable warn.
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const pending = deferred<{ isFavourite: boolean }>();
+    const setFavourite = vi.fn(() => pending.promise);
+    const api = makeFakeApi({ setFavourite });
+    const { user, unmount } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+    expect(setFavourite).toHaveBeenCalledTimes(1);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      unmount();
+      // Reject AFTER unmount. Must not throw and must not trigger the revert path.
+      pending.reject(new Error('SQLITE_BUSY'));
+      await flushPending();
+      const revertWarns = warnSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('favourite toggle failed; reverting'),
+      );
+      expect(revertWarns).toEqual([]);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('honours the LAST-SENT toggle, not the last-RESOLVED, when responses arrive out of order', async () => {
+    // A hook-level test: two toggles where the 1st sends favourite:true and the
+    // 2nd sends favourite:false, but the 1st invoke RESOLVES last. Without a
+    // sequence guard the stale {isFavourite:true} clobbers the newer false and the
+    // toggle then lies. Exercised through the hook directly (not the button) because
+    // the in-flight `disabled` state deliberately blocks a second DOM click — the
+    // guard still matters for any programmatic/rapid caller, and `invoke` gives no
+    // response-order guarantee.
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const first = deferred<{ isFavourite: boolean }>();
+    const second = deferred<{ isFavourite: boolean }>();
+    const calls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      calls.push(input);
+      return calls.length === 1 ? first.promise : second.promise;
+    });
+    const api = makeFakeApi({ setFavourite });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <KawsayApiProvider api={api}>{children}</KawsayApiProvider>
+    );
+    const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), { wrapper });
+
+    // First toggle → favourite:true; second toggle (optimistic state now true) →
+    // favourite:false.
+    act(() => result.current.toggle());
+    act(() => result.current.toggle());
+
+    expect(calls).toEqual([
+      { id: item.id, favourite: true },
+      { id: item.id, favourite: false },
+    ]);
+
+    // Settle out of order: the SECOND-sent (false) first, then the FIRST-sent (true).
+    await act(async () => {
+      second.resolve({ isFavourite: false });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      first.resolve({ isFavourite: true });
+      await Promise.resolve();
+    });
+
+    // Final state must reflect the last-SENT toggle (false), not the last-RESOLVED.
+    expect(result.current.isFavourite).toBe(false);
+  });
+
+  it('disables the toggle while a save is in flight, discouraging the rapid re-click race', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const pending = deferred<{ isFavourite: boolean }>();
+    const setFavourite = vi.fn(() => pending.promise);
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    // While the save is pending the control reflects a busy state.
+    const busy = screen.getByRole('button', { name: /remove from favourites/i });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+
+    await act(async () => {
+      pending.resolve({ isFavourite: true });
+      await Promise.resolve();
+    });
+
+    // Once settled it is interactive again.
+    expect(screen.getByRole('button', { name: /remove from favourites/i })).not.toBeDisabled();
+  });
+});
+
 describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
   it('the favourite toggle has no axe violations, unfavourited and favourited', async () => {
     const unfav = makeItemCard({ mediaType: 'photo', title: 'Not yet loved', isFavourite: false });
@@ -332,9 +459,7 @@ describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
     await screen.findByRole('button', { name: /remove from favourites/i });
     await expectNoAxeViolations(c2);
   });
-});
 
-describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
   it('a finished transcript has no axe violations', async () => {
     const item = makeItemCard({ mediaType: 'audio', title: 'A calm story' });
     const api = makeFakeApi({
