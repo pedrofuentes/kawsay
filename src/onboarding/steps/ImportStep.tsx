@@ -12,6 +12,7 @@ import { ErrorBanner } from '@renderer/components/ErrorBanner';
 import { Icon } from '@renderer/components/Icon';
 import { ProgressBar } from '@renderer/components/ProgressBar';
 import { ReassuranceNote } from '@renderer/components/ReassuranceNote';
+import { SkippedItemsDisclosure } from '@renderer/components/SkippedItemsDisclosure';
 import type { ImportState } from '@renderer/lib/use-import';
 import { StepContainer } from '../StepContainer';
 
@@ -101,6 +102,7 @@ export function ImportStep({
             {partialMetadata === 1 ? 'memory was' : 'memories were'} still brought in.
           </ReassuranceNote>
         ) : null}
+        <SkippedItemsDisclosure items={skipped} />
         <div>
           <Button variant="primary" onClick={onSeeEverything}>
             See everything

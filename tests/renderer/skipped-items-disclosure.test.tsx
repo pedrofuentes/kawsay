@@ -31,7 +31,9 @@ describe('SkippedItemsDisclosure', () => {
     render(<SkippedItemsDisclosure items={ITEMS} />);
     const toggle = screen.getByRole('button', { name: /see which ones/i });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('list')).not.toBeVisible();
+    // Collapsed content is hidden from assistive tech entirely (native `hidden`),
+    // exactly like a closed <details> — not merely visually hidden.
+    expect(screen.queryByRole('list')).not.toBeInTheDocument();
   });
 
   it('lists every skipped item with its filename and a plain-language reason when opened', async () => {
@@ -84,7 +86,7 @@ describe('SkippedItemsDisclosure', () => {
 
     await user.keyboard(' ');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('list')).not.toBeVisible();
+    expect(screen.queryByRole('list')).not.toBeInTheDocument();
   });
 
   it('has no WCAG 2.1 AA axe violations, collapsed or expanded', async () => {

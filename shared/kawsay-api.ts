@@ -298,6 +298,7 @@ export type {
   SearchResultDTO,
   TimelinePageDTO,
   ImportSummaryDTO,
+  SkippedItemDTO,
   TranscriptionSnapshotDTO,
   TranscriptionStartResultDTO,
   TranscriptionCountsDTO,
