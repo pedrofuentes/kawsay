@@ -12,9 +12,11 @@ import { Icon } from '@renderer/components/Icon';
 import type { IconName } from '@renderer/components/Icon';
 import { ItemTranscript } from '@renderer/components/ItemTranscript';
 import { MediaThumbnail } from '@renderer/components/MediaThumbnail';
+import { cx } from '@renderer/lib/cx';
 import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
+import { useFavourite } from '@renderer/lib/use-favourite';
 import { useNavigation } from '@renderer/lib/navigation';
-import type { MediaType } from '@shared/kawsay-api';
+import type { ItemCardDTO, MediaType } from '@shared/kawsay-api';
 
 const TYPE_LABEL: Record<MediaType, string> = {
   photo: 'Photo',
@@ -79,13 +81,16 @@ export function ItemView(): ReactElement | null {
           iconClassName="h-9 w-9"
         />
         <div className="flex min-w-0 flex-col gap-1">
-          <h1
-            ref={headingRef}
-            tabIndex={-1}
-            className="font-display text-3xl font-semibold text-text-primary outline-none"
-          >
-            {heading}
-          </h1>
+          <div className="flex items-center gap-1">
+            <h1
+              ref={headingRef}
+              tabIndex={-1}
+              className="font-display text-3xl font-semibold text-text-primary outline-none"
+            >
+              {heading}
+            </h1>
+            <FavouriteToggle item={item} />
+          </div>
           <p className="flex flex-wrap items-center gap-x-2 font-body text-base text-text-secondary">
             <span>{typeLabel}</span>
             {dateText !== null ? (
@@ -101,5 +106,36 @@ export function ItemView(): ReactElement | null {
       {transcribable ? <ItemTranscript item={item} /> : null}
       <CategoryChips item={item} />
     </section>
+  );
+}
+
+/**
+ * The favourite heart, made interactive (#434, part of #434 — arrow-nav and the
+ * tour are separate later slices). A real toggle button (not a decorative icon):
+ * `aria-pressed` carries the state, a generous ≥44px hit target (`h-11 w-11`)
+ * meets the pointer-target rubric, and a polite live region announces the change
+ * for a screen-reader user. Persists via the validated `catalog:setFavourite`
+ * channel (backed by the `is_favourite` column that already exists on `items`,
+ * ARCHITECTURE §4.2) — so a favourite marked here survives an app restart.
+ */
+function FavouriteToggle({ item }: { item: ItemCardDTO }): ReactElement {
+  const { isFavourite, announcement, toggle } = useFavourite(item.id, item.isFavourite);
+  return (
+    <>
+      <button
+        type="button"
+        aria-pressed={isFavourite}
+        aria-label={isFavourite ? 'Remove from favourites' : 'Mark as favourite'}
+        onClick={toggle}
+        className={cx(
+          'flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-clay-500 transition-colors duration-150 hover:bg-surface-tinted',
+        )}
+      >
+        <Icon name="heart" className={cx('h-6 w-6', isFavourite && 'fill-current')} />
+      </button>
+      <span aria-live="polite" className="sr-only">
+        {announcement}
+      </span>
+    </>
   );
 }

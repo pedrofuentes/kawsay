@@ -148,6 +148,13 @@ export interface CatalogSession {
    * skipped items.
    */
   getTranscript(input: { id: string }): Promise<TranscriptViewDTO>;
+  /**
+   * Set (or clear) one memory's favourite flag by its opaque id (#434). Echoes
+   * the RESOLVED `isFavourite` so the renderer reflects exactly what is now
+   * persisted. Throws {@link CatalogSessionError} when no library is open or the
+   * id names no item (an unknown id is never silently ignored).
+   */
+  setFavourite(input: { id: string; favourite: boolean }): { isFavourite: boolean };
   beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
   /** The host-side transcription library port for the OPEN library (#157). */
@@ -471,6 +478,14 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         text: record.text ?? null,
         segments: record.segments ?? [],
       });
+    },
+    setFavourite(input) {
+      const { repo } = requireOpen();
+      const isFavourite = repo.setFavourite(input);
+      if (isFavourite === null) {
+        throw new CatalogSessionError(`no such item: ${input.id}`);
+      }
+      return { isFavourite };
     },
     beginImport(input) {
       const library = requireOpen();

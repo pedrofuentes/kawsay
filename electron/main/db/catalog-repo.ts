@@ -167,6 +167,13 @@ export interface CatalogRepo {
   getItemsByIds(ids: readonly string[], source?: SourceType | null): ItemRow[];
   /** Enumerate every audio/video item (id + duration) for transcription (#157). */
   listTranscribableItems(): TranscribableItem[];
+  /**
+   * Set (or clear) one item's favourite flag by its opaque id (#434). A single
+   * transactional `UPDATE ... RETURNING`, so the write and its read-back are
+   * atomic. Returns the resolved `is_favourite` value as a boolean, or `null`
+   * when the id names no item (an unknown id is never silently ignored).
+   */
+  setFavourite(input: { id: string; favourite: boolean }): boolean | null;
 }
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
@@ -466,6 +473,15 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     WHERE media_type IN ('audio', 'video')
     ORDER BY id
   `);
+  // One transactional write + read-back (#434): flips is_favourite for the named
+  // id and returns the resolved value in the SAME statement, so a concurrent
+  // reader can never observe a torn write. Touches updated_at like every other
+  // items write (insertItem's ON CONFLICT branch above).
+  const setFavouriteStmt = db.prepare(`
+    UPDATE items SET is_favourite = @favourite, updated_at = datetime('now')
+    WHERE id = @id
+    RETURNING is_favourite
+  `);
 
   return {
     insertItem(input) {
@@ -583,6 +599,14 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     listTranscribableItems() {
       const rows = listTranscribableStmt.all<{ id: string; duration_sec: number | null }>();
       return rows.map((row) => ({ id: row.id, durationSec: row.duration_sec }));
+    },
+
+    setFavourite(input) {
+      const row = setFavouriteStmt.get<{ is_favourite: number }>({
+        id: input.id,
+        favourite: input.favourite ? 1 : 0,
+      });
+      return row === undefined ? null : row.is_favourite === 1;
     },
   };
 }

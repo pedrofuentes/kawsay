@@ -64,6 +64,15 @@ export interface KawsayAPI {
    */
   getTranscript(input: { id: string }): Promise<TranscriptViewDTO>;
 
+  /**
+   * Set (or clear) one memory's favourite flag by its opaque catalog id (#434,
+   * favourite-toggle slice — part of #434). CALLER-INITIATED from the item view's
+   * heart toggle only. The renderer passes only the id (never a path); resolves
+   * the RESOLVED `isFavourite` so the toggle always reflects what is now
+   * persisted on disk, surviving an app restart.
+   */
+  setFavourite(input: { id: string; favourite: boolean }): Promise<{ isFavourite: boolean }>;
+
   /** Start an off-thread import; resolves with the new job id. */
   startImport(input: { sourceType: SourceType; inputPath: string }): Promise<{ jobId: string }>;
   /** Cooperatively cancel an in-flight import. */
