@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MainApp } from '@renderer/app/MainApp';
 import type { TimelinePageDTO } from '@shared/kawsay-api';
-import { makeFakeApi, makeItemCard, makeLibrarySummary } from './support/fake-api';
+import { makeFakeApi, makeItemCard } from './support/fake-api';
 import { wrapInProviders } from './support/render';
 
 function page(over: Partial<TimelinePageDTO> = {}): TimelinePageDTO {
