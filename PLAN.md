@@ -53,12 +53,12 @@ agent):
 
 ## In-flight state
 
-- **Product:** v0.4.0 shipped (smart search / M4-1b live).
+- **Product:** v0.5.0 shipped (2026-07-06; M4-2 categorization + M4-3 suggested collections live).
 - **Backlog:** Sentinel advisory issues closed; actionable ones dispatched to the ready queue.
-- **Next milestone:** M4-2 (Categorization) + M4-3 (Suggested Collections) — board cards #263–#273
-  (labeled `m4`).
-- **Current gates:** M4-2/M4-3 gated at migration-005 root (#263) + gazetteer (#266); also #6
-  (foundation-reconcile), #37 (security.yml), #247 (require-hashes), #301 (board-scope).
+- **Next milestone:** M3 connector slices — AC-26 Telegram, AC-27 Messenger, AC-28 Instagram.
+- **Current gates:** M3 connector slices gated at #301 (board-scope PAT — Status-column mirror;
+  non-blocking). Prior M4-2/M4-3 gates all closed: #263 (migration-005), #266 (gazetteer), #6
+  (foundation-reconcile), #37 (security.yml), #247 (require-hashes).
 - **Tier-1 watchdog:** running (20m heartbeat).
 - **Wave-1 workers:** in-flight PRs for #212, #209, and combined #297/#298/#235.
 
@@ -89,12 +89,14 @@ agent):
 
 ### Pending Gates
 
-- **#263** (migration-005 root) — blocks M4-2/M4-3 start.
-- **#266** (gazetteer) — blocks M4-2/M4-3 start.
-- **#6** (foundation-reconcile) — architectural hygiene.
-- **#37** (security.yml workflow) — supply-chain hardening.
-- **#247** (require-hashes) — lockfile integrity.
 - **#301** (board-scope PAT) — Status-column mirror (non-blocking).
+
+**Closed gates (M4-2/M4-3 prerequisite chain):**
+- **#263** (migration-005 root) — closed; M4-2/M4-3 prerequisites complete.
+- **#266** (gazetteer) — closed; M4-2/M4-3 prerequisites complete.
+- **#6** (foundation-reconcile) — closed; architectural hygiene complete.
+- **#37** (security.yml workflow) — closed; supply-chain hardening complete.
+- **#247** (require-hashes) — closed; lockfile integrity complete.
 
 ### Governance Profile
 
