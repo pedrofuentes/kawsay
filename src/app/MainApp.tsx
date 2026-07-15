@@ -20,7 +20,6 @@ import { Sidebar } from './Sidebar';
 export function MainApp(): ReactElement {
   const { view, navigate } = useNavigation();
   const { library } = useLibrary();
-  const who = library?.name ?? 'your loved one';
 
   return (
     <AppShell variant="main" sidebar={<Sidebar />} libraryName={library?.name}>
@@ -36,14 +35,17 @@ export function MainApp(): ReactElement {
     switch (view.name) {
       case 'search':
         return <Search />;
-      case 'add-memories':
+      case 'add-memories': {
+        const description = library?.name
+          ? `Add another source to ${library.name}'s library whenever you're ready.`
+          : 'Add another source to this library whenever you\'re ready.';
         return (
           <InfoView
             key="add-memories"
             heading="Add memories"
             icon="archive"
             emptyTitle="Bring in more"
-            description={`Add another source to ${who}'s library whenever you're ready.`}
+            description={description}
             action={
               <Button variant="primary" onClick={() => navigate({ name: 'timeline' })}>
                 Back to the timeline
@@ -51,6 +53,7 @@ export function MainApp(): ReactElement {
             }
           />
         );
+      }
       case 'settings':
         return <Settings key="settings" />;
       case 'item':
