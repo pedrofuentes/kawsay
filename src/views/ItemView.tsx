@@ -119,16 +119,18 @@ export function ItemView(): ReactElement | null {
  * ARCHITECTURE §4.2) — so a favourite marked here survives an app restart.
  */
 function FavouriteToggle({ item }: { item: ItemCardDTO }): ReactElement {
-  const { isFavourite, announcement, toggle } = useFavourite(item.id, item.isFavourite);
+  const { isFavourite, isSaving, announcement, toggle } = useFavourite(item.id, item.isFavourite);
   return (
     <>
       <button
         type="button"
         aria-pressed={isFavourite}
+        aria-busy={isSaving}
         aria-label={isFavourite ? 'Remove from favourites' : 'Mark as favourite'}
         onClick={toggle}
+        disabled={isSaving}
         className={cx(
-          'flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-clay-500 transition-colors duration-150 hover:bg-surface-tinted',
+          'flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-clay-500 transition-colors duration-150 hover:bg-surface-tinted disabled:cursor-not-allowed disabled:opacity-55',
         )}
       >
         <Icon name="heart" className={cx('h-6 w-6', isFavourite && 'fill-current')} />
