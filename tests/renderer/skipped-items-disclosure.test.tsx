@@ -9,7 +9,10 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SkippedItemsDisclosure } from '@renderer/components/SkippedItemsDisclosure';
+import { ImportStep } from '@renderer/onboarding/steps/ImportStep';
+import type { ImportState } from '@renderer/lib/use-import';
 import type { SkippedItemDTO } from '@shared/kawsay-api';
+import { makeImportSummary } from './support/fake-api';
 import { expectNoAxeViolations } from './support/axe';
 
 const ITEMS: SkippedItemDTO[] = [
@@ -28,12 +31,33 @@ describe('SkippedItemsDisclosure', () => {
   });
 
   it('starts collapsed behind a single labelled toggle, not a giant unlabelled blob', () => {
-    render(<SkippedItemsDisclosure items={ITEMS} />);
+    const { container } = render(<SkippedItemsDisclosure items={ITEMS} />);
     const toggle = screen.getByRole('button', { name: /see which ones/i });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     // Collapsed content is hidden from assistive tech entirely (native `hidden`),
     // exactly like a closed <details> — not merely visually hidden.
     expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    // Deferral: the O(n) list rows are not even MOUNTED while collapsed, so a
+    // large export pays no up-front DOM cost at import-complete.
+    expect(container.querySelectorAll('li')).toHaveLength(0);
+  });
+
+  it('keeps its aria-controls target present but empty while collapsed, then fills it on expand', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<SkippedItemsDisclosure items={ITEMS} />);
+    const toggle = screen.getByRole('button', { name: /see which ones/i });
+
+    // The container the toggle controls must always exist so `aria-controls`
+    // never dangles — even though its rows are deferred until expansion.
+    const controlledId = toggle.getAttribute('aria-controls');
+    expect(controlledId).toBeTruthy();
+    // `useId()` ids contain colons, so resolve by id rather than a CSS selector.
+    const controlled = document.getElementById(controlledId as string);
+    expect(controlled).not.toBeNull();
+    expect(container.querySelectorAll('li')).toHaveLength(0);
+
+    await user.click(toggle);
+    expect(container.querySelectorAll('li')).toHaveLength(ITEMS.length);
   });
 
   it('lists every skipped item with its filename and a plain-language reason when opened', async () => {
@@ -96,5 +120,56 @@ describe('SkippedItemsDisclosure', () => {
 
     await user.click(screen.getByRole('button', { name: /see which ones/i }));
     await expectNoAxeViolations(container);
+  });
+});
+
+describe('SkippedItemsDisclosure wired into the import summary (ImportStep)', () => {
+  function completedState(skipped: SkippedItemDTO[]): ImportState {
+    return {
+      status: 'complete',
+      jobId: 'job-1',
+      processed: 312,
+      total: 312,
+      message: null,
+      phase: 'done',
+      summary: makeImportSummary({ occurrencesAdded: 312, skipped }),
+      error: null,
+    };
+  }
+
+  function renderComplete(skipped: SkippedItemDTO[]) {
+    return render(
+      <ImportStep
+        personName="Elena"
+        state={completedState(skipped)}
+        onCancel={() => {}}
+        onRetry={() => {}}
+        onSeeEverything={() => {}}
+      />,
+    );
+  }
+
+  it('offers the disclosure on a completed import that has skips, alongside the aggregate note', async () => {
+    const user = userEvent.setup();
+    renderComplete([
+      { ref: 'photos/IMG_1.heic', reason: 'partial metadata unavailable', code: 'E_EXIF' },
+      { ref: 'msgs/att_9.dat', reason: 'attachment missing', code: 'E_MISSING_ATTACHMENT' },
+    ]);
+
+    // The existing warm count + aggregate reassurance are still present…
+    expect(screen.getByText(/312/)).toBeInTheDocument();
+    // …and the per-item disclosure now sits beside them, reachable and expandable.
+    const toggle = screen.getByRole('button', { name: /see which ones/i });
+    await user.click(toggle);
+    const list = screen.getByRole('list');
+    expect(within(list).getByText('IMG_1.heic')).toBeInTheDocument();
+    expect(within(list).getByText('att_9.dat')).toBeInTheDocument();
+    expect(within(list).getByText(/an attached file .* wasn.t in the export/i)).toBeInTheDocument();
+  });
+
+  it('shows NO disclosure on a completed import with zero skips', () => {
+    renderComplete([]);
+    expect(screen.getByText(/312/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /see which ones/i })).not.toBeInTheDocument();
   });
 });
