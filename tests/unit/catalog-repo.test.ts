@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import Database, { type Database as Db } from 'better-sqlite3';
 import { runMigrations } from '../../electron/main/db/migrate';
 import {
@@ -8,6 +9,7 @@ import {
   toIsoUtc,
   type CatalogRepo,
 } from '../../electron/main/db/catalog-repo';
+import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
 function freshCatalog(): Db {
   const db = new Database(':memory:');
@@ -120,6 +122,46 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
       const byCaption = repo.search({ query: 'birthday', limit: 10, offset: 0 });
       expect(byFilename.rows.map((r) => r.id)).toEqual([id]);
       expect(byCaption.rows.map((r) => r.id)).toEqual([id]);
+    });
+  });
+
+  describe('setFavourite (#434 favourite-toggle write path)', () => {
+    it('marks an item favourite and persists it in the is_favourite column', () => {
+      const id = repo.insertItem({ mediaType: 'photo', contentHash: 'h-fav' });
+      expect(repo.getItemsByIds([id])[0]?.isFavourite).toBe(false);
+
+      const result = repo.setFavourite({ id, favourite: true });
+
+      expect(result).toBe(true);
+      const row = db
+        .prepare('SELECT is_favourite FROM items WHERE id = ?')
+        .get<{ is_favourite: number }>(id);
+      expect(row?.is_favourite).toBe(1);
+      expect(repo.getItemsByIds([id])[0]?.isFavourite).toBe(true);
+    });
+
+    it('unmarks a favourite item back to false', () => {
+      const id = repo.insertItem({ mediaType: 'photo', contentHash: 'h-unfav' });
+      repo.setFavourite({ id, favourite: true });
+
+      const result = repo.setFavourite({ id, favourite: false });
+
+      expect(result).toBe(false);
+      expect(repo.getItemsByIds([id])[0]?.isFavourite).toBe(false);
+    });
+
+    it('is idempotent — setting the same value twice leaves exactly one row and the same value', () => {
+      const id = repo.insertItem({ mediaType: 'photo', contentHash: 'h-idem' });
+      repo.setFavourite({ id, favourite: true });
+      repo.setFavourite({ id, favourite: true });
+
+      expect(count(db, 'SELECT COUNT(*) n FROM items')).toBe(1);
+      expect(repo.getItemsByIds([id])[0]?.isFavourite).toBe(true);
+    });
+
+    it('returns null when the id names no item (unknown id is not silently ignored)', () => {
+      const result = repo.setFavourite({ id: 'no-such-id', favourite: true });
+      expect(result).toBeNull();
     });
   });
 
@@ -364,5 +406,31 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
       expect(repo.getItemsByIds([shared], 'folder').map((r) => r.id)).toEqual([shared]);
       expect(repo.getItemsByIds([shared], 'linkedin')).toHaveLength(0);
     });
+  });
+});
+
+describe('setFavourite persists across a restart (#434 — file-backed db, not the in-memory fixture)', () => {
+  it('is readable by a brand-new connection + repo opened over the same catalog file', () => {
+    const dir = makeTmpDir('fav-restart');
+    const path = join(dir, 'catalog.sqlite3');
+    try {
+      // "Session 1": write the favourite, then close — mirrors an app quit.
+      const firstDb = new Database(path);
+      firstDb.pragma('foreign_keys = ON');
+      runMigrations(firstDb);
+      const firstRepo = createCatalogRepo(firstDb);
+      const id = firstRepo.insertItem({ mediaType: 'photo', contentHash: 'h-restart' });
+      const result = firstRepo.setFavourite({ id, favourite: true });
+      expect(result).toBe(true);
+      firstDb.close();
+
+      // "Session 2": a fresh connection/repo over the SAME file — mirrors a relaunch.
+      const secondDb = new Database(path);
+      const secondRepo = createCatalogRepo(secondDb);
+      expect(secondRepo.getItemsByIds([id])[0]?.isFavourite).toBe(true);
+      secondDb.close();
+    } finally {
+      removeTmpDir(dir);
+    }
   });
 });

@@ -221,6 +221,119 @@ describe('ItemView — moving back', () => {
   });
 });
 
+describe('ItemView — favourite toggle (#434, part of #434)', () => {
+  it('renders a real toggle button reflecting the item’s current favourite state', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Sunset over the bay', isFavourite: false });
+    renderItem(item);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('starts pressed when the item already carries the persisted favourite flag', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Already loved', isFavourite: true });
+    renderItem(item);
+
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('flips state and persists via the catalog:setFavourite channel on click', async () => {
+    const item = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000f1',
+      mediaType: 'photo',
+      title: 'A quiet afternoon',
+      isFavourite: false,
+    });
+    const setFavourite = vi.fn(() => Promise.resolve({ isFavourite: true }));
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    expect(setFavourite).toHaveBeenCalledWith({
+      id: '00000000-0000-4000-8000-0000000000f1',
+      favourite: true,
+    });
+    expect(await screen.findByRole('button', { name: /remove from favourites/i })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('toggling back off calls the channel with favourite: false', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Loved memory', isFavourite: true });
+    const setFavourite = vi.fn(() => Promise.resolve({ isFavourite: false }));
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    await user.click(toggle);
+
+    expect(setFavourite).toHaveBeenCalledWith({ id: item.id, favourite: false });
+    expect(await screen.findByRole('button', { name: /mark as favourite/i })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('politely announces the new state so a screen-reader user hears the change', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const setFavourite = vi.fn(() => Promise.resolve({ isFavourite: true }));
+    const api = makeFakeApi({ setFavourite });
+    const { user, container } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live).not.toBeNull();
+    await screen.findByText(/added to favourites/i);
+  });
+
+  it('reverts the visible state when persisting fails (nothing on disk changed, so the UI must not lie)', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const setFavourite = vi.fn(() => Promise.reject(new Error('SQLITE_BUSY')));
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    expect(await screen.findByRole('button', { name: /mark as favourite/i })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('gives the toggle a real hit target (≥44px) — never a tiny icon-only click zone', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon' });
+    renderItem(item);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    // jsdom has no real layout engine, so assert the Tailwind sizing classes that
+    // fix the hit target at 44px (h-11 w-11 = 2.75rem = 44px) rather than measured
+    // pixels — the same posture as the rest of this suite under jsdom.
+    expect(toggle.className).toMatch(/\bh-11\b/);
+    expect(toggle.className).toMatch(/\bw-11\b/);
+  });
+});
+
+describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
+  it('the favourite toggle has no axe violations, unfavourited and favourited', async () => {
+    const unfav = makeItemCard({ mediaType: 'photo', title: 'Not yet loved', isFavourite: false });
+    const { container: c1 } = renderItem(unfav);
+    await screen.findByRole('button', { name: /mark as favourite/i });
+    await expectNoAxeViolations(c1);
+
+    const fav = makeItemCard({ mediaType: 'photo', title: 'Already loved', isFavourite: true });
+    const { container: c2 } = renderItem(fav);
+    await screen.findByRole('button', { name: /remove from favourites/i });
+    await expectNoAxeViolations(c2);
+  });
+});
+
 describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
   it('a finished transcript has no axe violations', async () => {
     const item = makeItemCard({ mediaType: 'audio', title: 'A calm story' });
