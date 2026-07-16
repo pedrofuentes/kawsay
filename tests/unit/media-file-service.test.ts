@@ -20,10 +20,13 @@ import { dirname, join } from 'node:path';
 import { openCatalog, type CatalogDatabase } from '../../electron/main/db/connection';
 import { runMigrations } from '../../electron/main/db/migrate';
 import { createCatalogRepo, type CatalogRepo } from '../../electron/main/db/catalog-repo';
+import { constants as fsConstants } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   blobAbsPath,
   ERR_ORIGINAL_PATH_ESCAPE,
   isServablePath,
+  MEDIA_OPEN_FLAGS,
   pinRegularFile,
 } from '../../electron/main/library/originals-store';
 import {
@@ -553,4 +556,56 @@ describe('pinRegularFile — O_NOFOLLOW refuses a symlink planted in the realpat
     expect(fstatSync(result?.fd ?? -1).isFile()).toBe(true);
     if (result !== null) closeSync(result.fd);
   });
+});
+
+describe('media open flags — O_NONBLOCK prevents a main-thread hang on a FIFO/device (CWE-400)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpDir('media-fifo');
+  });
+  afterEach(() => {
+    removeTmpDir(root);
+  });
+
+  it('opens read-only, refuses to follow a symlink (O_NOFOLLOW), AND never blocks (O_NONBLOCK)', () => {
+    // The complete secure-open recipe. Read-only: neither write access-mode bit is
+    // set. On POSIX O_NOFOLLOW + O_NONBLOCK must also be set; on Windows they are
+    // absent and degrade to 0 (minimal surface).
+    expect(MEDIA_OPEN_FLAGS & fsConstants.O_WRONLY).toBe(0);
+    expect(MEDIA_OPEN_FLAGS & fsConstants.O_RDWR).toBe(0);
+    if (process.platform !== 'win32') {
+      expect(MEDIA_OPEN_FLAGS & fsConstants.O_NOFOLLOW).toBe(fsConstants.O_NOFOLLOW);
+      // The missing piece: without O_NONBLOCK a writer-less FIFO hangs the open.
+      expect(MEDIA_OPEN_FLAGS & fsConstants.O_NONBLOCK).toBe(fsConstants.O_NONBLOCK);
+    }
+  });
+
+  // The behavioural proof runs the (potentially blocking) open in a CHILD process we
+  // can time out — so a regression that drops O_NONBLOCK fails as a killed child
+  // rather than hanging the whole suite. It opens a writer-less FIFO with the REAL
+  // exported MEDIA_OPEN_FLAGS and asserts it returns PROMPTLY and sees a non-regular
+  // file (which pinRegularFile's fstat gate then rejects → 404).
+  it.skipIf(process.platform === 'win32')(
+    'opening a writer-less FIFO with MEDIA_OPEN_FLAGS returns promptly and is detected non-regular',
+    () => {
+      const fifo = join(root, 'pipe.mp4');
+      execFileSync('mkfifo', [fifo]);
+      const script = [
+        'const fs=require("fs");',
+        'let fd;',
+        'try{fd=fs.openSync(process.argv[1],Number(process.argv[2]));}',
+        'catch(e){process.stdout.write("CAUGHT:"+e.code);process.exit(0);}',
+        'const st=fs.fstatSync(fd);fs.closeSync(fd);',
+        'process.stdout.write("OPENED:isFile="+st.isFile());',
+      ].join('');
+      const child = spawnSync(process.execPath, ['-e', script, fifo, String(MEDIA_OPEN_FLAGS)], {
+        timeout: 4000,
+        encoding: 'utf8',
+      });
+      // A blocking open (no O_NONBLOCK) would be KILLED by the timeout → signal set.
+      // With O_NONBLOCK the child returns on its own → signal null.
+      expect(child.signal).toBeNull();
+      expect(child.stdout).toContain('isFile=false');
+    },
+  );
 });

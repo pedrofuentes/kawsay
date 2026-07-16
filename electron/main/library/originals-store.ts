@@ -386,16 +386,23 @@ export interface ServableOriginal {
  * is not a regular file; returns null if the file vanished — or a symlink was planted
  * in the realpath→open window (refused by `O_NOFOLLOW` → `ELOOP`) — before the open.
  */
+/**
+ * The hardened flags every media original is opened with (§2.4). `O_NOFOLLOW` closes
+ * the realpath→open symlink race (CWE-367): if the FINAL path component is a symlink
+ * at open time — one planted in the window after realpath resolved a legitimate
+ * in-root path — the open fails with `ELOOP` instead of following it out of the
+ * servable roots. Both flags are absent on Windows and degrade to `0` (Windows
+ * symlink/FIFO creation is privileged, so the local surface there is minimal).
+ */
+export const MEDIA_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+
 export function pinRegularFile(canonicalPath: string, kind: OriginalKind): ServableOriginal | null {
   let fd: number;
   try {
-    // O_NOFOLLOW closes the realpath→open race (CWE-367): if the FINAL path component
-    // is a symlink at open time — one planted in the tiny window after realpath
-    // resolved a legitimate in-root path — the open fails with ELOOP instead of
-    // following it out of the servable roots. (O_NOFOLLOW is absent on Windows, where
-    // it degrades to 0; Windows symlink creation is privileged, so the local surface
-    // there is minimal.) We stream from THIS fd, so no later re-open reintroduces a race.
-    fd = openSync(canonicalPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    // Open with the hardened {@link MEDIA_OPEN_FLAGS}. We stream from THIS fd, so no
+    // later re-open reintroduces a race; the fstat `isFile()` gate below rejects
+    // anything non-regular.
+    fd = openSync(canonicalPath, MEDIA_OPEN_FLAGS);
   } catch {
     // ELOOP (planted symlink) / ENOENT (vanished) / any open failure → not servable.
     // Treated as the existing not-found reject: null → 404 with zero bytes, no leak.
