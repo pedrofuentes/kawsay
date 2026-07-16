@@ -4,6 +4,7 @@ import {
   type IpcRequest,
   type IpcResponse,
 } from '@shared/ipc/contract';
+import { IPC_ERROR_CODES, IpcError, ipcErrorFrom } from '@shared/ipc/error-envelope';
 
 /**
  * The underlying transport (`ipcRenderer.invoke`), injected so the validated
@@ -25,11 +26,35 @@ export function createValidatedInvoke(rawInvoke: RawInvoke) {
   ): Promise<IpcResponse<C>> {
     const schema = ipcContract[channel] as IpcContractEntry | undefined;
     if (schema === undefined) {
-      throw new Error(`Unknown IPC channel: ${String(channel)}`);
+      throw new IpcError(IPC_ERROR_CODES.BAD_REQUEST, 'UnknownChannelError');
     }
-    const request = schema.request.parse(payload);
-    const reply = await rawInvoke(channel, request);
-    return schema.response.parse(reply) as IpcResponse<C>;
+
+    let request: unknown;
+    try {
+      request = schema.request.parse(payload);
+    } catch {
+      // A buggy/compromised renderer sent an unexpected shape — refuse it BEFORE it
+      // crosses, as a typed error the renderer can handle (no raw zod text surfaced).
+      throw new IpcError(IPC_ERROR_CODES.BAD_REQUEST, 'ZodError');
+    }
+
+    let reply: unknown;
+    try {
+      reply = await rawInvoke(channel, request);
+    } catch (cause) {
+      // Main rejects a fault with a REDACTED error whose tagged message encodes only
+      // {code, name} — never the raw message/stack (#440). Recover the typed IpcError
+      // (switch on `code` for copy); an untagged rejection is still surfaced redacted.
+      throw ipcErrorFrom(cause, IPC_ERROR_CODES.HANDLER_FAULT);
+    }
+
+    try {
+      return schema.response.parse(reply) as IpcResponse<C>;
+    } catch {
+      // Main answered with a shape the contract forbids — defend the renderer from a
+      // misbehaving main, again as a typed error (never the raw reply/zod detail).
+      throw new IpcError(IPC_ERROR_CODES.BAD_RESPONSE, 'ZodError');
+    }
   };
 }
 

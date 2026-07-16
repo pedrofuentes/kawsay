@@ -44,6 +44,7 @@ import { createEmbeddingsRepo, type EmbeddingsRepo } from '../db/embeddings-repo
 import { mergeSemanticAndExact, type SemanticHit } from '../search/semantic';
 import { EMBED_MODEL_ID, withQueryPrefix, type EmbedderStatus } from '../search/embed-cli';
 import { createTranscriptRepo, type TranscriptRepo } from '../db/transcript-repo';
+import { log } from '../log';
 import { createTranscriptionLibrary } from '../transcription/transcription-library';
 import type { TranscriptionLibraryPort } from '../transcription/transcription-orchestrator';
 import type { CategorizationLibraryPort } from '../categorize/categorization-library';
@@ -477,7 +478,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       } catch (error) {
         // Resilience: a query-embed / KNN failure must NEVER fail the search — it
         // degrades silently to exact FTS (AC-7 no-regression).
-        console.warn('[kawsay] smart search failed; falling back to exact FTS', error);
+        log.warn('[kawsay] smart search failed; falling back to exact FTS', error);
         return exactPageDto();
       }
     },
@@ -518,7 +519,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       try {
         record = transcripts.loadTranscript(input.id);
       } catch (error) {
-        console.warn(
+        log.warn(
           '[kawsay] item is marked done but its transcript could not be read; showing a non-done view. item:',
           input.id,
           error,
@@ -531,7 +532,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         });
       }
       if (record === null) {
-        console.warn(
+        log.warn(
           `[kawsay] item ${input.id} is marked done but has no transcript row; showing a non-done view`,
         );
         return transcriptViewSchema.parse({

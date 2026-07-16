@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { ImportProgressEvent, ImportSummaryDTO, SourceType } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
+import { ipcErrorCopy } from './ipc-error-copy';
 
 export type ImportStatus =
   | 'idle'
@@ -189,7 +190,7 @@ export function useImport(): UseImportResult {
       } catch (cause) {
         startingRef.current = false;
         pendingProgressRef.current = [];
-        dispatch({ type: 'failed', error: cause instanceof Error ? cause.message : String(cause) });
+        dispatch({ type: 'failed', error: ipcErrorCopy(cause) });
       }
     },
     [api],
@@ -204,10 +205,10 @@ export function useImport(): UseImportResult {
     try {
       await api.cancelImport({ jobId });
     } catch (cause) {
-      dispatch({
-        type: 'failed',
-        error: cause instanceof Error ? `Unable to stop import: ${cause.message}` : 'Unable to stop import.',
-      });
+      // The raw cause no longer carries a safe message across the boundary (#440);
+      // surface a calm, fixed line rather than a code the person can't act on.
+      void cause;
+      dispatch({ type: 'failed', error: 'Unable to stop import just now. Please try again.' });
     }
   }, [api]);
 

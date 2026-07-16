@@ -25,6 +25,7 @@ import {
   type WriteFileOptions,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { log } from '../log';
 
 /** The named, reverent text-size steps (mirrors `shared/ipc/schemas.ts`). */
 export const TEXT_SIZE_STEPS = ['default', 'large', 'larger'] as const;
@@ -67,14 +68,6 @@ const DEFAULT_FS: SettingsStoreFs = {
   mkdirSync: (path, options) => mkdirSync(path, options),
 };
 
-function diagnosticError(error: unknown): { code?: string; name: string } {
-  if (error instanceof Error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === undefined ? { name: error.name } : { name: error.name, code };
-  }
-  return { name: typeof error };
-}
-
 function isTextSizeStep(value: unknown): value is TextSizeStep {
   return typeof value === 'string' && (TEXT_SIZE_STEPS as readonly string[]).includes(value);
 }
@@ -96,11 +89,11 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     } catch (error) {
       // No file yet (or unreadable) ⇒ the calm baseline.
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn(
+        log.warn(
           '[kawsay]',
           'settings',
           'could not be read; falling back to the default settings',
-          diagnosticError(error),
+          error,
         );
       }
       return { ...DEFAULT_SETTINGS };
@@ -109,11 +102,11 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     try {
       parsed = JSON.parse(raw);
     } catch (error) {
-      console.warn(
+      log.warn(
         '[kawsay]',
         'settings',
         'was malformed; falling back to the default settings',
-        diagnosticError(error),
+        error,
       );
       return { ...DEFAULT_SETTINGS };
     }
@@ -126,7 +119,7 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
     // explicitly; arrays are objects too but carry no named fields, so they
     // resolve to defaults per-field anyway — excluded here for clarity.)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      console.warn(
+      log.warn(
         '[kawsay]',
         'settings',
         'was not a settings object; falling back to the default settings',
@@ -152,11 +145,11 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
       // calm main process. The change simply is not persisted — a relaunch (or
       // even the very next read in THIS run) reads the prior value — and we
       // leave a diagnostic rather than throwing out of the seam.
-      console.warn(
+      log.warn(
         '[kawsay] could not persist',
         'settings',
         '; future launches may not reflect this change',
-        diagnosticError(error),
+        error,
       );
     }
   }

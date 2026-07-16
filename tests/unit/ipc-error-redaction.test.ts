@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { APP_GET_VERSION, type IpcChannel } from '@shared/ipc/contract';
 import {
-  IPC_ERROR_ENVELOPE_MARKER,
+  IPC_ERROR_TAG,
   IpcError,
+  decodeIpcErrorMessage,
   isIpcError,
-  isIpcErrorEnvelope,
 } from '@shared/ipc/error-envelope';
 import {
   registerIpcHandlers,
@@ -54,10 +54,10 @@ function wire() {
   const listener = listeners.get(APP_GET_VERSION);
   if (listener === undefined) throw new Error('listener not registered');
 
-  // What actually crossed the boundary (the value ipcRenderer.invoke would reject
-  // with — Electron passes a thrown plain object through unchanged).
+  // What actually crossed the boundary (the value ipcRenderer.invoke rejects with —
+  // the redacted Error main threw). The preload then recovers a typed IpcError.
   let crossed: unknown;
-  const rawInvoke = async (channel: string, payload: unknown): Promise<unknown> => {
+  const rawInvoke = async (_channel: string, payload: unknown): Promise<unknown> => {
     try {
       return await listener(trustedEvent, payload);
     } catch (rejected) {
@@ -70,7 +70,7 @@ function wire() {
 }
 
 describe('THE INVARIANT (#440): no raw message/stack crosses IPC to the renderer', () => {
-  it('a PII-laden handler throw reaches the renderer as ONLY {marker,code,name}', async () => {
+  it('a PII-laden handler throw reaches the renderer as ONLY a redacted {code, name}', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const { invoke, getCrossed } = wire();
@@ -82,17 +82,19 @@ describe('THE INVARIANT (#440): no raw message/stack crosses IPC to the renderer
         (e: unknown) => e,
       );
 
-      // 1) What CROSSED the boundary is the redacted envelope — no message/stack.
+      // 1) What CROSSED the boundary is a redacted Error: its message decodes to a
+      //    {code, name} payload ONLY, and neither message nor the scrubbed stack
+      //    carries any of the PII from the original throw.
       const crossed = getCrossed();
-      expect(isIpcErrorEnvelope(crossed)).toBe(true);
-      expect(Object.keys(crossed as object).sort()).toEqual(
-        [IPC_ERROR_ENVELOPE_MARKER, 'code', 'name'].sort(),
-      );
-      const crossedSerialized = JSON.stringify(crossed);
+      expect(crossed).toBeInstanceOf(Error);
+      const payload = decodeIpcErrorMessage((crossed as Error).message);
+      expect(payload).toEqual({ code: 'ERR_IPC_HANDLER_FAULT', name: 'Error' });
+      const crossedSerialized = `${(crossed as Error).message}\n${(crossed as Error).stack ?? ''}`;
       expect(crossedSerialized).not.toContain(PII_ID);
       expect(crossedSerialized).not.toContain(PII_PATH);
       expect(crossedSerialized).not.toContain('no such item');
-      expect(crossedSerialized).not.toContain('stack');
+      // The ONLY thing in the message beyond the tag is the JSON {code, name}.
+      expect((crossed as Error).message.startsWith(IPC_ERROR_TAG)).toBe(true);
 
       // 2) The renderer receives a typed IpcError (code + origin name), NOT raw text.
       expect(isIpcError(rejection)).toBe(true);

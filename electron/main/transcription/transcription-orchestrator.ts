@@ -24,6 +24,7 @@ import type {
   TranscriptionSnapshotDTO,
   TranscriptionStartResultDTO,
 } from '@shared/ipc/schemas';
+import { log } from '../log';
 
 /** One transcript segment with millisecond offsets (structurally the worker's). */
 export interface TranscriptionSegment {
@@ -117,14 +118,6 @@ type LastItem = { id: string; status: TranscriptionItemStatusDTO } | null;
 
 function zeroCounts(): TranscriptionCountsDTO {
   return { total: 0, transcribed: 0, failed: 0, skipped: 0, inFlight: 0 };
-}
-
-function diagnosticError(error: unknown): { code?: string; name: string } {
-  if (error instanceof Error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === undefined ? { name: error.name } : { name: error.name, code };
-  }
-  return { name: typeof error };
 }
 
 /** Map a worker item status onto the host action: persist a transcript, record a
@@ -284,9 +277,9 @@ export function createTranscriptionOrchestrator(
         lastItem = null;
         library = null;
         emit();
-        console.warn(
+        log.warn(
           '[kawsay] transcription worker failed to start; run left idle for retry',
-          diagnosticError(error),
+          error,
         );
         throw error;
       }

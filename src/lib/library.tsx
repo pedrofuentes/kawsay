@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useMemo, useState } from 'react
 import type { ReactElement, ReactNode } from 'react';
 import type { KawsayAPI, LibrarySummaryDTO } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
+import { ipcErrorCopy } from './ipc-error-copy';
 
 export type LibraryStatus = 'idle' | 'loading' | 'error';
 
@@ -55,7 +56,9 @@ export function LibraryProvider({ children }: { children: ReactNode }): ReactEle
         return summary;
       } catch (cause) {
         setStatus('error');
-        setError(cause instanceof Error ? cause.message : String(cause));
+        // Reverent copy mapped from the redacted error CODE — never the raw message
+        // (which no longer crosses the boundary, #440).
+        setError(ipcErrorCopy(cause));
         return null;
       }
     },

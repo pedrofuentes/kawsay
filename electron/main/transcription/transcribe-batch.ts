@@ -4,6 +4,7 @@ import type {
   Transcript,
   TranscribeSkipReason,
 } from './transcribe';
+import { log } from '../log';
 
 // The resilient BATCH RUNNER for M2 (ADR-0027 §2, issue #134). It drives the
 // per-item executor over a list of media items SERIALLY — whisper.cpp saturates
@@ -123,7 +124,7 @@ async function isAlreadyDone(
     // Fail-closed (treat as "not done") so a throwing predicate never aborts the
     // batch (#150), but leave a diagnostic so a PERSISTENTLY-throwing transcript_
     // status hook is observable rather than silently swallowed (#155).
-    console.warn(
+    log.warn(
       '[kawsay] transcription skipWhen predicate threw; treating as not-done. item:',
       item.id,
       error,

@@ -18,6 +18,7 @@ import {
 import { dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { OriginalKind } from '@shared/catalog';
 import type { CatalogDatabase } from '../db/connection';
+import { log } from '../log';
 
 /**
  * Stable error tag thrown when a hash, extension, or stored asset path — any of
@@ -794,23 +795,12 @@ function bestEffortDelete(
     // error name + errno code — never the message/stack/path, which could leak a
     // filesystem location or item text (#373). The static template + internal string
     // is not attacker-controlled printf input.
-    console.warn(
+    log.warn(
       '[kawsay] undo import: could not remove an orphaned file post-commit (left for GC)',
-      cleanupDiagnostic(error),
-    ); // nosemgrep: unsafe-formatstring
+      error,
+    );
     return 'failed';
   }
-}
-
-/** A privacy-preserving projection of a cleanup error: only the error `name` and an
- *  optional errno `code` — never the raw message/stack/path. Mirrors the IPC layer's
- *  diagnosticError so main-process faults log the same safe shape. */
-function cleanupDiagnostic(error: unknown): { name: string; code?: string } {
-  if (error instanceof Error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === undefined ? { name: error.name } : { name: error.name, code };
-  }
-  return { name: typeof error };
 }
 
 function deleteFileIfExists(absPath: string): boolean {

@@ -27,6 +27,7 @@ import {
   EMBED_MODEL_DOWNLOAD_REDIRECT_HOST,
   EMBED_MODEL_DOWNLOAD_URL,
 } from '../search/embed-model-source';
+import { log } from '../log';
 
 /** Schemes that never leave the machine and are always permitted. */
 const LOCAL_SCHEMES: ReadonlySet<string> = new Set([
@@ -241,7 +242,7 @@ export function installNetworkGuard(
     if (!allowed && !options.isPackaged) {
       // Dev breadcrumb: surface anything the guard cancels while iterating, so a
       // mistakenly-remote asset is noticed immediately. Silent in packaged builds.
-      console.error(`[kawsay] network guard cancelled non-local request: ${details.url}`);
+      log.error(`[kawsay] network guard cancelled non-local request: ${details.url}`); // nosemgrep: unsafe-formatstring
     }
     callback({ cancel: !allowed });
   });

@@ -103,6 +103,7 @@ import { registerIpcHandlers, type IpcHandlerMap, type IpcMainLike } from '../ip
 import { createEventSender } from '../ipc/event-sender';
 import type { TrustedSenderOptions } from '../ipc/sender';
 import { createCatalogSession, type CatalogSession } from './catalog-session';
+import { log } from '../log';
 import { loadRenderer } from './load-renderer';
 import { createIngestionCoordinator } from '../importers/ingestion/coordinator';
 import { createWorkerThreadsSpawner } from '../importers/ingestion/worker-threads-transport';
@@ -602,7 +603,7 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
       rendererEntryPath,
       rendererDevUrl,
       onLoadFailure: (error) => {
-        console.error('[kawsay] renderer failed to load', error);
+        log.error('[kawsay] renderer failed to load', error);
       },
     });
   }
@@ -631,7 +632,7 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
         // A rejected serve (confinement escape / mid-stream read failure) is logged with
         // a privacy-preserving diagnostic ONLY — never a filesystem path (AC-4 posture).
         onRejected: (info) => {
-          console.warn('[kawsay] media serve rejected', info);
+          log.warn('[kawsay] media serve rejected', info);
         },
       }),
     );
