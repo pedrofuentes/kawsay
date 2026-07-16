@@ -10,7 +10,7 @@
 // #434 — see USER_FLOWS Journey F). The neighbours are derived entirely from
 // `view.siblings` — the ordered page Timeline/Search already had loaded when the
 // user opened this memory — so this needs no re-fetch and no new IPC channel.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
 import { CategoryChips } from '@renderer/components/CategoryChips';
@@ -71,7 +71,7 @@ function ownsArrowKeys(target: EventTarget | null): boolean {
 }
 
 export function ItemView(): ReactElement | null {
-  const { view, navigate } = useNavigation();
+  const { view, navigate, favouriteOverrides, reconcileFavourite } = useNavigation();
   const headingRef = useAutoFocusHeading<HTMLHeadingElement>();
 
   const isItemView = view.name === 'item';
@@ -81,16 +81,28 @@ export function ItemView(): ReactElement | null {
 
   // The ordered page this memory was opened FROM (Timeline's newest-first load,
   // or Search's current result set) — already in hand, so no re-fetch and no new
-  // IPC channel are needed to find the previous/next memory (#434). Kept in LOCAL
-  // state, seeded once from the navigation snapshot, so a favourite toggled here
-  // can be patched into it (below) and survive an arrow away-and-back within the
-  // session — the snapshot alone is frozen at open time and would otherwise
-  // revert the heart (#458 review fix). MainApp keys ItemView by item id, so a
-  // fresh open always remounts and re-seeds; every in-session move goes through
-  // `goTo`, which threads this (patched) array forward.
-  const [siblings, setSiblings] = useState<ItemCardDTO[]>(() =>
-    view.name === 'item' ? (view.siblings ?? []) : [],
-  );
+  // IPC channel are needed to find the previous/next memory (#434). The raw
+  // snapshot is frozen at open time; we overlay the navigation-owned favourite
+  // OVERRIDES on top so any toggle that has SETTLED is reflected — including one
+  // that resolved only after the user arrowed away (which unmounts this ItemView
+  // via MainApp's id-keyed remount, so a local-state patch could not survive; the
+  // override map lives ABOVE MainApp and does — #458 before-settle race).
+  const rawSiblings = isItemView ? view.siblings : undefined;
+  const siblings = useMemo<ItemCardDTO[]>(() => {
+    const base = rawSiblings ?? [];
+    return base.map((sibling) => {
+      const override = favouriteOverrides[sibling.id];
+      return override !== undefined && override !== sibling.isFavourite
+        ? { ...sibling, isFavourite: override }
+        : sibling;
+    });
+  }, [rawSiblings, favouriteOverrides]);
+
+  // The favourite flag to SEED the toggle with: the settled override if one
+  // exists, else the value carried on the opened card. So arrowing back to a
+  // memory whose favourite settled while away opens it already-correct.
+  const seededFavourite =
+    item !== null ? (favouriteOverrides[item.id] ?? item.isFavourite) : false;
 
   const currentIndex = item !== null ? siblings.findIndex((sibling) => sibling.id === item.id) : -1;
   const prevItem = currentIndex > 0 ? siblings[currentIndex - 1] : null;
@@ -103,20 +115,6 @@ export function ItemView(): ReactElement | null {
     },
     [navigate, from, siblings],
   );
-
-  // When a favourite save PERSISTS for the memory on screen, reconcile that
-  // memory's entry in the ordered snapshot so arrowing back reads the corrected
-  // flag (not the value frozen when the list was first opened). Only touches the
-  // snapshot copy — the live toggle stays authoritative from `useFavourite`.
-  const patchSiblingFavourite = useCallback((id: string, favourite: boolean): void => {
-    setSiblings((prev) =>
-      prev.map((sibling) =>
-        sibling.id === id && sibling.isFavourite !== favourite
-          ? { ...sibling, isFavourite: favourite }
-          : sibling,
-      ),
-    );
-  }, []);
 
   // Global ←/→ handling — not scoped to a focused element, so it never traps
   // focus (Tab, Shift+Tab, and every other key keep working exactly as before;
@@ -218,7 +216,11 @@ export function ItemView(): ReactElement | null {
             >
               {heading}
             </h1>
-            <FavouriteToggle item={item} onSettled={patchSiblingFavourite} />
+            <FavouriteToggle
+              item={item}
+              initialFavourite={seededFavourite}
+              onSettled={reconcileFavourite}
+            />
           </div>
           <p className="flex flex-wrap items-center gap-x-2 font-body text-base text-text-secondary">
             <span>{typeLabel}</span>
@@ -247,15 +249,22 @@ export function ItemView(): ReactElement | null {
  * channel (backed by the `is_favourite` column that already exists on `items`,
  * ARCHITECTURE §4.2) — so a favourite marked here survives an app restart.
  *
- * `onSettled` lets the parent reconcile its ordered `siblings` snapshot with
- * what actually persisted, so an arrow away-and-back within the session reads
- * the corrected flag instead of the frozen open-time value (#458 review fix).
+ * `initialFavourite` is the flag to seed with — the navigation-owned settled
+ * override if one exists, else the value on the opened card — so a memory whose
+ * favourite settled while the user was away opens already-correct.
+ *
+ * `onSettled` lets the parent reconcile its PERSISTENT favourite source (the
+ * navigation-owned override map) with what actually persisted, so an arrow
+ * away-and-back reads the corrected flag instead of the frozen open-time value —
+ * even when the save settled only after this ItemView unmounted (#458).
  */
 function FavouriteToggle({
   item,
+  initialFavourite,
   onSettled,
 }: {
   item: ItemCardDTO;
+  initialFavourite: boolean;
   onSettled?: (id: string, isFavourite: boolean) => void;
 }): ReactElement {
   const handleSettled = useCallback(
@@ -266,7 +275,7 @@ function FavouriteToggle({
   );
   const { isFavourite, isSaving, announcement, toggle } = useFavourite(
     item.id,
-    item.isFavourite,
+    initialFavourite,
     handleSettled,
   );
   return (

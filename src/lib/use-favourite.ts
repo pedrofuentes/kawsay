@@ -42,10 +42,13 @@ const SAVE_FAILURE_MESSAGE = "We couldn't save that change just now. Nothing was
  *
  * `onSettled` (optional) is called with the durable `isFavourite` the main
  * process echoed back, but ONLY when a save actually persisted — never on a
- * failed/reverted save, and never for a settlement a mount/sequence guard
- * dropped. ItemView uses it to keep its ordered `siblings` snapshot in step, so
- * arrowing away and back reads the corrected value rather than a frozen one
- * (#434 review fix). Held in a ref so a changing callback identity never
+ * failed/reverted save, and never for a settlement the monotonic SEQUENCE guard
+ * dropped (a stale older reply must not regress a newer one). It deliberately is
+ * NOT gated behind the mount guard: it reconciles PERSISTENT owner state (the
+ * navigation-owned favourite override map), which stays mounted while this
+ * ItemView unmounts on its id-keyed remount — so a save that settles only after
+ * the user arrowed away still lands the corrected flag for the next mount to read
+ * (#458 before-settle race). Held in a ref so a changing callback identity never
  * re-runs the item-switch effect or stales the toggle closure.
  */
 export function useFavourite(
@@ -107,18 +110,30 @@ export function useFavourite(
     void api
       .setFavourite({ id: itemId, favourite: next })
       .then((result) => {
-        if (!mountedRef.current || seq < lastSettledSeqRef.current) {
-          // Unmounted, or an out-of-order OLDER reply a newer toggle already
-          // settled — dropping it keeps the last-SENT toggle authoritative.
-          console.debug('[kawsay] favourite toggle result dropped; unmounted or superseded');
+        // SEQUENCE guard first, and it drops the settlement ENTIRELY (reconcile
+        // included): an out-of-order OLDER reply a newer toggle already settled must
+        // never regress the persistent source with a stale value. Preserved from
+        // #453 — `ipcRenderer.invoke` gives no response-order guarantee.
+        if (seq < lastSettledSeqRef.current) {
+          console.debug('[kawsay] favourite toggle result dropped; superseded');
           return;
         }
         lastSettledSeqRef.current = seq;
-        setIsFavourite(result.isFavourite);
-        // Let the owner reconcile any cached copy of this item (e.g. ItemView's
-        // ordered `siblings`) with what actually persisted — success path only,
-        // so a failed/reverted save never patches a cache to a value not on disk.
+        // Reconcile the PERSISTENT owner (e.g. the navigation-owned favourite
+        // override map) with what actually persisted — success path only, so a
+        // failed/reverted save never writes a value not on disk. This runs even when
+        // this ItemView has UNMOUNTED (the user toggled then arrowed away before the
+        // save settled): it targets state the still-mounted parent owns, which
+        // outlives ItemView's id-keyed remount, so the corrected flag is there for
+        // the next mount to read (#458 before-settle race).
         onSettledRef.current?.(result.isFavourite);
+        // The DISPLAYED toggle's own state stays MOUNT-guarded — no setState on a
+        // dead tree, no React unmounted-update warning (#453 behaviour preserved).
+        if (!mountedRef.current) {
+          console.debug('[kawsay] favourite toggle display update skipped; unmounted');
+          return;
+        }
+        setIsFavourite(result.isFavourite);
         // Only the newest in-flight save clears the busy state, so an older reply
         // can't re-enable the control while a newer save is still pending.
         if (seq === attemptSeqRef.current) {
@@ -126,14 +141,18 @@ export function useFavourite(
         }
       })
       .catch((error: unknown) => {
-        if (!mountedRef.current || seq < lastSettledSeqRef.current) {
-          console.debug(
-            '[kawsay] favourite toggle rejection dropped; unmounted or superseded',
-            error,
-          );
+        if (seq < lastSettledSeqRef.current) {
+          console.debug('[kawsay] favourite toggle rejection dropped; superseded', error);
           return;
         }
         lastSettledSeqRef.current = seq;
+        // A FAILED save persisted NOTHING, so there is nothing to reconcile into the
+        // persistent source — never call `onSettled` here (it is success-path only).
+        // If this ItemView has unmounted there is likewise no display to revert.
+        if (!mountedRef.current) {
+          console.debug('[kawsay] favourite toggle rejection dropped; unmounted');
+          return;
+        }
         // Nothing on disk changed — fall back to the prior state so the toggle
         // never lies about what is actually persisted.
         console.warn('[kawsay] favourite toggle failed; reverting', error);
