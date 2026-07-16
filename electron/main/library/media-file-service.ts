@@ -1,0 +1,116 @@
+// On-demand, id-keyed media RESOLUTION for the `kawsay-media:` protocol (#428) —
+// the large-file sibling of the bounded-`data:`-URL thumbnail service (ADR-0022).
+// A memory is played by its opaque catalog id ONLY; this service does the whole
+// privileged resolution main-side:
+//
+//   1. look up the item's media_type/mime_type by id — only photo/audio/video are
+//      playable; everything else short-circuits to null WITHOUT touching disk;
+//   2. resolve the original through `resolveOriginal`, the AC-14 confinement
+//      boundary, which THROWS on a hostile/escaping content-address rather than
+//      handing back a path outside the originals store (a renderer-supplied path is
+//      impossible — the renderer never provides one);
+//   3. return the confined absolute path + a content-type, so the protocol handler
+//      can stream the LOCAL file (with range support) and never opens a socket
+//      (AC-4).
+//
+// Pure Node (no Electron), so the resolve→confine path unit-tests under Vitest
+// exactly as in production — mirroring the thumbnail service.
+import { extname } from 'node:path';
+import { resolveOriginal } from './originals-store';
+import type { CatalogDatabase } from '../db/connection';
+import type { MediaType } from '@shared/catalog';
+
+/** The media kinds that can be served as bytes for playback / full-size viewing. */
+const PLAYABLE_MEDIA: ReadonlySet<MediaType> = new Set<MediaType>(['photo', 'audio', 'video']);
+
+/** A resolved, confined media file ready to stream. */
+export interface MediaFileDescriptor {
+  /** Absolute path INSIDE the library the service resolved + confined itself. */
+  absPath: string;
+  /** The content-type to serve (stored mime, else derived from the extension). */
+  mimeType: string;
+  mediaType: MediaType;
+}
+
+export interface MediaFileServiceOptions {
+  db: CatalogDatabase;
+  /** Absolute library root — the confinement anchor for original resolution. */
+  root: string;
+}
+
+export interface MediaFileService {
+  /**
+   * Resolve one memory's confined original + content-type by opaque id, or null
+   * (unknown id, non-playable media, or no surviving original). THROWS — exactly
+   * like {@link resolveOriginal} — if a stored content-address would escape the
+   * originals root, so a hostile row can never yield a servable path.
+   */
+  resolve(id: string): MediaFileDescriptor | null;
+}
+
+/** Minimal extension→content-type fallback for the rare row with no stored mime.
+ *  Kept deliberately small (the common playable formats); anything unrecognised
+ *  degrades to a generic binary type, which the media element still handles. */
+const EXT_MIME: Readonly<Record<string, string>> = {
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.opus': 'audio/opus',
+  '.flac': 'audio/flac',
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.avif': 'image/avif',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.bmp': 'image/bmp',
+};
+
+function contentTypeFor(storedMime: string | null, absPath: string): string {
+  const trimmed = storedMime?.trim();
+  if (trimmed) return trimmed;
+  const byExt = EXT_MIME[extname(absPath).toLowerCase()];
+  return byExt ?? 'application/octet-stream';
+}
+
+export function createMediaFileService(options: MediaFileServiceOptions): MediaFileService {
+  const { db, root } = options;
+  const rowStmt = db.prepare(
+    'SELECT media_type AS mediaType, mime_type AS mimeType FROM items WHERE id = @id',
+  );
+
+  return {
+    resolve(id) {
+      const row = rowStmt.get<{ mediaType: MediaType; mimeType: string | null }>({ id });
+      if (row === undefined) return null;
+      // Non-playable media is decided from the catalog alone — no original is ever
+      // resolved or read.
+      if (!PLAYABLE_MEDIA.has(row.mediaType)) return null;
+
+      // resolveOriginal is the confinement boundary: it THROWS on an escaping
+      // content-address rather than returning a path outside the store, and that
+      // throw deliberately propagates (the handler turns it into a 404, no read).
+      const absPath = resolveOriginal(db, root, id);
+      if (absPath === null) return null;
+
+      return {
+        absPath,
+        mimeType: contentTypeFor(row.mimeType, absPath),
+        mediaType: row.mediaType,
+      };
+    },
+  };
+}

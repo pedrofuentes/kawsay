@@ -26,7 +26,9 @@ describe('buildContentSecurityPolicy (zero-egress CSP, ARCHITECTURE §2.2 / AC-4
     expectDirective(csp, 'script-src', ["'self'"]);
     expectDirective(csp, 'style-src', ["'self'"]);
     expectDirective(csp, 'font-src', ["'self'"]);
-    expectDirective(csp, 'img-src', ["'self'", 'data:']);
+    // img-src additionally admits the LOCAL media scheme for full-size photos (#428);
+    // still no networked source (asserted in detail below).
+    expectDirective(csp, 'img-src', ["'self'", 'data:', 'kawsay-media:']);
     expectDirective(csp, 'object-src', ["'none'"]);
     expectDirective(csp, 'base-uri', ["'none'"]);
     expectDirective(csp, 'form-action', ["'none'"]);

@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, session } from 'electron';
 import {
   APP_GET_VERSION,
   CATALOG_GET_TRANSCRIPT,
@@ -101,12 +101,27 @@ import {
 import { installContentSecurityPolicy, type CspOptions } from './security/csp';
 import { installNetworkGuard } from './security/network-guard';
 import {
+  createMediaProtocolHandler,
+  MEDIA_PROTOCOL_PRIVILEGES,
+} from './security/media-protocol';
+import { MEDIA_PROTOCOL_SCHEME } from '@shared/media';
+import {
   applyNavigationHardening,
   buildSecureWebPreferences,
   type NavigationHardeningOptions,
 } from './security/window-hardening';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
+
+// The custom LOCAL media scheme (#428) must be registered as privileged BEFORE the
+// app is ready — so it runs at module load, alongside the other pre-ready setup.
+// It is `standard`+`secure`+`stream` (origin semantics + range-streaming for video)
+// with `bypassCSP:false`, so media still flows through the locked-down CSP, admitted
+// only by the narrow `media-src`/`img-src kawsay-media:` allowance. Nothing here is
+// networked: the runtime guard treats the scheme as strictly local (AC-4).
+protocol.registerSchemesAsPrivileged([
+  { scheme: MEDIA_PROTOCOL_SCHEME, privileges: MEDIA_PROTOCOL_PRIVILEGES },
+]);
 
 // The packaged renderer entry: the ONLY file:// document trusted as an IPC
 // sender and the only legitimate in-app navigation target (ARCHITECTURE
@@ -472,6 +487,17 @@ async function bootstrap(): Promise<void> {
   installContentSecurityPolicy(session.defaultSession, cspOptions);
   // The runtime zero-egress kill-switch (AC-4): cancel every non-local request.
   installNetworkGuard(session.defaultSession, { isPackaged: app.isPackaged });
+
+  // The hardened `kawsay-media:` handler (#428), registered on the guarded session
+  // BEFORE any window loads — consistent with the security-install ordering above.
+  // It serves media bytes by OPAQUE ID ONLY: the id is validated (`z.uuid()`) and
+  // resolved server-side to a CONFINED originals-store file (an escaping content-
+  // address is refused before any read); the renderer never supplies a path. The
+  // whole path streams a local file with range support and opens no socket (AC-4).
+  session.defaultSession.protocol.handle(
+    MEDIA_PROTOCOL_SCHEME,
+    createMediaProtocolHandler({ resolve: (id) => catalogSession.resolveMedia(id) }),
+  );
 
   // The model download flows through Electron `net` on the GUARDED session, so it
   // passes through the webRequest allowlist above — not Node http/https, which

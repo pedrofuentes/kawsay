@@ -48,6 +48,11 @@ import {
   type ThumbnailService,
   type VideoThumbnailer,
 } from '../library/thumbnail-service';
+import {
+  createMediaFileService,
+  type MediaFileDescriptor,
+  type MediaFileService,
+} from '../library/media-file-service';
 import { importers } from '../importers/registry';
 import type { IngestionCoordinator } from '../importers/ingestion/coordinator';
 import type { IngestionJobSpec } from '../importers/ingestion/protocol';
@@ -141,6 +146,15 @@ export interface CatalogSession {
   /** Render one memory's bounded thumbnail by opaque id (U4), or null. */
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
   /**
+   * Resolve ONE memory's confined original + content-type by opaque id, for the
+   * `kawsay-media:` protocol to STREAM (#428). Id-only in; the path is resolved and
+   * confined server-side (never renderer-supplied). Returns null when no library is
+   * open, the id is unknown/non-playable, or there is no surviving original; THROWS
+   * (like {@link resolveOriginal}) if a stored content-address would escape the
+   * originals root. Synchronous — the protocol handler calls it per request.
+   */
+  resolveMedia(id: string): MediaFileDescriptor | null;
+  /**
    * Read ONE item's transcript by opaque id (#136) — the renderer-safe view a
    * screen reader can read (status + words + detected language + ms segments).
    * Rejects with {@link CatalogSessionError} when no library is open or the id
@@ -181,6 +195,7 @@ interface OpenLibrary {
   repo: CatalogRepo;
   embeddings: EmbeddingsRepo;
   thumbnails: ThumbnailService;
+  mediaFiles: MediaFileService;
   transcripts: TranscriptRepo;
   transcription: TranscriptionLibraryPort;
   /** The categorization port, or undefined when no factory was injected (#270). */
@@ -284,6 +299,9 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       image: thumbnailers.image,
       video: thumbnailers.video,
     });
+    // The id→confined-path media resolver behind the `kawsay-media:` protocol (#428);
+    // shares the SAME originals-store confinement boundary as the thumbnail service.
+    const mediaFiles = createMediaFileService({ db, root: summary.root });
     const transcripts = createTranscriptRepo(db);
     const transcription = createTranscriptionLibrary({
       db,
@@ -305,6 +323,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       repo,
       embeddings,
       thumbnails,
+      mediaFiles,
       transcripts,
       transcription,
       categorization,
@@ -424,6 +443,13 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       // promise so the IPC layer surfaces it as a normal rejected invoke.
       const { thumbnails } = requireOpen();
       return thumbnails.getThumbnail(input.id, input.size);
+    },
+    resolveMedia(id) {
+      // A protocol request may arrive before/after any library is open — answer a
+      // calm null (the handler renders 404) rather than throwing. A confinement
+      // rejection from an escaping content-address still propagates by design.
+      if (current === undefined) return null;
+      return current.mediaFiles.resolve(id);
     },
     async getTranscript(input) {
       // `async` so requireOpen's synchronous throw becomes a rejected invoke,
