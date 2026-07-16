@@ -516,6 +516,55 @@ describe('createCatalogSession (the IPC application service)', () => {
     await expect(s.getThumbnail({ id: JOB_ID })).rejects.toThrow();
   });
 
+  describe('setFavourite (#434 favourite-toggle write path)', () => {
+    it('marks a memory favourite and echoes the resolved state', () => {
+      session.createLibrary({ path: root });
+      seedItems(join(root, 'catalog.sqlite3'));
+      const page = session.getTimeline({ limit: 1 });
+      const id = page.items[0]?.id as string;
+      expect(page.items[0]?.isFavourite).toBe(false);
+
+      const result = session.setFavourite({ id, favourite: true });
+
+      expect(result).toEqual({ isFavourite: true });
+      // Persisted — a fresh timeline read reflects it, not just the echoed response.
+      const reread = session.getTimeline({ limit: 1 });
+      expect(reread.items[0]?.isFavourite).toBe(true);
+    });
+
+    it('unmarks a favourite memory back to false', () => {
+      session.createLibrary({ path: root });
+      seedItems(join(root, 'catalog.sqlite3'));
+      const id = session.getTimeline({ limit: 1 }).items[0]?.id as string;
+      session.setFavourite({ id, favourite: true });
+
+      const result = session.setFavourite({ id, favourite: false });
+
+      expect(result).toEqual({ isFavourite: false });
+    });
+
+    it('is idempotent — setting the same value twice is a no-op the second time', () => {
+      session.createLibrary({ path: root });
+      seedItems(join(root, 'catalog.sqlite3'));
+      const id = session.getTimeline({ limit: 1 }).items[0]?.id as string;
+
+      session.setFavourite({ id, favourite: true });
+      const second = session.setFavourite({ id, favourite: true });
+
+      expect(second).toEqual({ isFavourite: true });
+    });
+
+    it('rejects an unknown item id', () => {
+      session.createLibrary({ path: root });
+      expect(() => session.setFavourite({ id: JOB_ID, favourite: true })).toThrow();
+    });
+
+    it('refuses when no library is open', () => {
+      const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
+      expect(() => s.setFavourite({ id: JOB_ID, favourite: true })).toThrow();
+    });
+  });
+
   it('exposes a transcription library port that enumerates the audio/video originals (#157)', () => {
     session.createLibrary({ path: root });
     const voice = join(parent, 'voice.m4a');

@@ -49,6 +49,15 @@ export const CATALOG_THUMBNAIL = 'catalog:thumbnail';
  * segments. No filesystem path or audio byte crosses back (AC-4).
  */
 export const CATALOG_GET_TRANSCRIPT = 'catalog:getTranscript';
+/**
+ * IPC channel: set (or clear) ONE item's favourite flag by its opaque catalog id
+ * (#434, favourite-toggle slice). The `is_favourite` column already exists on
+ * `items` (ARCHITECTURE §4.2, migration 001) — the timeline/item card already
+ * reads it; this channel adds the missing WRITE path. The request carries only
+ * the id and the desired boolean — never a path — and echoes the resolved
+ * `isFavourite` so the caller reflects exactly what is now persisted on disk.
+ */
+export const CATALOG_SET_FAVOURITE = 'catalog:setFavourite';
 /** IPC channel: start an off-thread import; resolves with the new job id. */
 export const IMPORT_START = 'import:start';
 /** IPC channel: cooperatively cancel an in-flight import by job id. */
@@ -230,6 +239,13 @@ export const ipcContract = {
     // string can never validate, mirroring catalog:thumbnail.
     request: z.strictObject({ id: z.uuid() }),
     response: transcriptViewSchema,
+  },
+  [CATALOG_SET_FAVOURITE]: {
+    // An opaque catalog id — never a path — plus the desired boolean state.
+    // Mirrors CATALOG_GET_TRANSCRIPT's id shape and CATEGORIZE_SET_CONSENT's
+    // boolean-echo response.
+    request: z.strictObject({ id: z.uuid(), favourite: z.boolean() }),
+    response: z.strictObject({ isFavourite: z.boolean() }),
   },
   [IMPORT_START]: {
     request: z.strictObject({

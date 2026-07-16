@@ -4,6 +4,7 @@ import {
   APP_GET_VERSION,
   CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
+  CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
   CATEGORIZE_APPLY_CORRECTION,
@@ -75,6 +76,7 @@ function fakeInvoke() {
       text: 'Hola, te quiero mucho.',
       segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
     },
+    [CATALOG_SET_FAVOURITE]: { isFavourite: true },
     [CATEGORIZE_STATUS]: { optedIn: false, offered: true },
     [CATEGORIZE_SET_CONSENT]: { optedIn: true },
     [CATEGORIZE_LIST_FOR_ITEM]: [],
@@ -115,6 +117,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     const runStatus = await api.getTranscriptionStatus();
     const cancelRun = await api.cancelTranscription();
     const transcript = await api.getTranscript({ id: UUID });
+    const favourite = await api.setFavourite({ id: UUID, favourite: true });
     const smartStatus = await api.getSmartSearchStatus();
     const smartEnable = await api.enableSmartSearch();
     const catStatus = await api.getCategorizationStatus();
@@ -146,6 +149,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       text: 'Hola, te quiero mucho.',
       segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
     });
+    expect(favourite).toEqual({ isFavourite: true });
     expect(smartStatus).toEqual({ optedIn: true, modelReady: false, offered: true });
     expect(smartEnable).toEqual({ outcome: 'download-started' });
     expect(catStatus).toEqual({ optedIn: false, offered: true });
@@ -175,6 +179,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       TRANSCRIPTION_STATUS,
       TRANSCRIPTION_CANCEL,
       CATALOG_GET_TRANSCRIPT,
+      CATALOG_SET_FAVOURITE,
       SMART_SEARCH_MODEL_STATUS,
       SMART_SEARCH_DOWNLOAD_MODEL,
       CATEGORIZE_STATUS,
@@ -194,14 +199,15 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(calls[13].payload).toEqual({});
     expect(calls[14].payload).toEqual({});
     expect(calls[15].payload).toEqual({ id: UUID });
-    expect(calls[16].payload).toEqual({});
+    expect(calls[16].payload).toEqual({ id: UUID, favourite: true });
     expect(calls[17].payload).toEqual({});
     expect(calls[18].payload).toEqual({});
-    expect(calls[19].payload).toEqual({ optedIn: true });
-    expect(calls[20].payload).toEqual({ itemId: UUID });
-    expect(calls[21].payload).toEqual({ kind: 'confirm', itemId: UUID, categoryId: UUID });
-    expect(calls[22].payload).toEqual({});
+    expect(calls[19].payload).toEqual({});
+    expect(calls[20].payload).toEqual({ optedIn: true });
+    expect(calls[21].payload).toEqual({ itemId: UUID });
+    expect(calls[22].payload).toEqual({ kind: 'confirm', itemId: UUID, categoryId: UUID });
     expect(calls[23].payload).toEqual({});
+    expect(calls[24].payload).toEqual({});
   });
 
   it('maps each suggestions method to its exact channel and payload (#351 #7)', async () => {
@@ -329,6 +335,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'openLibrary',
         'searchCatalog',
         'setCategorizationConsent',
+        'setFavourite',
         'startCategorization',
         'startImport',
         'startTranscription',

@@ -190,7 +190,7 @@ describe('Add memories — import (reuses import:*; progress, cancel, completion
     expect(screen.getByTestId('active-view')).toHaveTextContent('timeline');
   });
 
-  it('surfaces skipped items in the summary without silently dropping them', async () => {
+  it('surfaces skipped items via the reusable "See which ones?" disclosure (#430) without silently dropping them', async () => {
     const { api, user } = setup();
     await runImport(user);
 
@@ -199,12 +199,20 @@ describe('Add memories — import (reuses import:*; progress, cancel, completion
         phase: 'done',
         summary: makeImportSummary({
           occurrencesAdded: 312,
-          skipped: [{ ref: 'IMG_1.heic', reason: 'unreadable' }],
+          skipped: [{ ref: 'exports/IMG_1.heic', reason: 'unreadable', code: 'E_READ' }],
         }),
       }),
     );
 
-    expect(await screen.findByText(/couldn't read/i)).toBeInTheDocument();
+    // The completion summary reuses ImportStep, which now hosts #430's disclosure —
+    // every skipped item is inspectable behind a single calm toggle, not silently
+    // dropped. Expanding it lists the file by name with a plain-language reason.
+    const toggle = await screen.findByRole('button', { name: /see which ones\?/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('IMG_1.heic')).toBeInTheDocument();
+    expect(screen.getByText(/couldn't read this file/i)).toBeInTheDocument();
   });
 
   it('shows a calm error (never a raw ERR_ code) when the import fails', async () => {
