@@ -4,7 +4,11 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import { resetQueryCache } from '@renderer/lib/use-query';
 
 afterEach(() => {
   cleanup();
+  // Drop the shared stale-while-revalidate cache so a value retained by one test's
+  // useQuery hook never leaks into the next (#443).
+  resetQueryCache();
 });

@@ -13,6 +13,7 @@ import type {
   ItemCategoryDTO,
 } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
+import { useQuery } from './use-query';
 
 export interface UseCategorizationStatusResult {
   /** True only once the gazetteer asset is bundled — the whole surface is hidden otherwise. */
@@ -27,62 +28,58 @@ export interface UseCategorizationStatusResult {
 
 export function useCategorizationStatus(): UseCategorizationStatusResult {
   const api = useKawsayApi();
-  const [status, setStatus] = useState<CategorizationStatusDTO | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (api === undefined) {
-      setLoading(false);
-      return undefined;
-    }
-    let active = true;
-    setLoading(true);
-    void api
-      .getCategorizationStatus()
-      .then((next) => {
-        if (active) {
-          setStatus(next);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        // A failed read leaves the surface hidden (offered stays false) rather than
-        // guessing the feature is available; the next open will try again.
-        if (active) {
-          setLoading(false);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [api]);
+  // The gate read (is the surface offered, and has the user opted in) now runs
+  // through the shared useQuery primitive (#443): the bespoke `active` staleness
+  // flag collapses into its race guard. It deliberately does NOT opt into the
+  // stale-while-revalidate cache: seeding the card from a cached `optedIn` while a
+  // background revalidation is still in flight would open a window where an
+  // optimistic toggle (`setData`, which does not bump the fetch generation) could
+  // be transiently clobbered by the in-flight read committing the stale value —
+  // a settings switch visibly flipping back. The no-flash benefit is marginal for
+  // a settings card, so re-entry goes through `loading` exactly as before (#443 review).
+  const query = useQuery<CategorizationStatusDTO>({
+    // `null` while the bridge is missing keeps the query idle (loading:false,
+    // offered:false) rather than guessing the feature is available.
+    key: api === undefined ? null : 'categorization-status',
+    fetcher: () => {
+      if (api === undefined) {
+        return Promise.reject(new Error('bridge unavailable'));
+      }
+      return api.getCategorizationStatus();
+    },
+  });
+  const { setData } = query;
+  // A failed read leaves the surface hidden (offered stays false — data undefined)
+  // rather than surfacing an error; the next open revalidates. `loading` is true
+  // only while the FIRST read is in flight.
 
   const setOptedIn = useCallback(
     (next: boolean): void => {
       if (api === undefined) {
         return;
       }
-      // Reflect the choice immediately (the toggle feels instant), then reconcile
-      // with the durable value the main process echoes back.
-      setStatus((prev) => ({ offered: prev?.offered ?? true, optedIn: next }));
+      // Reflect the choice immediately (the toggle feels instant) by writing the
+      // optimistic value straight into the query's data, then reconcile with the
+      // durable value the main process echoes back.
+      setData((prev) => ({ offered: prev?.offered ?? true, optedIn: next }));
       void api
         .setCategorizationConsent({ optedIn: next })
         .then((result) => {
-          setStatus((prev) => ({ offered: prev?.offered ?? true, optedIn: result.optedIn }));
+          setData((prev) => ({ offered: prev?.offered ?? true, optedIn: result.optedIn }));
         })
         .catch(() => {
           // Persisting failed — fall back to the previous state so the toggle never
           // lies about what is actually stored on disk.
-          setStatus((prev) => ({ offered: prev?.offered ?? true, optedIn: !next }));
+          setData((prev) => ({ offered: prev?.offered ?? true, optedIn: !next }));
         });
     },
-    [api],
+    [api, setData],
   );
 
   return {
-    offered: status?.offered ?? false,
-    optedIn: status?.optedIn ?? false,
-    loading,
+    offered: query.data?.offered ?? false,
+    optedIn: query.data?.optedIn ?? false,
+    loading: query.status === 'loading',
     setOptedIn,
   };
 }
