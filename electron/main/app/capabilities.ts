@@ -14,9 +14,13 @@
 // Local diagnostics ONLY (no telemetry, no egress, AC-4); the redacting logger keeps
 // any Error arg reduced to its safe {name, code} shape and the templates carry no path.
 
+import { existsSync } from 'node:fs';
 import type { CapabilitiesDTO } from '@shared/ipc/schemas';
+import { isGazetteerBundled } from '../categorize/gazetteer';
+import { resolveFfmpegPath, resolveFfprobePath } from '../importers/deps/media-binaries';
 import type { VideoThumbnailer } from '../library/thumbnail-service';
 import { log, type Logger } from '../log';
+import { createEmbedder } from '../search/embed-cli';
 
 /** The aggregate capability report — the pure DTO the handler validates + returns. */
 export type CapabilitiesReport = CapabilitiesDTO;
@@ -64,6 +68,101 @@ export function isResolvable(resolve: () => unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The bundled-asset resolution inputs shared by every capability probe — exactly the
+ * shape the composition root's `resolveInputs()` produces. `platform`/`arch` are
+ * optional (the media/embed resolvers default to `process.platform`/`process.arch`);
+ * a test pins them so a staged tree resolves identically on any CI host.
+ */
+export interface CapabilityResolveInputs {
+  readonly isPackaged: boolean;
+  readonly resourcesPath: string;
+  readonly projectRoot: string;
+  readonly platform?: NodeJS.Platform;
+  readonly arch?: string;
+}
+
+/** Collaborators for {@link createCapabilitiesResolver} (injectable for unit tests). */
+export interface CapabilitiesResolverDeps {
+  /** The live bundled-asset inputs, read at report time (post-`whenReady`). */
+  resolveInputs(): CapabilityResolveInputs;
+  /** Absolute path of the built off-thread cluster-worker entry (probed for presence). */
+  clusterWorkerPath: string;
+  /** Existence probe for the cluster-worker entry; defaults to `fs.existsSync`. */
+  exists?: (path: string) => boolean;
+  /** Where the loud per-seam degrade warnings go; defaults to the shared redacting logger. */
+  logger?: Pick<Logger, 'warn'>;
+}
+
+/**
+ * Build the PRODUCTION aggregate-capability resolver (#441) — the single place the
+ * per-seam probes are mapped to the DTO, so the composition root USES this exact
+ * closure and a packaging guard drives it directly (never a copy of the wiring). Each
+ * probe reflects the live bundled state at call time:
+ *   • ffmpeg / ffprobe — `resolveFfmpegPath`/`resolveFfprobePath` throw when the
+ *     bundled binary is absent (adapted to a boolean).
+ *   • clusterWorker — the built worker entry is present on disk.
+ *   • embedder — `createEmbedder` returns a typed availability sentinel.
+ *   • gazetteer — the place-name asset is bundled.
+ *
+ * LOUDNESS (the point of #441): a degraded seam that has NO eager construction-time
+ * emit point of its own — `ffprobe` and `embedder` — warns loudly here (redacted:
+ * the caught Error / the reason is a SEPARATE arg, never interpolated into the path-
+ * free template), ONCE per seam per process (a repeated `app:capabilities` query never
+ * re-spams). `ffmpeg` (logged eagerly at {@link buildVideoThumbnailer}), `clusterWorker`
+ * (logged at `createProductionClusterTransport`), and a present-but-unreadable
+ * `gazetteer` (logged at `loadGazetteer`) already emit at their own seams, so the
+ * resolver deliberately does NOT double-log them.
+ */
+export function createCapabilitiesResolver(
+  deps: CapabilitiesResolverDeps,
+): () => CapabilitiesReport {
+  const exists = deps.exists ?? existsSync;
+  const logger = deps.logger ?? log;
+  const warned = new Set<string>();
+  const warnOnce = (seam: string, message: string, redactedArg: unknown): void => {
+    if (warned.has(seam)) return;
+    warned.add(seam);
+    logger.warn(message, redactedArg);
+  };
+
+  return () =>
+    computeCapabilities({
+      // ffmpeg's degrade is already logged loudly + eagerly at buildVideoThumbnailer,
+      // so the resolver only reports it (no double-log).
+      ffmpeg: () => isResolvable(() => resolveFfmpegPath(deps.resolveInputs())),
+      ffprobe: () => {
+        try {
+          resolveFfprobePath(deps.resolveInputs());
+          return true;
+        } catch (error) {
+          warnOnce(
+            'ffprobe',
+            '[kawsay] bundled ffprobe could not be resolved; media probing is unavailable — expected in a dev checkout, but a possible packaging regression in a shipped build',
+            error,
+          );
+          return false;
+        }
+      },
+      // clusterWorker's degrade is already logged at createProductionClusterTransport.
+      clusterWorker: () => exists(deps.clusterWorkerPath),
+      embedder: () => {
+        const status = createEmbedder(deps.resolveInputs());
+        if (!status.available) {
+          warnOnce(
+            'embedder',
+            '[kawsay] smart-search embedder unavailable; search stays exact full-text — expected until the embedder model ships, but a shipped build offering smart search that cannot resolve it is a packaging regression',
+            { reason: status.reason },
+          );
+        }
+        return status.available;
+      },
+      // A present-but-unreadable gazetteer is already logged at loadGazetteer; an absent
+      // asset is the deliberate pre-publish opt-in gate, not a regression.
+      gazetteer: () => isGazetteerBundled(deps.resolveInputs()),
+    });
 }
 
 /** Collaborators for {@link buildVideoThumbnailer} (all injectable for unit tests). */

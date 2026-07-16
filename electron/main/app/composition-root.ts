@@ -21,7 +21,6 @@
 //     the settings store. Held in typed {@link LazyValue} cells whose `demand()`
 //     throws until bootstrap has set them (mirroring the former `require*()` guards).
 
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
@@ -80,8 +79,7 @@ import {
 import { handleCapabilities, handleGetVersion } from '../ipc/handlers/app';
 import {
   buildVideoThumbnailer,
-  computeCapabilities,
-  isResolvable,
+  createCapabilitiesResolver,
   type CapabilitiesReport,
 } from './capabilities';
 import { handleOpenDirectory, handleOpenFile, type ShowOpenDialog } from '../ipc/handlers/dialog';
@@ -524,18 +522,15 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
   // production transport already warns loudly, and this surfaces it in the DTO too.
   const clusterWorkerPath = join(moduleDir, 'categorization-cluster-worker.js');
 
-  // The live aggregate capability report (#441): each seam probed at report time so it
-  // reflects the current bundled state. ffmpeg/ffprobe resolution throws when absent
-  // (adapted to a boolean by `isResolvable`); the embedder + gazetteer already return
-  // typed availability. The app:/status handler + the packaging guard read this.
-  const resolveCapabilities = (): CapabilitiesReport =>
-    computeCapabilities({
-      ffmpeg: () => isResolvable(() => resolveFfmpegPath(resolveInputs())),
-      ffprobe: () => isResolvable(() => resolveFfprobePath(resolveInputs())),
-      clusterWorker: () => existsSync(clusterWorkerPath),
-      embedder: () => createEmbedder(resolveInputs()).available,
-      gazetteer: () => isGazetteerBundled(resolveInputs()),
-    });
+  // The live aggregate capability report (#441): the REAL production probe→DTO wiring
+  // lives in `createCapabilitiesResolver` (capabilities.ts), so this closure IS the
+  // one the app:/status handler answers with AND the one the packaging guard drives
+  // directly — never a copy. Each seam is probed at report time so it reflects the
+  // current bundled state; ffprobe + embedder degrades warn loudly (redacted) there.
+  const resolveCapabilities: () => CapabilitiesReport = createCapabilitiesResolver({
+    resolveInputs,
+    clusterWorkerPath,
+  });
 
   // The catalog application service — the single seam every catalog/library/import
   // handler calls into (ARCHITECTURE §2.3). Injected its Electron-free collaborators
@@ -761,6 +756,13 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
     );
 
     registerIpcHandlers(runtime.ipcMain, ipcHandlers, senderOptions);
+
+    // Report capabilities ONCE at startup (#441): computing the aggregate report here
+    // makes any degraded seam loud at BOOT — not only when the renderer later queries
+    // `app:capabilities` — so a shipped build missing a bundled binary/worker entry
+    // surfaces immediately. The resolver dedups per seam, so the later UI query never
+    // re-spams. Purely diagnostic (path-free, redacted) — the return value is unused.
+    resolveCapabilities();
 
     createMainWindow();
 
