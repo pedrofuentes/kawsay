@@ -124,13 +124,29 @@ export interface TimelinePage {
   nextCursor: TimelineCursor | null;
 }
 
-export interface SearchQuery {
+/**
+ * The server-side narrowing a search (or a semantic-hit hydration) may apply — all
+ * over EXISTING indexed columns, so a match is found regardless of its rank in the
+ * unfiltered list (#431). Every field is optional and omitting it is a no-op, so the
+ * filters compose and stay back-compatible.
+ */
+export interface SearchFilters {
+  /** Connector filter (AC-7): keep only items with an occurrence from this source. */
+  source?: SourceType | null;
+  /** Media-type filter (any-of): keep only items whose `media_type` is in this set.
+   *  Omitted or empty ⇒ every type. */
+  types?: readonly MediaType[] | null;
+  /** Inclusive lower day-bound `YYYY-MM-DD` on `capture_date`; undated items fall
+   *  outside any date bound (mirrors the old client-side rule). Omitted ⇒ no bound. */
+  fromDate?: string | null;
+  /** Inclusive upper day-bound `YYYY-MM-DD` on `capture_date`. Omitted ⇒ no bound. */
+  toDate?: string | null;
+}
+
+export interface SearchQuery extends SearchFilters {
   query: string;
   limit: number;
   offset: number;
-  /** Optional connector filter (AC-7): keep only items with an occurrence from
-   *  this source. Omitted ⇒ every source (back-compatible). */
-  source?: SourceType | null;
 }
 
 export interface SearchResult {
@@ -183,13 +199,13 @@ export interface CatalogRepo {
   search(query: SearchQuery): SearchResult;
   /**
    * Hydrate a set of item ids into full {@link ItemRow}s (M4-1b semantic-hit
-   * hydration, ADR-0029), using the SAME projection and connector-source filter as
-   * {@link search}. When `source` is non-null, only ids with an occurrence from
-   * that source are returned — so a semantic hit the exact query would have
-   * filtered out by source is never surfaced (AC-7). Unknown ids are ignored and an
-   * empty list yields []. Order is unspecified: the caller re-ranks by similarity.
+   * hydration, ADR-0029), using the SAME projection and the SAME {@link SearchFilters}
+   * as {@link search}. A semantic hit the exact query would have filtered out — by
+   * source (AC-7), media type, or capture date (#431) — is therefore never surfaced
+   * as a semantic-only extra. Unknown ids are ignored and an empty list yields [].
+   * Order is unspecified: the caller re-ranks by similarity.
    */
-  getItemsByIds(ids: readonly string[], source?: SourceType | null): ItemRow[];
+  getItemsByIds(ids: readonly string[], filters?: SearchFilters): ItemRow[];
   /** Enumerate every audio/video item (id + duration) for transcription (#157). */
   listTranscribableItems(): TranscribableItem[];
   /**
@@ -318,6 +334,54 @@ function sourceFilter(itemRef: string): string {
       JOIN sources s ON s.id = o.source_id
      WHERE o.item_id = ${itemRef}.id AND s.type = @source
   ))`;
+}
+
+/**
+ * A WHERE predicate over the INDEXED `media_type` column (`idx_items_media_type`):
+ * when `@typesJson` is a non-empty JSON array of media types, keep only items whose
+ * type is one of them; when it is NULL it is a no-op (every type passes), so the
+ * search stays back-compatible (#431). `json_each` keeps this a single static
+ * prepared statement over a variable-length type list; `COALESCE(...,'[]')` means the
+ * subquery never receives a NULL argument even if evaluated. `itemRef` is a trusted
+ * table alias literal (`items` or `i`), never user input.
+ */
+function typeFilter(itemRef: string): string {
+  return `(@typesJson IS NULL OR ${itemRef}.media_type IN (
+    SELECT value FROM json_each(COALESCE(@typesJson, '[]'))
+  ))`;
+}
+
+/**
+ * A WHERE predicate over the INDEXED `capture_date` column (`idx_items_timeline`):
+ * an inclusive day-range on the CANONICAL ISO-8601 UTC instant. Because every
+ * importer writes capture_date so lexicographic order equals chronological order
+ * (ARCHITECTURE §3.2), a `YYYY-MM-DD` from-bound compares directly, and the to-bound
+ * is extended to the last instant of that day (`…T23:59:59.999Z`) so an item captured
+ * at any time on the bound day is kept. A NULL capture_date fails either comparison,
+ * so an undated item falls outside any date bound — exactly the old client-side rule
+ * (#431). Both bounds NULL ⇒ a no-op that keeps undated items too. `itemRef` is a
+ * trusted alias literal.
+ */
+function dateFilter(itemRef: string): string {
+  return `(@fromDate IS NULL OR ${itemRef}.capture_date >= @fromDate)
+      AND (@toDate IS NULL OR ${itemRef}.capture_date <= @toDate || 'T23:59:59.999Z')`;
+}
+
+/** Bind the {@link SearchFilters} onto a statement's named params (a NULL is a no-op
+ *  for that filter). `types` is passed as a JSON array string for `json_each`. */
+function filterParams(filters: SearchFilters): {
+  source: SourceType | null;
+  typesJson: string | null;
+  fromDate: string | null;
+  toDate: string | null;
+} {
+  const types = filters.types ?? null;
+  return {
+    source: filters.source ?? null,
+    typesJson: types !== null && types.length > 0 ? JSON.stringify([...types]) : null,
+    fromDate: filters.fromDate ?? null,
+    toDate: filters.toDate ?? null,
+  };
 }
 
 interface RawItemRow {
@@ -500,7 +564,12 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     JOIN items i ON i.rowid = items_fts.rowid
     WHERE items_fts MATCH @match
       AND ${sourceFilter('i')}
-    ORDER BY rank
+      AND ${typeFilter('i')}
+      AND ${dateFilter('i')}
+    -- rank decides relevance; the (capture_date DESC NULLS LAST, id DESC) tiebreak
+    -- makes the order TOTAL so bm25 rank ties can never skip or duplicate a row across
+    -- offset pages (mirrors the timeline keyset order, #431/#456).
+    ORDER BY rank, i.capture_date DESC NULLS LAST, i.id DESC
     LIMIT @limit OFFSET @offset
   `);
   const searchCountStmt = db.prepare(`
@@ -508,6 +577,8 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     JOIN items i ON i.rowid = items_fts.rowid
     WHERE items_fts MATCH @match
       AND ${sourceFilter('i')}
+      AND ${typeFilter('i')}
+      AND ${dateFilter('i')}
   `);
   // Hydrate a JSON array of ids back into full item rows for the semantic-hit
   // merge (ADR-0029), reusing the exact search's projection + source filter so a
@@ -517,6 +588,8 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     SELECT ${ITEM_SELECT_I}, ${sourceProjection('i')} FROM items i
     WHERE i.id IN (SELECT value FROM json_each(@ids))
       AND ${sourceFilter('i')}
+      AND ${typeFilter('i')}
+      AND ${dateFilter('i')}
   `);
   // Audio + video only (the transcribable media types), newest-agnostic stable id
   // order so a re-run dispatches the same sequence (#157).
@@ -672,22 +745,20 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
       return { rows, nextCursor };
     },
 
-    search({ query, limit, offset, source }) {
+    search({ query, limit, offset, ...filters }) {
       const match = toFtsMatchQuery(query);
       if (match === null) return { rows: [], total: 0 };
-      const sourceParam = source ?? null;
-      const total = Number(
-        searchCountStmt.get<{ n: number }>({ match, source: sourceParam })?.n ?? 0,
-      );
-      const raws = searchStmt.all<RawItemRow>({ match, limit, offset, source: sourceParam });
+      const params = filterParams(filters);
+      const total = Number(searchCountStmt.get<{ n: number }>({ match, ...params })?.n ?? 0);
+      const raws = searchStmt.all<RawItemRow>({ match, limit, offset, ...params });
       return { rows: raws.map(mapItemRow), total };
     },
 
-    getItemsByIds(ids, source) {
+    getItemsByIds(ids, filters = {}) {
       if (ids.length === 0) return [];
       const raws = itemsByIdsStmt.all<RawItemRow>({
         ids: JSON.stringify([...ids]),
-        source: source ?? null,
+        ...filterParams(filters),
       });
       return raws.map(mapItemRow);
     },

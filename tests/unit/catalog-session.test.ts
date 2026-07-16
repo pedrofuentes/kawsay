@@ -1070,5 +1070,92 @@ describe('createCatalogSession (the IPC application service)', () => {
         s.dispose();
       }
     });
+
+    // ── #431: type/date filters must constrain the SEMANTIC path too ──────────
+    // A filter applied only to the exact page (and not to the hydrated semantic
+    // hits inside the merge) would let a filtered-out memory ride back in as a
+    // semantic-only extra. These pin the filter across BOTH paths of the merge.
+
+    it('applies a media-type filter to semantic hits (a wrong-type extra is never surfaced) (#431)', async () => {
+      const s = sessionWithEmbedder([1, 0, 0]);
+      try {
+        s.createLibrary({ path: root });
+        const catalogPath = join(root, 'catalog.sqlite3');
+        const db = openCatalog(catalogPath);
+        const repo = createCatalogRepo(db);
+        const embeddings = createEmbeddingsRepo(db);
+        const src = repo.registerSource({ sourceKey: 'seed', type: 'folder', label: 'Seed' });
+        // An exact "beach" match that IS a photo (survives a photo filter).
+        const exactPhoto = repo.insertItem({
+          mediaType: 'photo',
+          contentHash: 'h-exact-photo',
+          description: 'beach',
+        });
+        repo.addOccurrence({ itemId: exactPhoto, sourceId: src, sourceRef: 'e/1' });
+        // A semantic-only AUDIO hit (no lexical overlap) — must be dropped by types:['photo'].
+        const semanticAudio = repo.insertItem({
+          mediaType: 'audio',
+          contentHash: 'h-sem-audio',
+          description: 'la playa',
+        });
+        repo.addOccurrence({ itemId: semanticAudio, sourceId: src, sourceRef: 's/1' });
+        embeddings.upsertEmbedding(semanticAudio, EMBED_MODEL_ID, Float32Array.from([1, 0, 0]));
+        db.close();
+
+        const result = await s.search({ query: 'beach', limit: 10, offset: 0, types: ['photo'] });
+
+        // Only the exact photo survives; the semantic audio hit is filtered out of the merge.
+        expect(result.items.map((i) => i.id)).toEqual([exactPhoto]);
+        expect(result.items.map((i) => i.id)).not.toContain(semanticAudio);
+        // total reflects the TRUE filtered merged set, not the unfiltered one.
+        expect(result.total).toBe(1);
+      } finally {
+        s.dispose();
+      }
+    });
+
+    it('applies a day-range filter to semantic hits (an out-of-range extra is never surfaced) (#431)', async () => {
+      const s = sessionWithEmbedder([1, 0, 0]);
+      try {
+        s.createLibrary({ path: root });
+        const catalogPath = join(root, 'catalog.sqlite3');
+        const db = openCatalog(catalogPath);
+        const repo = createCatalogRepo(db);
+        const embeddings = createEmbeddingsRepo(db);
+        const src = repo.registerSource({ sourceKey: 'seed', type: 'folder', label: 'Seed' });
+        // An exact "beach" match captured inside the range.
+        const exactInRange = repo.insertItem({
+          mediaType: 'photo',
+          contentHash: 'h-exact-range',
+          description: 'beach',
+          captureDate: '2019-06-15T10:00:00.000Z',
+        });
+        repo.addOccurrence({ itemId: exactInRange, sourceId: src, sourceRef: 'e/1' });
+        // A semantic-only hit captured OUTSIDE the range — must be dropped by the date filter.
+        const semanticOutOfRange = repo.insertItem({
+          mediaType: 'photo',
+          contentHash: 'h-sem-range',
+          description: 'la playa',
+          captureDate: '2021-01-01T10:00:00.000Z',
+        });
+        repo.addOccurrence({ itemId: semanticOutOfRange, sourceId: src, sourceRef: 's/1' });
+        embeddings.upsertEmbedding(semanticOutOfRange, EMBED_MODEL_ID, Float32Array.from([1, 0, 0]));
+        db.close();
+
+        const result = await s.search({
+          query: 'beach',
+          limit: 10,
+          offset: 0,
+          fromDate: '2019-01-01',
+          toDate: '2019-12-31',
+        });
+
+        expect(result.items.map((i) => i.id)).toEqual([exactInRange]);
+        expect(result.items.map((i) => i.id)).not.toContain(semanticOutOfRange);
+        expect(result.total).toBe(1);
+      } finally {
+        s.dispose();
+      }
+    });
   });
 });

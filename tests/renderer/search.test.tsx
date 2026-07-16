@@ -9,6 +9,7 @@ import { NavigationProvider } from '@renderer/lib/navigation';
 import { makeFakeApi, makeItemCard, makeSearchResult } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
 import { renderWithProviders, SiblingsProbe, ViewProbe, wrapInProviders } from './support/render';
+import { expectNoAxeViolations } from './support/axe';
 
 /** Render the Search view inside the three renderer providers with a fake bridge. */
 function renderSearch(api: FakeApi = makeFakeApi()) {
@@ -205,19 +206,31 @@ describe('Search — empty, loading and error states', () => {
   });
 });
 
-describe('Search — filters narrow the matches', () => {
-  function twoTypedItems() {
-    return makeSearchResult({
-      items: [
-        makeItemCard({ mediaType: 'photo', title: 'Beach picnic' }),
-        makeItemCard({ mediaType: 'video', title: 'Birthday clip' }),
-      ],
-    });
+describe('Search — filters narrow the matches (server-side, #431)', () => {
+  const beachPhoto = makeItemCard({ mediaType: 'photo', title: 'Beach picnic' });
+  const birthdayVideo = makeItemCard({ mediaType: 'video', title: 'Birthday clip' });
+
+  /** A bridge that narrows by the SAME server-side params the view now sends: any-of
+   *  `types` and the inclusive `fromDate` day-bound (over the tile capture dates). */
+  function filterAwareApi() {
+    const all = [beachPhoto, birthdayVideo];
+    const searchCatalog = vi.fn(
+      (input: { types?: readonly string[]; fromDate?: string; toDate?: string }) => {
+        const items = all.filter((item) => {
+          if (input.types && !input.types.includes(item.mediaType)) return false;
+          const day = (item.captureDate ?? '').slice(0, 10);
+          if (input.fromDate && day < input.fromDate) return false;
+          if (input.toDate && day > input.toDate) return false;
+          return true;
+        });
+        return Promise.resolve(makeSearchResult({ items }));
+      },
+    );
+    return makeFakeApi({ searchCatalog });
   }
 
-  it('narrows results by media type and exposes pressed state on the active chip', async () => {
-    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(twoTypedItems())) });
-    const { user } = renderSearch(api);
+  it('narrows by media type through the bridge and exposes pressed state on the chip', async () => {
+    const { user } = renderSearch(filterAwareApi());
 
     await user.type(screen.getByRole('searchbox'), 'b');
     expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
@@ -227,31 +240,36 @@ describe('Search — filters narrow the matches', () => {
     expect(videos).toHaveAttribute('aria-pressed', 'false');
     await user.click(videos);
 
+    // The catalogue re-runs server-side and returns only the video — the photo is gone
+    // because it was never in the filtered set, not because it was hidden in memory.
     expect(videos).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText(caption('Birthday clip'))).toBeInTheDocument();
-    expect(screen.queryByText(caption('Beach picnic'))).not.toBeInTheDocument();
+    expect(await screen.findByText(caption('Birthday clip'))).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(caption('Beach picnic'))).not.toBeInTheDocument(),
+    );
   });
 
-  it('groups the type filters under an accessible group label', async () => {
-    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(twoTypedItems())) });
-    renderSearch(api);
+  it('groups the type filters under an accessible group label', () => {
+    renderSearch(filterAwareApi());
     expect(screen.getByRole('group', { name: /type/i })).toBeInTheDocument();
   });
 
-  it('narrows results by date range', async () => {
-    const api = makeFakeApi({
-      searchCatalog: vi.fn(() =>
-        Promise.resolve(
-          makeSearchResult({
-            items: [
-              makeItemCard({ title: 'June memory', captureDate: '2019-06-15T10:00:00.000Z' }),
-              makeItemCard({ title: 'January memory', captureDate: '2020-01-10T10:00:00.000Z' }),
-            ],
-          }),
-        ),
-      ),
+  it('narrows by date range through the bridge', async () => {
+    const june = makeItemCard({ title: 'June memory', captureDate: '2019-06-15T10:00:00.000Z' });
+    const january = makeItemCard({
+      title: 'January memory',
+      captureDate: '2020-01-10T10:00:00.000Z',
     });
-    const { user } = renderSearch(api);
+    const searchCatalog = vi.fn((input: { fromDate?: string }) => {
+      const all = [june, january];
+      const from = input.fromDate;
+      const items =
+        from === undefined
+          ? all
+          : all.filter((item) => (item.captureDate ?? '').slice(0, 10) >= from);
+      return Promise.resolve(makeSearchResult({ items }));
+    });
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
 
     await user.type(screen.getByRole('searchbox'), 'memory');
     expect(await screen.findByText(caption('June memory'))).toBeInTheDocument();
@@ -259,24 +277,23 @@ describe('Search — filters narrow the matches', () => {
 
     fireEvent.change(screen.getByLabelText(/^from$/i), { target: { value: '2020-01-01' } });
 
-    expect(screen.getByText(caption('January memory'))).toBeInTheDocument();
-    expect(screen.queryByText(caption('June memory'))).not.toBeInTheDocument();
+    expect(await screen.findByText(caption('January memory'))).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(caption('June memory'))).not.toBeInTheDocument());
   });
 
   it('shows a "no matches for these filters" state with a way to clear them', async () => {
-    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(twoTypedItems())) });
-    const { user } = renderSearch(api);
+    const { user } = renderSearch(filterAwareApi());
 
     await user.type(screen.getByRole('searchbox'), 'b');
     expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
 
-    // Filter to a type neither result has → every match is hidden.
+    // Filter to a type neither result has → the catalogue returns an empty filtered set.
     await user.click(screen.getByRole('button', { name: /voice notes/i }));
 
     expect(await screen.findByText(/match these filters/i)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /clear filters/i }));
 
-    expect(screen.getByText(caption('Beach picnic'))).toBeInTheDocument();
+    expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
     expect(screen.getByText(caption('Birthday clip'))).toBeInTheDocument();
   });
 });
@@ -436,6 +453,180 @@ describe('Search — a transcript match is made clear (AC-19)', () => {
     await screen.findByText(/found in what was said/i);
 
     expect(screen.getAllByRole('article')).toHaveLength(1);
+  });
+});
+
+describe('Search — filters narrow the whole library server-side (#431)', () => {
+  it('sends the chosen media types to the catalog instead of filtering in memory', async () => {
+    const searchCatalog = vi.fn(() => Promise.resolve(makeSearchResult({ items: [] })));
+    const api = makeFakeApi({ searchCatalog });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await waitFor(() => expect(searchCatalog).toHaveBeenCalledWith({ query: 'mama', limit: 50 }));
+
+    // Choosing a type re-runs the search server-side (a real searchCatalog param),
+    // so a match ranked past the first page is still reachable.
+    await user.click(screen.getByRole('button', { name: /videos/i }));
+    await waitFor(() =>
+      expect(searchCatalog).toHaveBeenLastCalledWith({
+        query: 'mama',
+        limit: 50,
+        types: ['video'],
+      }),
+    );
+  });
+
+  it('sends the date range to the catalog server-side', async () => {
+    const searchCatalog = vi.fn(() => Promise.resolve(makeSearchResult({ items: [] })));
+    const api = makeFakeApi({ searchCatalog });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await waitFor(() => expect(searchCatalog).toHaveBeenCalledWith({ query: 'mama', limit: 50 }));
+
+    fireEvent.change(screen.getByLabelText(/^from$/i), { target: { value: '2020-01-01' } });
+    await waitFor(() =>
+      expect(searchCatalog).toHaveBeenLastCalledWith({
+        query: 'mama',
+        limit: 50,
+        fromDate: '2020-01-01',
+      }),
+    );
+  });
+});
+
+describe('Search — truncation and "show more" (#431)', () => {
+  /** A first page of 50 tiles out of a larger true total, then a distinct second page. */
+  function twoServerPages() {
+    const first = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `First ${i}` }));
+    const second = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `Second ${i}` }));
+    const searchCatalog = vi.fn((input: { offset?: number }) =>
+      Promise.resolve(
+        makeSearchResult({ items: (input.offset ?? 0) === 0 ? first : second, total: 128 }),
+      ),
+    );
+    return { first, second, searchCatalog };
+  }
+
+  it('announces the TRUE filtered total, not just the number on the first page', async () => {
+    const { searchCatalog } = twoServerPages();
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+
+    // The count reflects the whole filtered library (128), even though only 50 are shown.
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/128 memories/i));
+  });
+
+  it('offers a gentle "show more" that loads and appends the next page', async () => {
+    const { searchCatalog } = twoServerPages();
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    expect(await screen.findByText(caption('First 0'))).toBeInTheDocument();
+    // Not everything fits on one page, so a way to see more is offered.
+    const more = await screen.findByRole('button', { name: /show more/i });
+
+    await user.click(more);
+
+    // The next page is fetched with an offset and APPENDED (the first page stays).
+    await waitFor(() => expect(searchCatalog).toHaveBeenLastCalledWith({ query: 'mama', limit: 50, offset: 50 }));
+    expect(await screen.findByText(caption('Second 0'))).toBeInTheDocument();
+    expect(screen.getByText(caption('First 0'))).toBeInTheDocument();
+  });
+
+  it('does not offer "show more" once the whole filtered set is on screen', async () => {
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(makeSearchResult({ items: [makeItemCard({ title: 'Only one' })], total: 1 })),
+      ),
+    });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'one');
+    expect(await screen.findByText(caption('Only one'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show more/i })).not.toBeInTheDocument();
+  });
+
+  it('has no WCAG axe violations while showing the "show more" affordance', async () => {
+    const { searchCatalog } = twoServerPages();
+    const { user, container } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await screen.findByRole('button', { name: /show more/i });
+
+    await expectNoAxeViolations(container);
+  });
+
+  it('does not duplicate rows when "Show more" is double-clicked before a page settles (#456)', async () => {
+    const first = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `First ${i}` }));
+    const second = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `Second ${i}` }));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const searchCatalog = vi.fn((input: { offset?: number }) =>
+      (input.offset ?? 0) === 0
+        ? Promise.resolve(makeSearchResult({ items: first, total: 128 }))
+        : gate.then(() => makeSearchResult({ items: second, total: 128 })),
+    );
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    const more = await screen.findByRole('button', { name: /show more/i });
+
+    // Two clicks dispatched in the SAME commit, before React re-renders the button to
+    // its disabled state — the classic double-append race. Only ONE append must survive.
+    await act(async () => {
+      more.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      more.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+
+    await act(async () => {
+      release();
+      await gate;
+    });
+
+    await screen.findByText(caption('Second 0'));
+    expect(screen.getAllByText(caption('Second 0'))).toHaveLength(1);
+    // 50 (first page) + 50 (one appended page) — never 150.
+    expect(screen.getAllByRole('article')).toHaveLength(100);
+  });
+
+  it('preserves already-loaded results when "Show more" fails, with an inline retry that resumes (#456)', async () => {
+    const first = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `First ${i}` }));
+    const second = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `Second ${i}` }));
+    let moreCalls = 0;
+    const searchCatalog = vi.fn((input: { offset?: number }) => {
+      if ((input.offset ?? 0) === 0) {
+        return Promise.resolve(makeSearchResult({ items: first, total: 128 }));
+      }
+      moreCalls += 1;
+      // The first "show more" attempt fails; the retry (same offset) succeeds.
+      return moreCalls === 1
+        ? Promise.reject(new Error('SQLITE_BUSY: database is locked'))
+        : Promise.resolve(makeSearchResult({ items: second, total: 128 }));
+    });
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    expect(await screen.findByText(caption('First 0'))).toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: /show more/i }));
+
+    // The already-loaded page is NOT wiped, and the full-page error never appears.
+    expect(await screen.findByText(/couldn't load more/i)).toBeInTheDocument();
+    expect(screen.getByText(caption('First 0'))).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't search just now/i)).not.toBeInTheDocument();
+
+    // The inline retry RESUMES from the current offset (50), not from page 1.
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+    await waitFor(() =>
+      expect(searchCatalog).toHaveBeenLastCalledWith({ query: 'mama', limit: 50, offset: 50 }),
+    );
+    expect(await screen.findByText(caption('Second 0'))).toBeInTheDocument();
+    expect(screen.getByText(caption('First 0'))).toBeInTheDocument();
   });
 });
 

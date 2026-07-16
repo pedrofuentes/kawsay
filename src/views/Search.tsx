@@ -1,10 +1,11 @@
 // The Search screen (Journey E; AC-6 search half + AC-7). A calm, forgiving way
 // to find one memory by a few plain words, then narrow by type, source or date.
-// The query is debounced and run through the typed `searchCatalog` bridge. The
-// `source` filter is applied SERVER-SIDE — it travels with the request so the
-// catalogue narrows the match set to one connector (AC-7) — while type and date
-// stay client-side filters over the returned page (the result tiles carry
-// `mediaType` + `captureDate`, so those we can narrow on honestly in memory).
+// The query is debounced and run through the typed `searchCatalog` bridge. EVERY
+// filter — connector `source` (AC-7), media `types`, and the `from`/`to` day-range —
+// is applied SERVER-SIDE: each travels with the request so the catalogue narrows the
+// WHOLE library, not just the first page (#431). So a memory matching the query and
+// the filters is findable however it ranks, the count is the true filtered total, and
+// a gentle "show more" pages through the rest by offset rather than hiding them.
 //
 // Everything the catalog returns is UNTRUSTED data (a loved one's words, captions,
 // filenames). It is rendered as escaped React text — never markup — and the match
@@ -13,7 +14,7 @@
 // The `source` value is a validated enum, shown via the shared source set.
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
-import type { ItemCardDTO, MediaType, SearchResultDTO, SourceType } from '@shared/kawsay-api';
+import type { ItemCardDTO, MediaType, SourceType } from '@shared/kawsay-api';
 import { Button } from '@renderer/components/Button';
 import { EmptyState } from '@renderer/components/EmptyState';
 import { ErrorBanner } from '@renderer/components/ErrorBanner';
@@ -31,7 +32,7 @@ const SEARCH_DEBOUNCE_MS = 200;
 /** A calm page size — the top matches, never an overwhelming wall. */
 const SEARCH_LIMIT = 50;
 
-type Phase = 'idle' | 'searching' | 'error';
+type Phase = 'idle' | 'searching' | 'loadingMore' | 'error';
 
 interface TypeMeta {
   /** Singular label shown on a result ("Voice note"). */
@@ -63,14 +64,6 @@ function formatDate(iso: string | null): string | null {
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return null;
   return DATE_FORMAT.format(new Date(time));
-}
-
-/** Day-precision `YYYY-MM-DD` key for lexical range compares, or `null`. */
-function dayKey(iso: string | null): string | null {
-  if (iso === null) return null;
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) return null;
-  return new Date(time).toISOString().slice(0, 10);
 }
 
 /** The caption to show for a result — title, then description, then a gentle fallback. */
@@ -160,22 +153,44 @@ export function Search(): ReactElement {
   const [toDate, setToDate] = useState('');
 
   const [phase, setPhase] = useState<Phase>('idle');
-  const [result, setResult] = useState<SearchResultDTO | null>(null);
+  // The results ACCUMULATE across pages: a fresh search replaces the list at offset 0,
+  // and "show more" appends the next page — so nothing already found ever disappears.
+  const [items, setItems] = useState<ItemCardDTO[]>([]);
+  // The TRUE filtered total the catalogue reports, so the count and the "show more"
+  // affordance reflect the whole library, not just the page on screen (#431).
+  const [total, setTotal] = useState(0);
+  // Whether the CURRENT query+filters have produced at least one response — so an
+  // empty state (vs the calm "looking…" placeholder) appears only once it answers.
+  const [loaded, setLoaded] = useState(false);
+  // A "show more" that failed — kept SEPARATE from the initial-search error so a failed
+  // page never wipes the memories already gathered: the loaded results stay on screen
+  // and a gentle inline retry resumes from the current offset (nothing is ever lost).
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
 
-  // Monotonic request id so a slow earlier search can never overwrite a newer one.
+  // Monotonic request id so a slow earlier search — or a stale "show more" — can never
+  // overwrite a newer one.
   const requestId = useRef(0);
   const headingRef = useRef<HTMLHeadingElement>(null);
+
+  // The active media types in a stable display order, sent to the catalogue so the
+  // WHOLE library is narrowed by type, not just the page already on screen (#431).
+  const typesList = useMemo(() => TYPE_ORDER.filter((type) => activeTypes.has(type)), [activeTypes]);
 
   // Re-orient keyboard and screen-reader users to the screen heading on entry.
   useEffect(() => {
     headingRef.current?.focus();
   }, []);
 
+  // A fresh search whenever the query OR any filter changes. Previous results stay on
+  // screen until the new first page resolves (no flash), then REPLACE the list.
   useEffect(() => {
     if (query === '') {
       requestId.current += 1;
-      setResult(null);
+      setItems([]);
+      setTotal(0);
+      setLoaded(false);
+      setLoadMoreFailed(false);
       setPhase('idle');
       return;
     }
@@ -184,43 +199,77 @@ export function Search(): ReactElement {
       return;
     }
     const id = (requestId.current += 1);
+    setLoaded(false);
+    setLoadMoreFailed(false);
     setPhase('searching');
     api
       .searchCatalog({
         query,
         limit: SEARCH_LIMIT,
-        // The source filter is server-side: send it only when a connector is chosen.
+        // Every filter is server-side: each travels only when set, so an unfiltered
+        // call stays a plain { query, limit } and the catalogue narrows the whole set.
         ...(activeSource !== null ? { source: activeSource } : {}),
+        ...(typesList.length > 0 ? { types: typesList } : {}),
+        ...(fromDate !== '' ? { fromDate } : {}),
+        ...(toDate !== '' ? { toDate } : {}),
       })
       .then((page) => {
         if (id !== requestId.current) return;
-        setResult(page);
+        setItems(page.items);
+        setTotal(page.total);
+        setLoaded(true);
         setPhase('idle');
       })
       .catch(() => {
         if (id !== requestId.current) return;
         setPhase('error');
       });
-  }, [api, query, activeSource, retryToken]);
-
-  const visibleItems = useMemo<ItemCardDTO[]>(() => {
-    if (result === null) return [];
-    return result.items.filter((item) => {
-      if (activeTypes.size > 0 && !activeTypes.has(item.mediaType)) return false;
-      if (fromDate !== '' || toDate !== '') {
-        const day = dayKey(item.captureDate);
-        if (day === null) return false;
-        if (fromDate !== '' && day < fromDate) return false;
-        if (toDate !== '' && day > toDate) return false;
-      }
-      return true;
-    });
-  }, [result, activeTypes, fromDate, toDate]);
+  }, [api, query, activeSource, typesList, fromDate, toDate, retryToken]);
 
   const hasQuery = query !== '';
-  const hasRawResults = result !== null && result.items.length > 0;
+  const hasResults = items.length > 0;
+  // There is more of the filtered set beyond what is on screen (#431).
+  const hasMore = loaded && items.length < total;
   const filtersActive =
     activeTypes.size > 0 || activeSource !== null || fromDate !== '' || toDate !== '';
+
+  // Fetch and APPEND the next page (by offset) within the SAME search — a no-op while a
+  // page is already in flight, or once the whole filtered set is on screen. Every call
+  // BUMPS the monotonic request id and captures it, so two rapid "show more" clicks
+  // (a same-tick double-click) can't both append: the earlier response is stale and
+  // dropped, leaving exactly one page appended (#456).
+  const loadMore = useCallback(() => {
+    if (api === undefined || phase === 'searching' || phase === 'loadingMore') return;
+    if (items.length >= total) return;
+    const id = (requestId.current += 1);
+    const offset = items.length;
+    setLoadMoreFailed(false);
+    setPhase('loadingMore');
+    api
+      .searchCatalog({
+        query,
+        limit: SEARCH_LIMIT,
+        offset,
+        ...(activeSource !== null ? { source: activeSource } : {}),
+        ...(typesList.length > 0 ? { types: typesList } : {}),
+        ...(fromDate !== '' ? { fromDate } : {}),
+        ...(toDate !== '' ? { toDate } : {}),
+      })
+      .then((page) => {
+        if (id !== requestId.current) return;
+        setItems((prev) => [...prev, ...page.items]);
+        setTotal(page.total);
+        setPhase('idle');
+      })
+      .catch(() => {
+        if (id !== requestId.current) return;
+        // Preserve everything already gathered: return to idle (the results stay on
+        // screen) and raise an INLINE retry that resumes from this same offset — never
+        // the full-page error, which would wipe a deep scroll (#456).
+        setPhase('idle');
+        setLoadMoreFailed(true);
+      });
+  }, [api, phase, items.length, total, query, activeSource, typesList, fromDate, toDate]);
 
   const toggleType = useCallback((type: MediaType) => {
     setActiveTypes((prev) => {
@@ -251,10 +300,11 @@ export function Search(): ReactElement {
     if (!hasQuery) return '';
     if (phase === 'searching') return 'Searching…';
     if (phase === 'error') return '';
-    if (!hasRawResults) return 'No memories found';
-    const count = visibleItems.length;
-    return `${count} ${count === 1 ? 'memory' : 'memories'} found`;
-  }, [hasQuery, phase, hasRawResults, query, visibleItems.length]);
+    if (!loaded) return '';
+    if (total === 0) return 'No memories found';
+    // The TRUE filtered total — even when only the first page is on screen (#431).
+    return `${total} ${total === 1 ? 'memory' : 'memories'} found`;
+  }, [hasQuery, phase, loaded, total]);
 
   const label = who !== null ? `Search ${who}'s memories` : 'Search the memories';
 
@@ -412,13 +462,24 @@ export function Search(): ReactElement {
     }
 
     // A first search is still in flight and there is nothing prior to keep on screen.
-    if (result === null) {
+    if (!loaded && !hasResults) {
       return (
         <p className="font-body text-base text-text-secondary">Looking through the memories…</p>
       );
     }
 
-    if (!hasRawResults) {
+    // The catalogue has answered with nothing. A filtered miss and an outright miss
+    // read differently: one gently points at the filters, the other at the words.
+    if (loaded && !hasResults) {
+      if (filtersActive) {
+        return (
+          <EmptyState
+            icon={<Icon name="search" className="h-8 w-8" />}
+            title="No memories match these filters"
+            description="Try removing a filter to see more of what you searched for. The “Clear filters” button above brings them all back."
+          />
+        );
+      }
       return (
         <EmptyState
           icon={<Icon name="search" className="h-8 w-8" />}
@@ -433,24 +494,45 @@ export function Search(): ReactElement {
       );
     }
 
-    if (visibleItems.length === 0) {
-      return (
-        <EmptyState
-          icon={<Icon name="search" className="h-8 w-8" />}
-          title="No memories match these filters"
-          description="Try removing a filter to see more of what you searched for. The “Clear filters” button above brings them all back."
-        />
-      );
-    }
-
     return (
-      <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {visibleItems.map((item) => (
-          <li key={item.id}>
-            <ResultCard item={item} term={query} siblings={visibleItems} />
-          </li>
-        ))}
-      </ul>
+      <div className="flex flex-col gap-6">
+        <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {items.map((item) => (
+            <li key={item.id}>
+              <ResultCard item={item} term={query} siblings={items} />
+            </li>
+          ))}
+        </ul>
+        {renderShowMore()}
+      </div>
+    );
+  }
+
+  // A gentle way to reach the rest of the filtered set (#431): the count is always the
+  // TRUE total, so a person sees how many memories are still waiting and can bring them
+  // in a page at a time — never a silent truncation. A failed page keeps the memories
+  // already gathered on screen and offers an inline retry that resumes here (#456).
+  function renderShowMore(): ReactElement | null {
+    if (!hasMore) return null;
+    const loadingMore = phase === 'loadingMore';
+    return (
+      <div className="flex flex-col items-center gap-3">
+        <p className="font-body text-sm text-text-secondary">
+          Showing {items.length} of {total} memories
+        </p>
+        {loadMoreFailed ? (
+          <p role="status" className="font-body text-sm text-text-secondary">
+            We couldn&apos;t load more just now — every memory here is safe.
+          </p>
+        ) : null}
+        <Button variant="secondary" onClick={loadMore} disabled={loadingMore} aria-busy={loadingMore}>
+          {loadingMore
+            ? 'Gathering more…'
+            : loadMoreFailed
+              ? 'Try again'
+              : 'Show more memories'}
+        </Button>
+      </div>
     );
   }
 }

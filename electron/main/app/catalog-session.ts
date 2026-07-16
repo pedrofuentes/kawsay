@@ -12,7 +12,7 @@
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { SourceType } from '@shared/catalog';
+import type { MediaType, SourceType } from '@shared/catalog';
 import {
   collectionSummarySchema,
   itemCardSchema,
@@ -148,6 +148,12 @@ export interface CatalogSession {
     limit: number;
     offset: number;
     source?: SourceType;
+    /** Media-type filter (any-of); applied server-side across BOTH the exact-FTS and
+     *  the smart-search merge paths (#431). Omitted/empty ⇒ every type. */
+    types?: readonly MediaType[];
+    /** Inclusive `YYYY-MM-DD` day-bounds on capture date, applied server-side (#431). */
+    fromDate?: string;
+    toDate?: string;
   }): Promise<SearchResultDTO>;
   /** Render one memory's bounded thumbnail by opaque id (U4), or null. */
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
@@ -400,6 +406,17 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     },
     async search(input) {
       const { repo, embeddings } = requireOpen();
+      // The server-side narrowing (connector source AC-7; media type + capture date
+      // #431) travels with EVERY catalog read below — the paginated exact page, the
+      // whole-set exact fetch for the merge, and the semantic-hit hydration — so a
+      // filtered-out memory can never ride back in on any path, and `total` is always
+      // the TRUE filtered total.
+      const filters = {
+        source: input.source,
+        types: input.types,
+        fromDate: input.fromDate,
+        toDate: input.toDate,
+      };
       // The exact FTS page is ALWAYS the authoritative exact set (AC-7), correctly
       // paginated by offset/limit. It is the byte-identical fallback for every branch
       // below (no embedder, nothing embeddable, empty embed, no stored vectors, or a
@@ -408,7 +425,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         query: input.query,
         limit: input.limit,
         offset: input.offset,
-        source: input.source,
+        ...filters,
       });
       const exactPageDto = (): SearchResultDTO => ({
         items: exactPage.rows.map(toItemCard),
@@ -448,14 +465,15 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
           query: input.query,
           limit: exactPage.total,
           offset: 0,
-          source: input.source,
+          ...filters,
         });
 
-        // Hydrate the hit ids, honouring the SAME source filter as the exact query,
-        // so a semantic hit from a filtered-out connector is never surfaced (AC-7).
+        // Hydrate the hit ids, honouring the SAME filters as the exact query, so a
+        // semantic hit from a filtered-out connector (AC-7), media type, or date
+        // range (#431) is never surfaced as a semantic-only extra.
         const rows = repo.getItemsByIds(
           hits.map((hit) => hit.itemId),
-          input.source,
+          filters,
         );
         const rowById = new Map(rows.map((row) => [row.id, row] as const));
         const semanticHits: SemanticHit<ItemRow>[] = [];

@@ -27,7 +27,7 @@ import type {
   ModelDownloadProgressEvent,
   TranscriptionProgressEvent,
 } from '@shared/ipc/events';
-import type { SourceType } from '@shared/catalog';
+import type { MediaType, SourceType } from '@shared/catalog';
 
 export interface KawsayAPI {
   /** The running application version, validated end-to-end (channel `app:getVersion`). */
@@ -40,12 +40,21 @@ export interface KawsayAPI {
 
   /** Fetch one keyset page of the timeline (newest first). */
   getTimeline(input: { limit: number; cursor?: string }): Promise<TimelinePageDTO>;
-  /** Full-text search the open catalog, optionally narrowed to one connector source. */
+  /**
+   * Full-text search the open catalog. Every filter is applied SERVER-SIDE across the
+   * whole library — the connector `source` (AC-7), the any-of media `types`, and the
+   * inclusive `fromDate`/`toDate` day-bounds (#431) — so a matching memory is found
+   * regardless of its rank, and `total` is the true filtered count. Page through the
+   * filtered set with `offset` + `limit`.
+   */
   searchCatalog(input: {
     query: string;
     limit?: number;
     offset?: number;
     source?: SourceType;
+    types?: MediaType[];
+    fromDate?: string;
+    toDate?: string;
   }): Promise<SearchResultDTO>;
 
   /**
