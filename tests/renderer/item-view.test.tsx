@@ -508,15 +508,26 @@ describe('ItemView — favourite save is bounded + busy-clear gate (#489, #490)'
       expect(result.current.isFavourite).toBe(true);
       expect(result.current.isSaving).toBe(true);
 
-      // The invoke never resolves; advancing past the bound must self-heal.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS);
-      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // The invoke never resolves; advancing past the bound must self-heal.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS);
+        });
 
-      // Recovered: reverted to the pre-toggle value, re-enabled, calm failure copy.
-      expect(result.current.isSaving).toBe(false);
-      expect(result.current.isFavourite).toBe(false);
-      expect(result.current.announcement).toBe(SAVE_FAILURE_COPY);
+        // Recovered: reverted to the pre-toggle value, re-enabled, calm failure copy,
+        // and the timeout took the same reverting path a rejected save does.
+        expect(result.current.isSaving).toBe(false);
+        expect(result.current.isFavourite).toBe(false);
+        expect(result.current.announcement).toBe(SAVE_FAILURE_COPY);
+        expect(
+          warnSpy.mock.calls.some((call) =>
+            String(call[0]).includes('favourite toggle failed; reverting'),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     } finally {
       vi.useRealTimers();
     }
