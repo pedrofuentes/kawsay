@@ -134,6 +134,26 @@ describe('createMediaProtocolHandler — hardened id→bytes serving (#428)', ()
     expect((await res.arrayBuffer()).byteLength).toBe(0);
   });
 
+  it('reports a PRIVACY-PRESERVING diagnostic (name/code only, never a path) when a serve is rejected', async () => {
+    const events: Array<{ name: string; code?: string }> = [];
+    const handler = createMediaProtocolHandler({
+      resolve: () => {
+        const error = new Error('ERR_ORIGINAL_PATH_ESCAPE: /Users/someone/secret escapes root');
+        (error as { code?: string }).code = 'ERR_ORIGINAL_PATH_ESCAPE';
+        throw error;
+      },
+      onRejected: (info) => events.push(info),
+    });
+
+    const res = await handler(request(mediaUrl(VALID_ID)));
+    expect(res.status).toBe(404);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.name).toBe('Error');
+    expect(events[0]?.code).toBe('ERR_ORIGINAL_PATH_ESCAPE');
+    // The diagnostic carries ONLY {name,code} — no filesystem path leaks into it.
+    expect(JSON.stringify(events[0])).not.toContain('secret');
+  });
+
   it('returns 404 when the resolved file does not exist on disk', async () => {
     const handler = handlerFor(() => ({ absPath: join(root, 'originals', 'missing.bin'), mimeType: 'audio/mpeg' }));
     const res = await handler(request(mediaUrl(VALID_ID)));

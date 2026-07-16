@@ -5,7 +5,7 @@
 // hardened, local-only `kawsay-media:` protocol; the renderer only ever names the
 // opaque id, never a path.
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ItemMedia } from '@renderer/components/ItemMedia';
 import { mediaUrl } from '@shared/media';
 import { makeItemCard } from './support/fake-api';
@@ -90,6 +90,31 @@ describe('ItemMedia — explicit-intent playback (never autoplay) (#428)', () =>
       expect(container.querySelector('audio, video, img')).toBeNull();
       unmount();
     }
+  });
+
+  it('falls back to a calm message when a voice note fails to load (never a broken element)', () => {
+    const item = makeItemCard({ mediaType: 'audio', title: 'A voice note' });
+    const { container } = render(<ItemMedia item={item} />);
+
+    const audio = container.querySelector('audio');
+    expect(audio).not.toBeNull();
+    fireEvent.error(audio as HTMLElement);
+
+    // The broken player is replaced by a gentle, non-technical fallback.
+    expect(container.querySelector('audio')).toBeNull();
+    expect(screen.getByText(/couldn't play|couldn’t play|couldn't be played|couldn’t be played/i)).toBeInTheDocument();
+  });
+
+  it('falls back gracefully when a photo fails to load', () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A view' });
+    const { container } = render(<ItemMedia item={item} />);
+
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    fireEvent.error(img as HTMLElement);
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText(/couldn't show|couldn’t show|couldn't be shown|couldn’t be shown|couldn't play|couldn’t play/i)).toBeInTheDocument();
   });
 
   it('has no axe violations for audio, video, or a full-size photo', async () => {
