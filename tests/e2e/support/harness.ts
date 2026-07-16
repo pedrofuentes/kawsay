@@ -120,38 +120,56 @@ let nativeDbProbe: Promise<boolean> | undefined;
 /**
  * Whether the running Electron build can actually open a Kawsay catalog — probed
  * ONCE (cached) by launching a throwaway app and attempting a real library
- * creation over the IPC bridge. A native-ABI mismatch surfaces as a rejected
- * invoke mentioning `NODE_MODULE_VERSION`; anything else (a genuine bug) is NOT
- * swallowed — it re-throws so a real regression still fails loudly.
+ * creation over the IPC bridge. A native-ABI mismatch surfaces as a rejected invoke
+ * carrying the stable `ERR_NATIVE_MODULE` code (the DB layer tags the addon-load
+ * failure and the #440 redacted envelope preserves the code across the boundary);
+ * anything else (a genuine bug) is NOT swallowed — it re-throws so a real regression
+ * still fails loudly.
  */
 export async function nativeCatalogAvailable(): Promise<boolean> {
   nativeDbProbe ??= (async (): Promise<boolean> => {
     const { app, page } = await launchKawsay();
     try {
       const probeDir = makeLibraryDir();
-      const outcome = await page.evaluate(async (path): Promise<{ ok: boolean; message: string }> => {
-        const bridge = (window as unknown as {
-          kawsayAPI: { createLibrary(input: { path: string; personName?: string }): Promise<unknown> };
-        }).kawsayAPI;
-        try {
-          await bridge.createLibrary({ path, personName: 'ABI probe' });
-          return { ok: true, message: '' };
-        } catch (error) {
-          return { ok: false, message: error instanceof Error ? error.message : String(error) };
-        }
-      }, probeDir);
+      const outcome = await page.evaluate(
+        async (path): Promise<{ ok: boolean; code: string }> => {
+          const bridge = (window as unknown as {
+            kawsayAPI: { createLibrary(input: { path: string; personName?: string }): Promise<unknown> };
+          }).kawsayAPI;
+          try {
+            await bridge.createLibrary({ path, personName: 'ABI probe' });
+            return { ok: true, code: '' };
+          } catch (error) {
+            // The IPC layer now redacts the raw message (#440): a fault reaches the
+            // renderer as a plain Error whose message ENCODES only a stable {code,
+            // name} (the contextBridge strips custom fields but keeps the message).
+            // A native-module load failure is tagged `ERR_NATIVE_MODULE`
+            // (electron/main/db/connection.ts), so the probe recognises the skip
+            // condition from the decoded code, not from free-text triage.
+            const TAG = 'KAWSAY_IPC_ERR:';
+            const raw = error instanceof Error ? error.message : String(error);
+            let code = '';
+            if (raw.startsWith(TAG)) {
+              try {
+                code = String((JSON.parse(raw.slice(TAG.length)) as { code?: unknown }).code ?? '');
+              } catch {
+                code = '';
+              }
+            }
+            return { ok: false, code };
+          }
+        },
+        probeDir,
+      );
       if (outcome.ok) return true;
-      // Any NATIVE-addon load/ABI failure means the library-backed journeys cannot
-      // run here — degrade to a skip (never a hard CI failure). A non-native error
-      // (a genuine logic regression) is NOT swallowed: it re-throws and fails loud.
-      if (
-        /NODE_MODULE_VERSION|was compiled against a different Node\.js|better_sqlite3(\.node)?|dlopen|invalid ELF|\.node['"]?\b/iu.test(
-          outcome.message,
-        )
-      ) {
+      // A NATIVE-addon load/ABI failure means the library-backed journeys cannot run
+      // here — degrade to a skip (never a hard CI failure). Recognised by the stable
+      // `ERR_NATIVE_MODULE` code the DB layer tags and the #440 envelope preserves.
+      // A non-native error (a genuine logic regression) is NOT swallowed: it re-throws.
+      if (outcome.code === 'ERR_NATIVE_MODULE') {
         return false;
       }
-      throw new Error(`unexpected library:create failure during ABI probe: ${outcome.message}`);
+      throw new Error(`unexpected library:create failure during ABI probe: code=${outcome.code}`);
     } finally {
       await app.close();
     }

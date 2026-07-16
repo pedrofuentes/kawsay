@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { CollectionItemsPageDTO, CollectionSummaryDTO, ItemCardDTO } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
+import { ipcErrorCopy } from './ipc-error-copy';
 
 export type CollectionsStatus = 'unavailable' | 'loading' | 'ready' | 'error';
 
@@ -172,7 +173,7 @@ export function useCollectionItems(
         }
       } catch (cause) {
         if (myGeneration === generation.current) {
-          dispatch({ type: 'fail', error: cause instanceof Error ? cause.message : String(cause) });
+          dispatch({ type: 'fail', error: ipcErrorCopy(cause) });
         }
       } finally {
         inFlight.current = false;

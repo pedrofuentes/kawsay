@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, NativeImage, Net, Session } from 'electron';
 import { createCompositionRoot, type MainRuntime } from '../../electron/main/app/composition-root';
+import { createIngestionCoordinator } from '../../electron/main/importers/ingestion/coordinator';
+
+// Spy-wrap the coordinator factory (delegating to the real impl) so a test can
+// capture the `logWorkerFault` sink the composition root injects (#440 FIX B).
+vi.mock('../../electron/main/importers/ingestion/coordinator', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../electron/main/importers/ingestion/coordinator')>();
+  return { ...actual, createIngestionCoordinator: vi.fn(actual.createIngestionCoordinator) };
+});
 
 // The load-bearing security-install ORDER inside bootstrap() (ARCHITECTURE §2.2/§6.1):
 // the CSP, the zero-egress network guard, and the `kawsay-media:` protocol handler
@@ -240,5 +249,38 @@ describe('composition root — dev vs packaged renderer load', () => {
 
     expect(window.loadURL).toHaveBeenCalledTimes(1);
     expect(window.loadFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('composition root — ingestion worker fault logging (#440 FIX B, closes #480 item 2)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('injects a logWorkerFault that routes through the REDACTING logger (projected {name,code}, no raw stack/path)', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { runtime } = createHarness();
+
+    createCompositionRoot(runtime);
+
+    // The composition root must WIRE a fault sink (not leave the coordinator on its
+    // bare `console.error(stack)` default, which bypasses redaction — #480 item 2).
+    const options = vi.mocked(createIngestionCoordinator).mock.calls.at(-1)?.[0];
+    expect(typeof options?.logWorkerFault).toBe('function');
+
+    // A worker fault whose stack embeds a filesystem path: the raw stack/message must
+    // NOT reach the console — the logger projects the Error to {name, code} only.
+    const fault = Object.assign(new Error('better-sqlite3 native abort'), { code: 'EPERM' });
+    fault.stack = 'Error: better-sqlite3 native abort\n    at /Users/alice/secret/ingest.js:1:1';
+    options?.logWorkerFault?.(fault);
+
+    expect(errorSpy).toHaveBeenCalledWith('[kawsay] ingestion worker fault', {
+      name: 'Error',
+      code: 'EPERM',
+    });
+    const serialized = JSON.stringify(errorSpy.mock.calls);
+    expect(serialized).not.toContain('/Users/alice');
+    expect(serialized).not.toContain('secret');
+    expect(serialized).not.toContain('native abort');
   });
 });

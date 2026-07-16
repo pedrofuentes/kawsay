@@ -22,6 +22,7 @@ import {
   type WriteFileOptions,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { log } from '../log';
 
 /** The persisted shape — a single `{ [key]: boolean }` entry, nothing else. */
 type ConsentFile = Record<string, boolean>;
@@ -58,14 +59,6 @@ const DEFAULT_FS: ConsentStoreFs = {
   mkdirSync: (path, options) => mkdirSync(path, options),
 };
 
-function diagnosticError(error: unknown): { code?: string; name: string } {
-  if (error instanceof Error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === undefined ? { name: error.name } : { name: error.name, code };
-  }
-  return { name: typeof error };
-}
-
 /**
  * Build the durable consent store over `filePath`. Reads are defensive: a missing
  * file, unreadable file, or malformed JSON all resolve to OPTED-OUT (never a
@@ -84,11 +77,11 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
     } catch (error) {
       // No file yet (or unreadable) ⇒ never opted in.
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn(
+        log.warn(
           '[kawsay]',
           label,
           'consent could not be read; treating as opted-out',
-          diagnosticError(error),
+          error,
         );
       }
       return false;
@@ -98,11 +91,11 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
       return parsed[key] === true;
     } catch (error) {
       // A corrupt file is treated as opted-out — calm default, never a crash.
-      console.warn(
+      log.warn(
         '[kawsay]',
         label,
         'consent was malformed; treating as opted-out',
-        diagnosticError(error),
+        error,
       );
       return false;
     }
@@ -122,11 +115,11 @@ export function createConsentStore(options: ConsentStoreOptions): ConsentStore {
         // calm main process. Fail closed — the choice simply is not persisted (a
         // relaunch reads the prior/absent value, defaulting to opted-OUT) — and
         // leave a diagnostic rather than throwing out of the seam.
-        console.warn(
+        log.warn(
           '[kawsay] could not persist',
           label,
           'consent; future launches may remain opted-out',
-          diagnosticError(error),
+          error,
         );
       }
     },

@@ -103,6 +103,7 @@ import { registerIpcHandlers, type IpcHandlerMap, type IpcMainLike } from '../ip
 import { createEventSender } from '../ipc/event-sender';
 import type { TrustedSenderOptions } from '../ipc/sender';
 import { createCatalogSession, type CatalogSession } from './catalog-session';
+import { log } from '../log';
 import { loadRenderer } from './load-renderer';
 import { createIngestionCoordinator } from '../importers/ingestion/coordinator';
 import { createWorkerThreadsSpawner } from '../importers/ingestion/worker-threads-transport';
@@ -405,6 +406,10 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
   const ingestionCoordinator = createIngestionCoordinator({
     spawn: createWorkerThreadsSpawner({ scriptPath: join(moduleDir, 'ingestion-worker.js') }),
     emitProgress: (event) => emitEvent(IMPORT_PROGRESS, event),
+    // Route worker faults through the REDACTING logger (#440; closes #480 item 2):
+    // pass the Error as a separate arg so `projectError` reduces it to {name, code} —
+    // never the raw stack/message the coordinator's bare-console default would print.
+    logWorkerFault: (error) => log.error('[kawsay] ingestion worker fault', error),
   });
 
   // ── Phase 2 cells: set in bootstrap(), post-`whenReady` ──────────────────────
@@ -602,7 +607,7 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
       rendererEntryPath,
       rendererDevUrl,
       onLoadFailure: (error) => {
-        console.error('[kawsay] renderer failed to load', error);
+        log.error('[kawsay] renderer failed to load', error);
       },
     });
   }
@@ -631,7 +636,7 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
         // A rejected serve (confinement escape / mid-stream read failure) is logged with
         // a privacy-preserving diagnostic ONLY — never a filesystem path (AC-4 posture).
         onRejected: (info) => {
-          console.warn('[kawsay] media serve rejected', info);
+          log.warn('[kawsay] media serve rejected', info);
         },
       }),
     );

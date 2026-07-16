@@ -36,11 +36,26 @@ import {
   TRANSCRIPTION_STATUS,
   ipcContract,
 } from '@shared/ipc/contract';
+import { IPC_ERROR_CODES, decodeIpcErrorMessage } from '@shared/ipc/error-envelope';
 import {
   registerIpcHandlers,
   type IpcHandlerMap,
   type IpcHandleListener,
 } from '../../electron/main/ipc/register';
+
+/** Assert an invoke listener rejected with a redacted, tagged error carrying `code`. */
+async function expectEnvelope(promise: Promise<unknown> | undefined, code: string): Promise<void> {
+  const rejection = await (promise ?? Promise.resolve()).then(
+    () => {
+      throw new Error('expected the listener to reject');
+    },
+    (e: unknown) => e,
+  );
+  expect(rejection).toBeInstanceOf(Error);
+  const payload = decodeIpcErrorMessage((rejection as Error).message);
+  expect(payload).not.toBeNull();
+  expect(payload?.code).toBe(code);
+}
 
 function fakeIpcMain() {
   const listeners = new Map<string, IpcHandleListener>();
@@ -182,9 +197,10 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     );
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
-    await expect(
+    await expectEnvelope(
       listener?.({ senderFrame: { url: 'file:///tmp/evil/attacker.html' } }, {}),
-    ).rejects.toThrow();
+      IPC_ERROR_CODES.UNTRUSTED_SENDER,
+    );
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -194,9 +210,10 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     registerIpcHandlers(ipcMain, { ...otherHandlers, [APP_GET_VERSION]: spy });
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
-    await expect(
+    await expectEnvelope(
       listener?.({ senderFrame: { url: 'https://evil.example' } }, {}),
-    ).rejects.toThrow();
+      IPC_ERROR_CODES.UNTRUSTED_SENDER,
+    );
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -205,7 +222,10 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     registerIpcHandlers(ipcMain, handlers);
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
-    await expect(listener?.({ senderFrame: null }, {})).rejects.toThrow();
+    await expectEnvelope(
+      listener?.({ senderFrame: null }, {}),
+      IPC_ERROR_CODES.UNTRUSTED_SENDER,
+    );
   });
 
   it('re-validates the request in main and rejects unexpected payload keys', async () => {
@@ -218,7 +238,9 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     );
     const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
-    await expect(listener?.(trustedEvent, { rogue: true })).rejects.toThrow();
+    // A bad request rejects with a redacted BAD_REQUEST envelope — never the raw
+    // ZodError (whose message enumerates the offending keys) (#440).
+    await expectEnvelope(listener?.(trustedEvent, { rogue: true }), IPC_ERROR_CODES.BAD_REQUEST);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -232,7 +254,7 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     ).resolves.toEqual({ version: '0.1.0' });
   });
 
-  it('logs a local diagnostic (no telemetry) when a handler throws, and still propagates (#373)', async () => {
+  it('rejects a handler fault with a REDACTED envelope — not the raw error (#373/#440)', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       // A handler business-logic fault (e.g. acceptAndMerge on a stale collection id)
@@ -248,20 +270,30 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
       );
       const listener = ipcMain.listeners.get(APP_GET_VERSION);
 
-      // The error STILL propagates to the renderer (the trust-boundary contract is
-      // unchanged — the shim only observes, it does not swallow).
-      await expect(listener?.(trustedEvent, {})).rejects.toThrow('stale intoCollectionId');
+      // The fault is REDACTED before it crosses: the renderer gets a HANDLER_FAULT
+      // envelope carrying only {code, name} — never the raw message/stack (#440).
+      const rejection = await (listener?.(trustedEvent, {}) ?? Promise.resolve()).then(
+        () => {
+          throw new Error('expected the listener to reject');
+        },
+        (e: unknown) => e,
+      );
+      expect(rejection).toBeInstanceOf(Error);
+      const payload = decodeIpcErrorMessage((rejection as Error).message);
+      expect(payload?.code).toBe(IPC_ERROR_CODES.HANDLER_FAULT);
+      const rejectionSerialized = `${(rejection as Error).message}\n${(rejection as Error).stack ?? ''}`;
+      expect(rejectionSerialized).not.toContain('secret');
+      expect(rejectionSerialized).not.toContain('stale intoCollectionId');
       expect(boom).toHaveBeenCalledTimes(1);
 
-      // ...but a main-process handler fault no longer leaves ZERO local trace: exactly
-      // one diagnostic is emitted, carrying the kawsay prefix and naming the channel.
+      // A main-process handler fault still leaves ONE local diagnostic (the #373
+      // observability shim), naming the channel — but projected: no message/stack.
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const call = errorSpy.mock.calls[0];
       expect(String(call[0])).toContain('[kawsay]');
       expect(String(call[0])).toContain(APP_GET_VERSION);
-      // Local-only + privacy: only a name/code diagnostic crosses the line — the raw
-      // error message (which can carry ids / paths / item text) MUST NOT be logged.
       expect(JSON.stringify(call)).not.toContain('secret');
+      expect(JSON.stringify(call)).not.toContain('stale intoCollectionId');
     } finally {
       errorSpy.mockRestore();
     }

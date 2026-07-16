@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { ItemCardDTO } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
+import { ipcErrorCopy } from './ipc-error-copy';
 
 export type TimelineStatus = 'unavailable' | 'loading' | 'loadingMore' | 'ready' | 'error';
 
@@ -165,7 +166,7 @@ export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult
         }
       } catch (cause) {
         if (myGeneration === generation.current) {
-          dispatch({ type: 'fail', error: cause instanceof Error ? cause.message : String(cause) });
+          dispatch({ type: 'fail', error: ipcErrorCopy(cause) });
         }
       } finally {
         inFlight.current = false;

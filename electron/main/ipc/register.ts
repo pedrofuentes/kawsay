@@ -1,5 +1,7 @@
 import type { z } from 'zod';
 import { ipcContract, type IpcChannel, type IpcResponse } from '@shared/ipc/contract';
+import { IPC_ERROR_CODES, makeIpcError } from '@shared/ipc/error-envelope';
+import { log } from '../log';
 import { isTrustedSenderUrl, type TrustedSenderOptions } from './sender';
 
 /** The parsed (post-validation) request shape a channel handler receives. */
@@ -44,28 +46,44 @@ export function registerIpcHandlers(
     const { request: requestSchema, response: responseSchema } = ipcContract[channel];
     const handler = handlers[channel];
     ipcMain.handle(channel, async (event, payload) => {
+      // Every fault below is (1) logged locally through the redacting logger and
+      // (2) rejected with a TYPED, REDACTED envelope — a stable `code` + the error
+      // class `name`, NEVER the raw message/stack (#373, #440). Re-throwing the raw
+      // error would serialize its message/stack across `ipcRenderer.invoke` into the
+      // untrusted renderer, leaking ids/paths/item text; the envelope closes that.
+      // Semgrep's unsafe-formatstring (CWE-134) matches below are false positives: a
+      // JS template literal is not a printf format string, and `channel` is an
+      // internal IPC channel name, never user/attacker input (#406).
       const senderUrl = event.senderFrame?.url ?? '';
       if (!isTrustedSenderUrl(senderUrl, options)) {
-        throw new Error(
-          `Rejected IPC on "${channel}" from untrusted sender: ${senderUrl || '<none>'}`,
+        log.error(`[kawsay] IPC on "${channel}" rejected: untrusted sender`); // nosemgrep: unsafe-formatstring
+        throw makeIpcError(
+          new Error('untrusted sender'),
+          IPC_ERROR_CODES.UNTRUSTED_SENDER,
         );
       }
-      const request = requestSchema.parse(payload);
+
+      let request: z.output<typeof requestSchema>;
       try {
-        const response = await handler(request as never);
+        request = requestSchema.parse(payload);
+      } catch (error) {
+        log.warn(`[kawsay] IPC request for "${channel}" failed validation`, error); // nosemgrep: unsafe-formatstring
+        throw makeIpcError(error, IPC_ERROR_CODES.BAD_REQUEST);
+      }
+
+      let response: IpcResponse<typeof channel>;
+      try {
+        response = await handler(request as never);
+      } catch (error) {
+        log.error(`[kawsay] IPC handler for "${channel}" failed`, error); // nosemgrep: unsafe-formatstring
+        throw makeIpcError(error, IPC_ERROR_CODES.HANDLER_FAULT);
+      }
+
+      try {
         return responseSchema.parse(response);
       } catch (error) {
-        // Log-on-error shim (#373): a main-process handler / response-shape fault
-        // otherwise leaves NO local trace, so field debugging would rely on renderer
-        // traces only. Emit ONE local diagnostic naming the channel, then re-throw so
-        // the trust-boundary contract is unchanged (the error still reaches the
-        // renderer). Local console only — no telemetry; the raw error is projected to
-        // name/code (never message/stack), so a fault can't leak ids/paths/item text.
-        // Semgrep's unsafe-formatstring (CWE-134) match below is a false positive: a JS
-        // template literal is not a printf format string, and `channel` is an internal
-        // IPC channel name, never user/attacker input (#406).
-        console.error(`[kawsay] IPC handler for "${channel}" failed`, diagnosticError(error)); // nosemgrep: unsafe-formatstring
-        throw error;
+        log.error(`[kawsay] IPC response for "${channel}" failed validation`, error); // nosemgrep: unsafe-formatstring
+        throw makeIpcError(error, IPC_ERROR_CODES.BAD_RESPONSE);
       }
     });
   }
@@ -73,18 +91,4 @@ export function registerIpcHandlers(
 
 function ipcChannels(): IpcChannel[] {
   return Object.keys(ipcContract) as IpcChannel[];
-}
-
-/**
- * A privacy-preserving projection of an error for a LOCAL diagnostic line (no
- * telemetry, no egress): only the error `name` and an optional errno `code` — never
- * the raw `message`/`stack`, which can carry an id, a file path, or item text.
- * Mirrors the orchestrators' helper so main-process faults log the same shape.
- */
-function diagnosticError(error: unknown): { code?: string; name: string } {
-  if (error instanceof Error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === undefined ? { name: error.name } : { name: error.name, code };
-  }
-  return { name: typeof error };
 }
