@@ -430,6 +430,22 @@ interface SourceRemovalPlan {
   itemsRemoved: number;
 }
 
+/** Injectable seams for {@link removeSource}, so failure-injection tests are
+ *  deterministic and cross-platform (no reliance on real filesystem permissions). */
+export interface RemoveSourceDeps {
+  /**
+   * Delete ONE already-confined absolute path, or throw an errno-tagged error the
+   * best-effort loop catches. Defaults to a forced `rmSync`. Injected in tests to
+   * synthesise an EPERM/EACCES for a specific blob without touching real fs perms.
+   */
+  removeFile?: (absPath: string) => void;
+}
+
+/** The production deleter: a forced unlink (suppresses ENOENT; surfaces EPERM/EACCES). */
+function defaultRemoveFile(absPath: string): void {
+  rmSync(absPath, { force: true });
+}
+
 /**
  * Undo an import by removing EXACTLY one source's contribution (undo, §4.4 / AC-14 /
  * #429). Undo is scoped to the `sources.id` this import wrote against — the EXISTING
@@ -451,7 +467,9 @@ export function removeSource(
   db: CatalogDatabase,
   root: string,
   sourceId: string,
+  deps: RemoveSourceDeps = {},
 ): RemoveSourceResult {
+  const removeFile = deps.removeFile ?? defaultRemoveFile;
   const plan = db.transaction((id: string): SourceRemovalPlan => {
     // Every occurrence this source contributed, with the item it points at and the
     // content-addressing needed to reference-count its blob after deletion.
@@ -536,13 +554,13 @@ export function removeSource(
   let blobsDeleted = 0;
   let filesOrphaned = 0;
   for (const blob of plan.blobsToDelete) {
-    const outcome = bestEffortDelete(blob);
+    const outcome = bestEffortDelete(blob, removeFile);
     if (outcome === 'deleted') blobsDeleted += 1;
     else if (outcome === 'failed') filesOrphaned += 1;
   }
   let assetsDeleted = 0;
   for (const derived of plan.derivedToDelete) {
-    const outcome = bestEffortDelete(derived);
+    const outcome = bestEffortDelete(derived, removeFile);
     if (outcome === 'deleted') assetsDeleted += 1;
     else if (outcome === 'failed') filesOrphaned += 1;
   }
@@ -566,10 +584,13 @@ type DeleteOutcome = 'deleted' | 'absent' | 'failed';
  * refused (EPERM/EACCES). NEVER throws: the catalog removal already committed, so a
  * lingering file is only an unreferenced orphan for {@link garbageCollectOrphanedOriginals}.
  */
-function bestEffortDelete(absPath: string): DeleteOutcome {
+function bestEffortDelete(
+  absPath: string,
+  removeFile: (absPath: string) => void,
+): DeleteOutcome {
   if (!existsSync(absPath)) return 'absent';
   try {
-    rmSync(absPath, { force: true });
+    removeFile(absPath);
     return 'deleted';
   } catch (error) {
     // Local diagnostic only (no telemetry, no egress): the projection carries ONLY the
