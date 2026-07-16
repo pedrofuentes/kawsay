@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  constants as fsConstants,
   copyFileSync,
   createReadStream,
   existsSync,
@@ -388,10 +389,16 @@ export interface ServableOriginal {
 export function pinRegularFile(canonicalPath: string, kind: OriginalKind): ServableOriginal | null {
   let fd: number;
   try {
-    // The canonical path contains no symlinks, so this open cannot follow a newly
-    // planted symlink; and because we stream from THIS fd, no later re-open occurs.
-    fd = openSync(canonicalPath, 'r');
+    // O_NOFOLLOW closes the realpath→open race (CWE-367): if the FINAL path component
+    // is a symlink at open time — one planted in the tiny window after realpath
+    // resolved a legitimate in-root path — the open fails with ELOOP instead of
+    // following it out of the servable roots. (O_NOFOLLOW is absent on Windows, where
+    // it degrades to 0; Windows symlink creation is privileged, so the local surface
+    // there is minimal.) We stream from THIS fd, so no later re-open reintroduces a race.
+    fd = openSync(canonicalPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   } catch {
+    // ELOOP (planted symlink) / ENOENT (vanished) / any open failure → not servable.
+    // Treated as the existing not-found reject: null → 404 with zero bytes, no leak.
     return null;
   }
   let stats: ReturnType<typeof fstatSync>;
