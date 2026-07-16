@@ -222,6 +222,7 @@ export interface FakeApiOptions {
   getTranscriptionStatus?: KawsayAPI['getTranscriptionStatus'];
   cancelTranscription?: KawsayAPI['cancelTranscription'];
   getTranscript?: KawsayAPI['getTranscript'];
+  setFavourite?: KawsayAPI['setFavourite'];
   getSmartSearchStatus?: KawsayAPI['getSmartSearchStatus'];
   enableSmartSearch?: KawsayAPI['enableSmartSearch'];
   getCategorizationStatus?: KawsayAPI['getCategorizationStatus'];
@@ -329,6 +330,14 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
     // Default to a not-yet-transcribed item so transcription-agnostic tests see a
     // calm "pending" view; #136's item-view tests inject their own transcript.
     getTranscript: opts.getTranscript ?? vi.fn(() => Promise.resolve(makeTranscriptView())),
+    // Default echoes back whatever the caller asked for, mirroring the real main
+    // process's resolved-state echo (#434); favourite-toggle tests inject their
+    // own behaviour to exercise a failed save / a divergent echo.
+    setFavourite:
+      opts.setFavourite ??
+      vi.fn((input: { id: string; favourite: boolean }) =>
+        Promise.resolve({ isFavourite: input.favourite }),
+      ),
     onTranscriptionProgress: (listener) => {
       transcriptionListeners.add(listener);
       return () => {
