@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   APP_GET_VERSION,
+  CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
+  CATALOG_LIST_COLLECTIONS,
   CATALOG_SEARCH,
   CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
@@ -89,6 +91,12 @@ const otherHandlers = {
     segments: [],
   }),
   [CATALOG_SET_FAVOURITE]: () => ({ isFavourite: false }),
+  [CATALOG_LIST_COLLECTIONS]: () => ({ collections: [] }),
+  [CATALOG_GET_COLLECTION]: () => ({
+    collection: { id: '00000000-0000-0000-0000-000000000000', name: 'x', itemCount: 0, coverItemId: null },
+    items: [],
+    total: 0,
+  }),
   [CATEGORIZE_STATUS]: () => ({ optedIn: false, offered: false }),
   [CATEGORIZE_SET_CONSENT]: () => ({ optedIn: false }),
   [CATEGORIZE_LIST_FOR_ITEM]: () => [],

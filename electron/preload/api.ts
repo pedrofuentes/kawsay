@@ -7,7 +7,9 @@
 
 import {
   APP_GET_VERSION,
+  CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
+  CATALOG_LIST_COLLECTIONS,
   CATALOG_SEARCH,
   CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
@@ -78,6 +80,8 @@ export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSub
     getThumbnail: (input) => invoke(CATALOG_THUMBNAIL, input),
     getTranscript: (input) => invoke(CATALOG_GET_TRANSCRIPT, input),
     setFavourite: (input) => invoke(CATALOG_SET_FAVOURITE, input),
+    listCollections: () => invoke(CATALOG_LIST_COLLECTIONS, {}),
+    getCollection: (input) => invoke(CATALOG_GET_COLLECTION, { offset: 0, ...input }),
     startImport: (input) => invoke(IMPORT_START, input),
     cancelImport: (input) => invoke(IMPORT_CANCEL, input),
     undoImport: (input) => invoke(CATALOG_UNDO_IMPORT, input),

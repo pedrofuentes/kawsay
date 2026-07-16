@@ -14,8 +14,12 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { SourceType } from '@shared/catalog';
 import {
+  collectionSummarySchema,
   itemCardSchema,
   transcriptViewSchema,
+  type CollectionItemsPageDTO,
+  type CollectionsListDTO,
+  type CollectionSummaryDTO,
   type ItemCardDTO,
   type LibrarySummaryDTO,
   type SearchResultDTO,
@@ -32,6 +36,7 @@ import { removeSource } from '../library/originals-store';
 import {
   createCatalogRepo,
   type CatalogRepo,
+  type CollectionSummary,
   type ItemRow,
   type TimelineCursor,
 } from '../db/catalog-repo';
@@ -183,6 +188,21 @@ export interface CatalogSession {
    * factory was injected (the headless default).
    */
   suggestions(): SuggestionsLibraryPort;
+  /**
+   * List every browsable collection (#437), name-ordered with member counts. A
+   * `dismissed` tombstone collection never appears — it carries no members and
+   * exists purely so the suggestion derivation never re-proposes it.
+   */
+  listCollections(): CollectionsListDTO;
+  /**
+   * Fetch one collection's summary plus an offset-paginated page of its members
+   * (#437), projected as the SAME renderer-safe {@link ItemCardDTO} tile the
+   * timeline/search already use. Throws {@link CatalogSessionError} when no
+   * library is open OR the id names no browsable collection (unknown, or a
+   * dismissed tombstone) — an unknown id is never silently ignored, mirroring
+   * {@link CatalogSession.getTranscript}.
+   */
+  getCollection(input: { id: string; limit: number; offset: number }): CollectionItemsPageDTO;
   /** Close the open library and tear down every in-flight import (window-close). */
   dispose(): void;
 }
@@ -242,6 +262,17 @@ function toItemCard(row: ItemRow): ItemCardDTO {
     // A pure render-ability hint — photos and videos can be shown as a real
     // thumbnail; everything else stays an icon. No path/asset URL leaks here.
     hasThumbnail: row.mediaType === 'photo' || row.mediaType === 'video',
+  });
+}
+
+/** Project an internal collection row onto the renderer-safe summary tile
+ *  (#437) — bounds the name defensively, mirroring {@link toItemCard}. */
+function toCollectionSummary(row: CollectionSummary): CollectionSummaryDTO {
+  return collectionSummarySchema.parse({
+    id: row.id,
+    name: row.name,
+    itemCount: row.itemCount,
+    coverItemId: row.coverItemId,
   });
 }
 
@@ -571,6 +602,22 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         throw new CatalogSessionError('suggestions are not available');
       }
       return open.suggestions;
+    },
+    listCollections() {
+      const { repo } = requireOpen();
+      return { collections: repo.listCollections().map(toCollectionSummary) };
+    },
+    getCollection(input) {
+      const { repo } = requireOpen();
+      const result = repo.getCollection(input);
+      if (result.collection === null) {
+        throw new CatalogSessionError(`no such collection: ${input.id}`);
+      }
+      return {
+        collection: toCollectionSummary(result.collection),
+        items: result.rows.map(toItemCard),
+        total: result.total,
+      };
     },
     dispose() {
       coordinator.disposeAll();

@@ -139,6 +139,31 @@ export interface SearchResult {
 }
 
 /**
+ * A browsable collection's summary (#437): its opaque id, its display name, its
+ * member count, and an optional cover item id (a hint only — no path). Excludes
+ * `origin='dismissed'` tombstones — they carry no members and exist purely so
+ * the suggestion derivation never re-proposes them (curation-repo).
+ */
+export interface CollectionSummary {
+  id: string;
+  name: string;
+  itemCount: number;
+  coverItemId: string | null;
+}
+
+/**
+ * One `getCollection` read (#437): the collection's summary (or `null` when the
+ * id names no browsable collection — unknown, or a dismissed tombstone), an
+ * offset-paginated slice of its members, and the collection's total member
+ * count so the caller can tell whether more remain.
+ */
+export interface CollectionMembersResult {
+  collection: CollectionSummary | null;
+  rows: ItemRow[];
+  total: number;
+}
+
+/**
  * A transcribable media item (#157): an audio or video row the orchestrator may
  * hand to the off-thread worker, with its duration (when known) so the worker can
  * scale the per-item timeout (AC-20). Carries NO path — original resolution +
@@ -167,6 +192,22 @@ export interface CatalogRepo {
   getItemsByIds(ids: readonly string[], source?: SourceType | null): ItemRow[];
   /** Enumerate every audio/video item (id + duration) for transcription (#157). */
   listTranscribableItems(): TranscribableItem[];
+  /**
+   * List every browsable collection (#437) — hand-made (`user`) or
+   * accepted-suggested (`suggested`), each with its member count and an
+   * optional cover item id. A `dismissed` tombstone collection is excluded — it
+   * carries no members and exists purely so the derivation never re-proposes
+   * it. Name-ordered (case-insensitive), then by id for a stable tiebreak.
+   */
+  listCollections(): CollectionSummary[];
+  /**
+   * Fetch ONE collection's summary plus an offset-paginated slice of its
+   * members (#437), ordered by curated position (when set) then add order.
+   * `collection` is `null` when the id names no browsable collection (unknown,
+   * or a dismissed tombstone) — the caller surfaces that as a rejected invoke,
+   * mirroring `getTranscript`'s unknown-id handling.
+   */
+  getCollection(query: { id: string; limit: number; offset: number }): CollectionMembersResult;
   /**
    * Set (or clear) one item's favourite flag by its opaque id (#434). A single
    * transactional `UPDATE ... RETURNING`, so the write and its read-back are
@@ -332,6 +373,17 @@ function requireRow<T>(row: T | undefined, operation: string): T {
   return row;
 }
 
+interface RawCollectionRow {
+  id: string;
+  name: string;
+  cover_item_id: string | null;
+  item_count: number;
+}
+
+function mapCollectionRow(row: RawCollectionRow): CollectionSummary {
+  return { id: row.id, name: row.name, itemCount: row.item_count, coverItemId: row.cover_item_id };
+}
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 /**
@@ -483,6 +535,50 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     RETURNING is_favourite
   `);
 
+  // ── Collections browser view (#437) ────────────────────────────────────────
+  // A `dismissed` tombstone collection is excluded from every read below — it
+  // carries no members and exists purely so the suggestion derivation never
+  // re-proposes it (curation-repo). The member count is a correlated subquery
+  // rather than a JOIN + GROUP BY so a member-less collection still projects a
+  // row (COUNT(*) over zero joined rows would otherwise vanish it).
+  //
+  // Both statements below reference `collections.origin`, a column migration
+  // 005 adds (ARCHITECTURE §4.2) — every OTHER statement in this factory
+  // references only the migration-001 schema, so this is the only pair prepared
+  // LAZILY (on first call, not at factory construction) rather than eagerly up
+  // front: eager preparation would throw immediately when a repo is built
+  // against an intentionally partial-migration snapshot, which the AC-29
+  // migration-boundary tests do (db-migrate.test.ts) even though production
+  // always opens a fully-migrated catalog before constructing a repo.
+  let listCollectionsStmt: ReturnType<typeof db.prepare> | undefined;
+  function requireListCollectionsStmt(): ReturnType<typeof db.prepare> {
+    return (listCollectionsStmt ??= db.prepare(`
+      SELECT c.id, c.name, c.cover_item_id,
+        (SELECT COUNT(*) FROM collection_items ci WHERE ci.collection_id = c.id) AS item_count
+      FROM collections c
+      WHERE c.origin != 'dismissed'
+      ORDER BY c.name COLLATE NOCASE ASC, c.id ASC
+    `));
+  }
+  let getCollectionSummaryStmt: ReturnType<typeof db.prepare> | undefined;
+  function requireGetCollectionSummaryStmt(): ReturnType<typeof db.prepare> {
+    return (getCollectionSummaryStmt ??= db.prepare(`
+      SELECT c.id, c.name, c.cover_item_id,
+        (SELECT COUNT(*) FROM collection_items ci WHERE ci.collection_id = c.id) AS item_count
+      FROM collections c
+      WHERE c.id = @id AND c.origin != 'dismissed'
+    `));
+  }
+  // Curated `position` first (NULLS LAST — an un-curated member sorts after any
+  // explicitly ordered one), then add order, then id for a fully stable tiebreak.
+  const getCollectionMembersStmt = db.prepare(`
+    SELECT ${ITEM_SELECT_I}, ${sourceProjection('i')} FROM collection_items ci
+    JOIN items i ON i.id = ci.item_id
+    WHERE ci.collection_id = @id
+    ORDER BY ci.position ASC NULLS LAST, ci.added_at ASC, i.id ASC
+    LIMIT @limit OFFSET @offset
+  `);
+
   return {
     insertItem(input) {
       const row = insertItemStmt.get<{ id: string }>({
@@ -607,6 +703,19 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
         favourite: input.favourite ? 1 : 0,
       });
       return row === undefined ? null : row.is_favourite === 1;
+    },
+
+    listCollections() {
+      return requireListCollectionsStmt().all<RawCollectionRow>().map(mapCollectionRow);
+    },
+
+    getCollection({ id, limit, offset }) {
+      const summary = requireGetCollectionSummaryStmt().get<RawCollectionRow>({ id });
+      if (summary === undefined) {
+        return { collection: null, rows: [], total: 0 };
+      }
+      const raws = getCollectionMembersStmt.all<RawItemRow>({ id, limit, offset });
+      return { collection: mapCollectionRow(summary), rows: raws.map(mapItemRow), total: summary.item_count };
     },
   };
 }

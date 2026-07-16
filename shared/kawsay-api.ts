@@ -9,6 +9,8 @@ import type {
   CategorizationStartResultDTO,
   CategorizationStatusDTO,
   CategorizationCorrectionDTO,
+  CollectionItemsPageDTO,
+  CollectionsListDTO,
   ItemCategoriesDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
@@ -73,6 +75,29 @@ export interface KawsayAPI {
    * persisted on disk, surviving an app restart.
    */
   setFavourite(input: { id: string; favourite: boolean }): Promise<{ isFavourite: boolean }>;
+
+  /**
+   * List every browsable collection (#437): each with its name, member count,
+   * and an optional cover item id. READ-ONLY — never creates, renames, or
+   * deletes a collection (that stays the suggestions tray's curation actions).
+   * A `dismissed` tombstone collection never appears — it carries no members
+   * and exists purely so the suggestion derivation never re-proposes it.
+   */
+  listCollections(): Promise<CollectionsListDTO>;
+
+  /**
+   * Fetch ONE collection by its opaque id (#437): its summary plus an
+   * offset-paginated page of its member memories, rendered with the SAME
+   * {@link ItemCardDTO} tile the timeline/search already use. The renderer
+   * passes only the id (never a path); `offset` defaults to 0 for a first
+   * fetch. Rejects when the id names no browsable collection (unknown, or a
+   * dismissed tombstone).
+   */
+  getCollection(input: {
+    id: string;
+    limit: number;
+    offset?: number;
+  }): Promise<CollectionItemsPageDTO>;
 
   /**
    * Start an off-thread import; resolves with the new job id AND the `sourceId` this
@@ -338,6 +363,9 @@ export type {
   SuggestionExampleDTO,
   SuggestionMergeTargetDTO,
   SuggestionKindDTO,
+  CollectionsListDTO,
+  CollectionItemsPageDTO,
+  CollectionSummaryDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
   SettingsDTO,

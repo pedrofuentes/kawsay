@@ -323,6 +323,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'enableSmartSearch',
         'getAppVersion',
         'getCategorizationStatus',
+        'getCollection',
         'getSettings',
         'getSmartSearchStatus',
         'getThumbnail',
@@ -330,6 +331,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'getTranscript',
         'getTranscriptionStatus',
         'isTranscriptionModelReady',
+        'listCollections',
         'listItemCategories',
         'listSuggestions',
         'mergeSuggestion',
@@ -358,5 +360,38 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(surface.send).toBeUndefined();
     expect(surface.invoke).toBeUndefined();
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
+  });
+
+  // #437 — the Collections browser view's two READ-ONLY channels: list every
+  // browsable collection, and fetch one collection's offset-paginated members.
+  // Both use the literal channel string (not an imported contract constant) so
+  // this test exercises the RUNTIME wiring independently of the contract module.
+  it('routes listCollections/getCollection to their catalog:* channels with the right payload', async () => {
+    const calls: { channel: string; payload: unknown }[] = [];
+    const invoke = vi.fn((channel: string, payload: unknown) => {
+      calls.push({ channel, payload });
+      if (channel === 'catalog:listCollections') {
+        return Promise.resolve({ collections: [] });
+      }
+      if (channel === 'catalog:getCollection') {
+        return Promise.resolve({
+          collection: { id: UUID, name: 'A summer by the lake', itemCount: 0, coverItemId: null },
+          items: [],
+          total: 0,
+        });
+      }
+      return Promise.reject(new Error(`unexpected channel: ${channel}`));
+    }) as never;
+    const api = createKawsayApi(invoke, vi.fn(() => () => {}) as never);
+
+    const list = await api.listCollections();
+    const page = await api.getCollection({ id: UUID, limit: 50, offset: 0 });
+
+    expect(list).toEqual({ collections: [] });
+    expect(page.collection).toMatchObject({ id: UUID, name: 'A summer by the lake' });
+    expect(calls).toEqual([
+      { channel: 'catalog:listCollections', payload: {} },
+      { channel: 'catalog:getCollection', payload: { id: UUID, limit: 50, offset: 0 } },
+    ]);
   });
 });

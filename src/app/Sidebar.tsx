@@ -17,6 +17,7 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { view: { name: 'timeline' }, label: 'Timeline', icon: 'heart' },
   { view: { name: 'search' }, label: 'Search', icon: 'messages' },
+  { view: { name: 'collections' }, label: 'Collections', icon: 'collection' },
   { view: { name: 'add-memories' }, label: 'Add memories', icon: 'archive' },
   { view: { name: 'settings' }, label: 'Settings', icon: 'briefcase' },
 ];
