@@ -54,6 +54,29 @@ export default defineConfig({
           name: 'node',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
+          // The perf-sensitive suite runs in its own serial `perf` project below
+          // (isolated, generous timeout) so it never double-runs here.
+          exclude: ['tests/perf/**'],
+        },
+      },
+      {
+        // Perf / scaling suite (#442, #454): scale-budget enforcement, the
+        // themes-cluster sub-quadratic guard, and the WER/RTF harness. Runs SERIALLY
+        // in a single fork (no file parallelism) with a generous timeout, so it does
+        // not compete with the parallel jsdom+node load that made timing/timeout
+        // assertions flake under CPU pressure. The load-bearing perf assertions are
+        // operation counts (deterministic), not wall clock; the serial pool + timeout
+        // additionally shield the streamed-parse timeout tests from contention.
+        extends: true,
+        test: {
+          name: 'perf',
+          environment: 'node',
+          include: ['tests/perf/**/*.test.ts'],
+          testTimeout: 60_000,
+          // Single fork ⇒ every perf file runs SERIALLY in one worker (no file
+          // parallelism), so timing/timeout-sensitive tests don't compete for CPU.
+          pool: 'forks',
+          poolOptions: { forks: { singleFork: true } },
         },
       },
       {

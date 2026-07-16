@@ -132,7 +132,11 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
     }
   });
 
-  it('caps one oversized message object and keeps later Telegram messages', async () => {
+  // Generous timeout (#454): the streamed 2.5 MB parse is ~2 s isolated but ran
+  // 5–13 s under parallel CI CPU load, tripping the 5 s default. This is a
+  // correctness (cap) test, not a perf assertion — a 30 s ceiling removes the
+  // load-sensitive flake without weakening what it checks.
+  it('caps one oversized message object and keeps later Telegram messages', { timeout: 30_000 }, async () => {
     const dir = makeTmpDir('telegram-bounds-');
     try {
       writeResult(dir, {
@@ -161,7 +165,7 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
     }
   });
 
-  it('caps one deeply nested message object and keeps later Telegram messages', async () => {
+  it('caps one deeply nested message object and keeps later Telegram messages', { timeout: 30_000 }, async () => {
     const dir = makeTmpDir('telegram-depth-bounds-');
     try {
       // Nest well past MAX_JSON_NESTING_DEPTH (100) so the streaming parser trips the
@@ -202,7 +206,7 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
     }
   });
 
-  it('caps deeply nested and wide rich text without overflowing recursion or memory', async () => {
+  it('caps deeply nested and wide rich text without overflowing recursion or memory', { timeout: 30_000 }, async () => {
     const dir = makeTmpDir('telegram-text-bounds-');
     try {
       let nested: unknown = 'too deep';

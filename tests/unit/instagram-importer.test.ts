@@ -339,7 +339,11 @@ describe('instagramImporter (M3 — Instagram Meta DYI direct messages connector
     }
   });
 
-  it('caps one oversized message object and keeps later messages without unbounded buffering', async () => {
+  // Generous timeout (#454): the streamed 2.5 MB parse is ~2 s isolated but ran
+  // well past the 5 s default under parallel CI CPU load. This is a correctness
+  // (cap) test, not a perf assertion — a 30 s ceiling removes the load-sensitive
+  // flake without weakening what it checks.
+  it('caps one oversized message object and keeps later messages without unbounded buffering', { timeout: 30_000 }, async () => {
     const dir = makeTmpDir('instagram-bounds-');
     try {
       const path = writeInstagramMessageFile(dir, 'huge_abcd', 'message_1.json', {
