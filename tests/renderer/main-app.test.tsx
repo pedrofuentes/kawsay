@@ -84,12 +84,17 @@ describe('MainApp routing', () => {
         ),
       );
 
-      // Picking a source enters the guided walkthrough, which names the person
-      // (openLibrary resolves asynchronously, so findByText polls until it lands).
+      // Picking a source enters the guided walkthrough, which interpolates the
+      // person's name into its copy (openLibrary resolves asynchronously, so this
+      // polls until the named copy lands). Pinning the exact possessive phrase makes
+      // the check discriminating: a broken `personName` (empty/fallback/undefined)
+      // or a reintroduced banned phrase would fail it, not silently pass.
       await user.click(await screen.findByRole('button', { name: /whatsapp/i }));
-      expect((await screen.findAllByText(/Grandma Rosa/)).length).toBeGreaterThan(0);
+      await screen.findByText(/Grandma Rosa's WhatsApp/);
       const main = screen.getByRole('main');
+      expect(main).toHaveTextContent("Grandma Rosa's WhatsApp");
       expect(main).not.toHaveTextContent(/your loved one/i);
+      expect(main).not.toHaveTextContent(/the deceased/i);
       expect(main).not.toHaveTextContent(/undefined/i);
     });
   });

@@ -34,9 +34,9 @@ function WithOpenLibrary({ name }: { name: string }): ReactElement | null {
 function setup(
   api: FakeApi = makeFakeApi(),
   name = 'Elena',
-): { api: FakeApi; user: UserEvent; container: HTMLElement } {
+): { api: FakeApi; user: UserEvent; container: HTMLElement; unmount: () => void } {
   const user = userEvent.setup();
-  const { container } = render(
+  const { container, unmount } = render(
     wrapInProviders(
       <>
         <WithOpenLibrary name={name} />
@@ -45,7 +45,7 @@ function setup(
       api,
     ),
   );
-  return { api, user, container };
+  return { api, user, container, unmount };
 }
 
 async function reachLanding(): Promise<HTMLElement> {
@@ -223,6 +223,53 @@ describe('Add memories — import (reuses import:*; progress, cancel, completion
 
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.queryByText(/ERR_ARCHIVE_UNSAFE_PATH/)).not.toBeInTheDocument();
+  });
+
+  it('cancels a still-running import when the view is left, so no backend job is orphaned (#427)', async () => {
+    const { api, user, unmount } = setup();
+    await runImport(user);
+
+    api.emitProgress(makeProgressEvent({ phase: 'parse', processed: 10, total: 200 }));
+    await screen.findByRole('progressbar');
+
+    // Leaving mid-import (e.g. clicking another sidebar section) unmounts the view.
+    unmount();
+
+    expect(api.cancelImport).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT cancel an import that already completed before the view is left', async () => {
+    const { api, user, unmount } = setup();
+    await runImport(user);
+
+    api.emitProgress(
+      makeProgressEvent({ phase: 'done', summary: makeImportSummary({ occurrencesAdded: 5 }) }),
+    );
+    await screen.findByText(/5 memories/i);
+
+    unmount();
+
+    expect(api.cancelImport).not.toHaveBeenCalled();
+  });
+
+  it('lets the user retry after an import error, restarting the import', async () => {
+    const { api, user } = setup();
+    await runImport(user, '/exports/whatsapp.zip');
+
+    api.emitProgress(makeProgressEvent({ phase: 'done', error: 'ERR_ARCHIVE_UNSAFE_PATH' }));
+    await screen.findByRole('alert');
+
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+
+    // Retry returns to the locate screen; pointing at the file again re-runs import.
+    await user.type(screen.getByLabelText(/file|folder|where/i), '/exports/whatsapp-2.zip');
+    await user.click(screen.getByRole('button', { name: /bring .*memories in/i }));
+
+    expect(api.startImport).toHaveBeenCalledTimes(2);
+    expect(api.startImport).toHaveBeenLastCalledWith({
+      sourceType: 'whatsapp',
+      inputPath: '/exports/whatsapp-2.zip',
+    });
   });
 
   it('keeps a single level-1 heading through every face', async () => {
