@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { LibraryProvider } from '@renderer/lib/library';
 import { NavigationProvider } from '@renderer/lib/navigation';
-import { Timeline } from '@renderer/views/Timeline';
+import { Timeline, applyFavouriteOverrides } from '@renderer/views/Timeline';
 import type { ItemCardDTO, TimelinePageDTO } from '@shared/kawsay-api';
 import { makeFakeApi, makeItemCard } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
@@ -350,5 +350,36 @@ describe('Timeline — tolerates a missing bridge (browser preview)', () => {
     } finally {
       if (original !== undefined) window.kawsayAPI = original;
     }
+  });
+});
+
+// The favourite-overrides overlay (#432 review 🟡): a full O(n) remap of the whole
+// loaded list on ANY favourite toggle anywhere — even while Timeline is hidden and
+// even for an item not on this page — reallocated the list and cascaded into the
+// row/virtualization memos. The overlay must be a no-op (SAME reference) when it
+// changes nothing, and clone only the affected card when it does.
+describe('applyFavouriteOverrides', () => {
+  it('returns the same list reference when there are no overrides', () => {
+    const items = [makeItemCard({ id: 'a' }), makeItemCard({ id: 'b' })];
+    expect(applyFavouriteOverrides(items, {})).toBe(items);
+  });
+
+  it('returns the same list reference when no override applies to a loaded item', () => {
+    const items = [makeItemCard({ id: 'a', isFavourite: false })];
+    // An override for an off-page item, plus a no-op override that already matches
+    // the loaded state — neither changes anything on this page.
+    expect(applyFavouriteOverrides(items, { 'not-on-page': true, a: false })).toBe(items);
+  });
+
+  it('clones only the affected card when a relevant override differs', () => {
+    const a = makeItemCard({ id: 'a', isFavourite: false });
+    const b = makeItemCard({ id: 'b', isFavourite: false });
+    const out = applyFavouriteOverrides([a, b], { a: true });
+
+    expect(out).not.toBe(undefined);
+    expect(out[0]?.isFavourite).toBe(true);
+    // The changed card is a fresh object; the untouched card is kept by reference.
+    expect(out[0]).not.toBe(a);
+    expect(out[1]).toBe(b);
   });
 });
