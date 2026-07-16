@@ -1,11 +1,12 @@
-import { cosineSimilarity } from '../search/semantic';
+import { cosineSimilarity } from './vector';
 import type { CatalogDatabase } from './connection';
 
 // Embedding persistence for M4 smart search (ADR-0029 Decisions 1 & 4, milestone
 // M4-1). A vector is a DERIVED rendition of an EXISTING item — like a thumbnail or
 // transcript — so it ATTACHES to that item (FK ON DELETE CASCADE) and never
 // creates one. This module is the storage + brute-force cosine scan half of the
-// engine; the pure ranking math lives in ../search/semantic. Three jobs:
+// engine; the pure cosine primitive lives in ./vector (a neutral db-layer
+// module, so the scan never depends UP on ../search). Three jobs:
 //   1. store/replace an item's float32 vector as a little-endian BLOB, keyed by
 //      (item_id, model_id) so re-embedding REPLACES and provenance stays explicit;
 //   2. drive the per-item `embed_status` drain (pending → done | error | skipped),
