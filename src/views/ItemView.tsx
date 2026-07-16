@@ -92,10 +92,14 @@ export function ItemView(): ReactElement | null {
   const seededFavourite =
     item !== null ? (favouriteOverrides[item.id] ?? item.isFavourite) : false;
 
-  const currentIndex = item !== null ? siblings.findIndex((sibling) => sibling.id === item.id) : -1;
-  const prevItem = currentIndex > 0 ? siblings[currentIndex - 1] : null;
-  const nextItem =
-    currentIndex >= 0 && currentIndex < siblings.length - 1 ? siblings[currentIndex + 1] : null;
+  const { prevItem, nextItem } = useMemo(() => {
+    const currentIndex = item !== null ? siblings.findIndex((sibling) => sibling.id === item.id) : -1;
+    return {
+      prevItem: currentIndex > 0 ? siblings[currentIndex - 1] : null,
+      nextItem:
+        currentIndex >= 0 && currentIndex < siblings.length - 1 ? siblings[currentIndex + 1] : null,
+    };
+  }, [siblings, item?.id]);
 
   const goTo = useCallback(
     (target: ItemCardDTO, direction: 'prev' | 'next'): void => {
@@ -109,12 +113,13 @@ export function ItemView(): ReactElement | null {
   // nothing here calls preventDefault). It stands down whenever the arrow key
   // has a more local job to do: auto-repeat from a held key (avoid a burst of
   // remounts), a held modifier (Alt/Ctrl/Cmd+Arrow are OS/browser shortcuts like
-  // history back/forward), a focused control that owns arrows itself, or — the
-  // #458 review fix — a live text selection, so collapsing a selected transcript
-  // sentence with ← never teleports the reader to another memory.
+  // history back/forward; Shift+Arrow is caret-browsing / selection-extend, #491),
+  // a focused control that owns arrows itself, or — the #458 review fix — a live
+  // text selection, so collapsing a selected transcript sentence with ← never
+  // teleports the reader to another memory.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
-      if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
+      if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         return;
       }
       if (ownsArrowKeys(event.target)) {
