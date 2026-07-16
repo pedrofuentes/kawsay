@@ -71,6 +71,17 @@ export type ThumbnailDataUrl = z.infer<typeof thumbnailDataUrlSchema>;
 export const sourceTypeSchema = z.enum(SOURCE_TYPES);
 export const mediaTypeSchema = z.enum(MEDIA_TYPES);
 
+/** How many media types exist — the upper bound on a search's any-of type filter. */
+export const MEDIA_TYPE_COUNT = MEDIA_TYPES.length;
+
+/**
+ * A calendar day `YYYY-MM-DD`, the shape the Search date pickers emit and the catalog
+ * compares capture dates against (#431). A strict format (a bounded, digits-only
+ * pattern) so a free-form or adversarial string is refused at the trust boundary
+ * rather than reaching a SQL comparison.
+ */
+export const searchDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
+
 /**
  * The library descriptor the renderer is allowed to see. NOTE the deliberate
  * absence of `catalogPath`: the on-disk SQLite location is an internal detail

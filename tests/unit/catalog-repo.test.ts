@@ -307,8 +307,9 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
     });
 
     it('a from-bound is inclusive of items captured on that very day', () => {
-      // The needle is captured at 10:00 on 2019-06-15; a from-bound of that day includes it.
-      const res = repo.search({ query: 'familia', limit: 50, offset: 0, fromDate: '2019-06-15' });
+      // The needle is captured at 10:00 on 2019-06-15; a from-bound of that day includes it
+      // (a whole-set page is read so the low-ranked needle is visible, not paged off).
+      const res = repo.search({ query: 'familia', limit: 100, offset: 0, fromDate: '2019-06-15' });
       expect(res.rows.map((r) => r.id)).toContain(audioId);
       // The 2020 photos are also on/after the bound, so they remain in the (large) set.
       expect(res.total).toBe(61);
@@ -448,7 +449,7 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
       const fo = repo.insertItem({ mediaType: 'photo', contentHash: 'h-fo' });
       repo.addOccurrence({ itemId: fo, sourceId: folder, sourceRef: 'fold/1' });
 
-      expect(repo.getItemsByIds([wa, fo], 'whatsapp').map((r) => r.id)).toEqual([wa]);
+      expect(repo.getItemsByIds([wa, fo], { source: 'whatsapp' }).map((r) => r.id)).toEqual([wa]);
     });
 
     it('finds a memory shared across sources under either source filter (AC-7 parity)', () => {
@@ -456,9 +457,9 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
       repo.addOccurrence({ itemId: shared, sourceId: whatsapp, sourceRef: 'wa/s' });
       repo.addOccurrence({ itemId: shared, sourceId: folder, sourceRef: 'fold/s' });
 
-      expect(repo.getItemsByIds([shared], 'whatsapp').map((r) => r.id)).toEqual([shared]);
-      expect(repo.getItemsByIds([shared], 'folder').map((r) => r.id)).toEqual([shared]);
-      expect(repo.getItemsByIds([shared], 'linkedin')).toHaveLength(0);
+      expect(repo.getItemsByIds([shared], { source: 'whatsapp' }).map((r) => r.id)).toEqual([shared]);
+      expect(repo.getItemsByIds([shared], { source: 'folder' }).map((r) => r.id)).toEqual([shared]);
+      expect(repo.getItemsByIds([shared], { source: 'linkedin' })).toHaveLength(0);
     });
   });
 });

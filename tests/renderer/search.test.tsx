@@ -206,19 +206,31 @@ describe('Search — empty, loading and error states', () => {
   });
 });
 
-describe('Search — filters narrow the matches', () => {
-  function twoTypedItems() {
-    return makeSearchResult({
-      items: [
-        makeItemCard({ mediaType: 'photo', title: 'Beach picnic' }),
-        makeItemCard({ mediaType: 'video', title: 'Birthday clip' }),
-      ],
-    });
+describe('Search — filters narrow the matches (server-side, #431)', () => {
+  const beachPhoto = makeItemCard({ mediaType: 'photo', title: 'Beach picnic' });
+  const birthdayVideo = makeItemCard({ mediaType: 'video', title: 'Birthday clip' });
+
+  /** A bridge that narrows by the SAME server-side params the view now sends: any-of
+   *  `types` and the inclusive `fromDate` day-bound (over the tile capture dates). */
+  function filterAwareApi() {
+    const all = [beachPhoto, birthdayVideo];
+    const searchCatalog = vi.fn(
+      (input: { types?: readonly string[]; fromDate?: string; toDate?: string }) => {
+        const items = all.filter((item) => {
+          if (input.types && !input.types.includes(item.mediaType)) return false;
+          const day = (item.captureDate ?? '').slice(0, 10);
+          if (input.fromDate && day < input.fromDate) return false;
+          if (input.toDate && day > input.toDate) return false;
+          return true;
+        });
+        return Promise.resolve(makeSearchResult({ items }));
+      },
+    );
+    return makeFakeApi({ searchCatalog });
   }
 
-  it('narrows results by media type and exposes pressed state on the active chip', async () => {
-    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(twoTypedItems())) });
-    const { user } = renderSearch(api);
+  it('narrows by media type through the bridge and exposes pressed state on the chip', async () => {
+    const { user } = renderSearch(filterAwareApi());
 
     await user.type(screen.getByRole('searchbox'), 'b');
     expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
@@ -228,31 +240,36 @@ describe('Search — filters narrow the matches', () => {
     expect(videos).toHaveAttribute('aria-pressed', 'false');
     await user.click(videos);
 
+    // The catalogue re-runs server-side and returns only the video — the photo is gone
+    // because it was never in the filtered set, not because it was hidden in memory.
     expect(videos).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText(caption('Birthday clip'))).toBeInTheDocument();
-    expect(screen.queryByText(caption('Beach picnic'))).not.toBeInTheDocument();
+    expect(await screen.findByText(caption('Birthday clip'))).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(caption('Beach picnic'))).not.toBeInTheDocument(),
+    );
   });
 
-  it('groups the type filters under an accessible group label', async () => {
-    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(twoTypedItems())) });
-    renderSearch(api);
+  it('groups the type filters under an accessible group label', () => {
+    renderSearch(filterAwareApi());
     expect(screen.getByRole('group', { name: /type/i })).toBeInTheDocument();
   });
 
-  it('narrows results by date range', async () => {
-    const api = makeFakeApi({
-      searchCatalog: vi.fn(() =>
-        Promise.resolve(
-          makeSearchResult({
-            items: [
-              makeItemCard({ title: 'June memory', captureDate: '2019-06-15T10:00:00.000Z' }),
-              makeItemCard({ title: 'January memory', captureDate: '2020-01-10T10:00:00.000Z' }),
-            ],
-          }),
-        ),
-      ),
+  it('narrows by date range through the bridge', async () => {
+    const june = makeItemCard({ title: 'June memory', captureDate: '2019-06-15T10:00:00.000Z' });
+    const january = makeItemCard({
+      title: 'January memory',
+      captureDate: '2020-01-10T10:00:00.000Z',
     });
-    const { user } = renderSearch(api);
+    const searchCatalog = vi.fn((input: { fromDate?: string }) => {
+      const all = [june, january];
+      const from = input.fromDate;
+      const items =
+        from === undefined
+          ? all
+          : all.filter((item) => (item.captureDate ?? '').slice(0, 10) >= from);
+      return Promise.resolve(makeSearchResult({ items }));
+    });
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
 
     await user.type(screen.getByRole('searchbox'), 'memory');
     expect(await screen.findByText(caption('June memory'))).toBeInTheDocument();
@@ -260,24 +277,23 @@ describe('Search — filters narrow the matches', () => {
 
     fireEvent.change(screen.getByLabelText(/^from$/i), { target: { value: '2020-01-01' } });
 
-    expect(screen.getByText(caption('January memory'))).toBeInTheDocument();
-    expect(screen.queryByText(caption('June memory'))).not.toBeInTheDocument();
+    expect(await screen.findByText(caption('January memory'))).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(caption('June memory'))).not.toBeInTheDocument());
   });
 
   it('shows a "no matches for these filters" state with a way to clear them', async () => {
-    const api = makeFakeApi({ searchCatalog: vi.fn(() => Promise.resolve(twoTypedItems())) });
-    const { user } = renderSearch(api);
+    const { user } = renderSearch(filterAwareApi());
 
     await user.type(screen.getByRole('searchbox'), 'b');
     expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
 
-    // Filter to a type neither result has → every match is hidden.
+    // Filter to a type neither result has → the catalogue returns an empty filtered set.
     await user.click(screen.getByRole('button', { name: /voice notes/i }));
 
     expect(await screen.findByText(/match these filters/i)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /clear filters/i }));
 
-    expect(screen.getByText(caption('Beach picnic'))).toBeInTheDocument();
+    expect(await screen.findByText(caption('Beach picnic'))).toBeInTheDocument();
     expect(screen.getByText(caption('Birthday clip'))).toBeInTheDocument();
   });
 });

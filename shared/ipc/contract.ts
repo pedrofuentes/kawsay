@@ -12,8 +12,11 @@ import {
   categorizationStatusSchema,
   itemCategoriesSchema,
   librarySummarySchema,
+  mediaTypeSchema,
+  MEDIA_TYPE_COUNT,
   pathSchema,
   searchResultSchema,
+  searchDaySchema,
   sourceTypeSchema,
   suggestionsViewSchema,
   thumbnailDataUrlSchema,
@@ -212,6 +215,16 @@ export const ipcContract = {
       // Optional connector filter (AC-7) — narrows the match set to one source.
       // Omitted ⇒ every source, so the channel stays backward-compatible.
       source: sourceTypeSchema.optional(),
+      // Optional media-type filter (any-of) applied server-side across the whole
+      // library, not just the first page (#431). A bounded set of the known media
+      // types (no duplicates would still validate, the repo treats it as a set);
+      // omitted ⇒ every type.
+      types: z.array(mediaTypeSchema).min(1).max(MEDIA_TYPE_COUNT).optional(),
+      // Optional inclusive `YYYY-MM-DD` capture-date bounds, applied server-side
+      // (#431). A strict day format so a free-form or adversarial string is refused
+      // at the boundary; omitted ⇒ no bound on that side.
+      fromDate: searchDaySchema.optional(),
+      toDate: searchDaySchema.optional(),
     }),
     response: searchResultSchema,
   },
