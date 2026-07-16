@@ -472,6 +472,151 @@ describe('ItemView — favourite toggle race + lifecycle guards (#434)', () => {
   });
 });
 
+describe('ItemView — favourite save is bounded + busy-clear gate (#489, #490)', () => {
+  // Must match FAVOURITE_SAVE_TIMEOUT_MS in src/lib/use-favourite.ts. Kept local so
+  // this stays a behavioural test (the exact bound is an implementation detail; the
+  // contract is "a hung save recovers on its own within a bounded time").
+  const SAVE_TIMEOUT_MS = 10_000;
+  const SAVE_FAILURE_COPY = "We couldn't save that change just now. Nothing was lost.";
+
+  function hookWrapper(api: FakeApi) {
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <KawsayApiProvider api={api}>
+          <NavigationProvider>{children}</NavigationProvider>
+        </KawsayApiProvider>
+      );
+    };
+  }
+
+  it('bounds an in-flight save so a hung catalog:setFavourite never sticks the toggle disabled forever (#489)', async () => {
+    vi.useFakeTimers();
+    try {
+      const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+      // A save that NEVER settles — the failure mode #489 guards against (e.g. main
+      // process wedged on DB contention). Without a timeout the toggle stays disabled
+      // for the rest of the session.
+      const pending = deferred<{ isFavourite: boolean }>();
+      const setFavourite = vi.fn(() => pending.promise);
+      const api = makeFakeApi({ setFavourite });
+      const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), {
+        wrapper: hookWrapper(api),
+      });
+
+      act(() => result.current.toggle());
+      // Optimistic + busy while the (doomed) save is in flight.
+      expect(result.current.isFavourite).toBe(true);
+      expect(result.current.isSaving).toBe(true);
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // The invoke never resolves; advancing past the bound must self-heal.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS);
+        });
+
+        // Recovered: reverted to the pre-toggle value, re-enabled, calm failure copy,
+        // and the timeout took the same reverting path a rejected save does.
+        expect(result.current.isSaving).toBe(false);
+        expect(result.current.isFavourite).toBe(false);
+        expect(result.current.announcement).toBe(SAVE_FAILURE_COPY);
+        // The timeout took a reverting path (distinct message from a rejected save).
+        expect(
+          warnSpy.mock.calls.some((call) => String(call[0]).includes('timed out; reverting')),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles a slow save that actually lands AFTER the timeout, instead of leaving a lie (#489)', async () => {
+    vi.useFakeTimers();
+    try {
+      // Start favourited on disk; un-favourite it. The write is merely SLOW (not
+      // failed): we cross the timeout and assume failure, then the success lands.
+      const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: true });
+      const pending = deferred<{ isFavourite: boolean }>();
+      const setFavourite = vi.fn(() => pending.promise);
+      const api = makeFakeApi({ setFavourite });
+      const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), {
+        wrapper: hookWrapper(api),
+      });
+
+      act(() => result.current.toggle());
+      expect(result.current.isFavourite).toBe(false); // optimistic un-favourite
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // Timeout first: assume failure, revert to the pre-toggle value, show the notice.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS);
+        });
+        expect(result.current.isSaving).toBe(false);
+        expect(result.current.isFavourite).toBe(true);
+        expect(result.current.announcement).toBe(SAVE_FAILURE_COPY);
+
+        // ...but the write ACTUALLY succeeded a moment later. The sequence gate must
+        // reconcile the value to disk truth, and the mistaken failure notice is put
+        // right — no lingering "couldn't save" over a change that did persist.
+        await act(async () => {
+          pending.resolve({ isFavourite: false });
+          await Promise.resolve();
+        });
+        expect(result.current.isFavourite).toBe(false);
+        expect(result.current.isSaving).toBe(false);
+        expect(result.current.announcement).toBe('Removed from favourites.');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the toggle disabled until the NEWEST save settles, even when an older reply lands first (#490)', async () => {
+    // Distinct from the out-of-order "drop entirely" test above: here the OLDER-sent
+    // save resolves FIRST (in order) while the newer is still pending. The busy-clear
+    // gate must keep the control disabled until the NEWEST attempt settles — an older
+    // reply must not re-enable it mid-flight. (Hardcoding saving=false in that gate
+    // leaves the value tests green but turns THIS one red.)
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const first = deferred<{ isFavourite: boolean }>();
+    const second = deferred<{ isFavourite: boolean }>();
+    const calls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      calls.push(input);
+      return calls.length === 1 ? first.promise : second.promise;
+    });
+    const api = makeFakeApi({ setFavourite });
+    const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), {
+      wrapper: hookWrapper(api),
+    });
+
+    act(() => result.current.toggle()); // older: favourite true
+    act(() => result.current.toggle()); // newer: favourite false
+    expect(result.current.isSaving).toBe(true);
+
+    // The OLDER-sent reply resolves FIRST while the newer is still in flight.
+    await act(async () => {
+      first.resolve({ isFavourite: true });
+      await Promise.resolve();
+    });
+    // Still busy — the newer save has not settled.
+    expect(result.current.isSaving).toBe(true);
+
+    // Only the NEWEST settlement clears the busy flag and pins the last-sent value.
+    await act(async () => {
+      second.resolve({ isFavourite: false });
+      await Promise.resolve();
+    });
+    expect(result.current.isSaving).toBe(false);
+    expect(result.current.isFavourite).toBe(false);
+  });
+});
+
 describe('ItemView — ←/→ keyboard navigation between memories (#434)', () => {
   function renderWithSiblings(
     siblings: ItemCardDTO[],
