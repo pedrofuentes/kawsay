@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  APP_CAPABILITIES,
   APP_GET_VERSION,
   CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
@@ -71,6 +72,13 @@ function fakeIpcMain() {
 // satisfies the (now multi-channel) contract. These tests only exercise the
 // app:getVersion listener — the stubs are never invoked.
 const otherHandlers = {
+  [APP_CAPABILITIES]: () => ({
+    ffmpeg: true,
+    ffprobe: true,
+    clusterWorker: true,
+    embedder: true,
+    gazetteer: true,
+  }),
   [LIBRARY_CREATE]: () => ({ root: '/x', name: 'x', createdAt: 'x', schemaVersion: 1 }),
   [LIBRARY_OPEN]: () => ({ root: '/x', name: 'x', createdAt: 'x', schemaVersion: 1 }),
   [CATALOG_TIMELINE]: () => ({ items: [], nextCursor: null }),

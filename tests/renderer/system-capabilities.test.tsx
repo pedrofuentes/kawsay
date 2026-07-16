@@ -5,16 +5,17 @@ import { makeFakeApi } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
 import { wrapInProviders } from './support/render';
 import { expectNoAxeViolations } from './support/axe';
+import type { CapabilitiesDTO } from '@shared/kawsay-api';
 
-const HEALTHY = {
+const HEALTHY: CapabilitiesDTO = {
   ffmpeg: true,
   ffprobe: true,
   clusterWorker: true,
   embedder: true,
   gazetteer: true,
-} as const;
+};
 
-function apiWith(capabilities: typeof HEALTHY): FakeApi {
+function apiWith(capabilities: CapabilitiesDTO): FakeApi {
   return makeFakeApi({ getCapabilities: vi.fn(() => Promise.resolve(capabilities)) });
 }
 

@@ -6,6 +6,7 @@
  * filesystem, the database, or the network.
  */
 import type {
+  CapabilitiesDTO,
   CategorizationStartResultDTO,
   CategorizationStatusDTO,
   CategorizationCorrectionDTO,
@@ -32,6 +33,17 @@ import type { MediaType, SourceType } from '@shared/catalog';
 export interface KawsayAPI {
   /** The running application version, validated end-to-end (channel `app:getVersion`). */
   getAppVersion(): Promise<string>;
+
+  /**
+   * The aggregate CAPABILITY report (#441): a boolean-per-seam snapshot of the
+   * bundled-asset seams that resolve lazily and degrade — the media binaries
+   * (`ffmpeg`/`ffprobe`), the off-thread cluster `clusterWorker` entry, the smart-
+   * search `embedder`, and the place `gazetteer`. A packaged build reports every
+   * capability `true`; any `false` is a packaging regression the main process also
+   * logs loudly, and the UI surfaces reverently (e.g. the video-preview notice). No
+   * path or id ever crosses back (AC-4).
+   */
+  getCapabilities(): Promise<CapabilitiesDTO>;
 
   /** Create a new library at `path` and make it the open library. */
   createLibrary(input: { path: string; personName?: string }): Promise<LibrarySummaryDTO>;
@@ -355,6 +367,7 @@ export interface DialogOpenOptions {
 
 // Re-exported for the renderer (U1/U2/U3), which imports these DTOs by name.
 export type {
+  CapabilitiesDTO,
   ItemCardDTO,
   ItemCategoryDTO,
   ItemCategoriesDTO,

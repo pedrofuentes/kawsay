@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { log } from '../log';
 import { haversineDistanceMeters, type GeoCoord } from './places-cluster';
 
 // Offline reverse-geocoder for the places pipeline (ADR-0030 Decision 2, milestone
@@ -365,12 +366,13 @@ export function loadGazetteer(options: LoadGazetteerOptions): Gazetteer {
   try {
     return createGazetteer(parseGazetteerNdjson(readFile(path)));
   } catch (err) {
-    // `path` is an internal, resolver-produced asset path (never user/attacker input),
-    // and a JS template literal is not a printf format string — so Semgrep's
-    // unsafe-formatstring (CWE-134) taint match here is a false positive. The path is
-    // deliberately kept inline in the message for triage (#331).
-    console.warn(
-      `[kawsay] gazetteer asset is present but could not be read/parsed (${path}); degrading to empty gazetteer.`, // nosemgrep: unsafe-formatstring
+    // Route through the REDACTING logger (#440; closes #480's gazetteer item): the
+    // resolved asset path is NO LONGER interpolated into the template (the template is
+    // not redacted — only Error args are), and the caught error is forwarded as a
+    // separate arg so `projectError` reduces it to its safe {name, code} shape. A
+    // present-but-unreadable bundled asset is a possible packaging regression.
+    log.warn(
+      '[kawsay] gazetteer asset is present but could not be read/parsed; degrading to empty gazetteer (possible packaging regression)',
       err,
     );
     return createGazetteer([]);

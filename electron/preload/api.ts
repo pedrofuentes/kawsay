@@ -6,6 +6,7 @@
 // helpers are injected, so the whole surface is unit-testable without Electron.
 
 import {
+  APP_CAPABILITIES,
   APP_GET_VERSION,
   CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
@@ -73,6 +74,7 @@ export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSub
       const { version } = await invoke(APP_GET_VERSION, {});
       return version;
     },
+    getCapabilities: () => invoke(APP_CAPABILITIES, {}),
     createLibrary: (input) => invoke(LIBRARY_CREATE, input),
     openLibrary: (input) => invoke(LIBRARY_OPEN, input),
     getTimeline: (input) => invoke(CATALOG_TIMELINE, input),

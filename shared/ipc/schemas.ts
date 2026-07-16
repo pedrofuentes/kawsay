@@ -621,3 +621,29 @@ export const settingsPatchSchema = z.strictObject({
   reducedMotion: z.boolean().optional(),
 });
 export type SettingsPatchDTO = z.infer<typeof settingsPatchSchema>;
+
+/**
+ * The aggregate CAPABILITY report (#441): a flat, boolean-per-seam projection of
+ * the main process's "resolve lazily, degrade, never throw" bundled-asset seams,
+ * so the renderer (and a packaging guard) can tell a healthy build from one that
+ * silently shipped without a bundled binary/worker entry. Each field is `true`
+ * only when that capability resolved:
+ *   • `ffmpeg` / `ffprobe` — the per-arch bundled media binaries (video previews,
+ *     audio extraction) resolved.
+ *   • `clusterWorker` — the built off-thread categorization worker entry is present
+ *     (its absence silently reintroduces main-thread clustering, a perf-invariant
+ *     violation).
+ *   • `embedder` — the smart-search embedder (binary + model) is available.
+ *   • `gazetteer` — the place-name gazetteer asset is bundled.
+ * A packaged build MUST report every field `true`; any `false` is a packaging
+ * regression the app now logs loudly and this DTO surfaces. Carries NO path or id
+ * (AC-4) — only the booleans the UI/guard needs.
+ */
+export const capabilitiesSchema = z.strictObject({
+  ffmpeg: z.boolean(),
+  ffprobe: z.boolean(),
+  clusterWorker: z.boolean(),
+  embedder: z.boolean(),
+  gazetteer: z.boolean(),
+});
+export type CapabilitiesDTO = z.infer<typeof capabilitiesSchema>;
