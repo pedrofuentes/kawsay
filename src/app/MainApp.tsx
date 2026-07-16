@@ -2,6 +2,7 @@
 // routes the primary sections: the timeline (U1), search (U2), the Add Memories
 // re-entry (#427), and settings — all reading the open library from LibraryContext
 // and moving between sections via useNavigation.
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { AppShell } from '@renderer/components/AppShell';
 import { useLibrary } from '@renderer/lib/library';
@@ -16,14 +17,29 @@ import { Sidebar } from './Sidebar';
 export function MainApp(): ReactElement {
   const { view } = useNavigation();
   const { library } = useLibrary();
+  const isTimeline = view.name === 'timeline';
+
+  // Leaving Timeline for an opened memory or Search used to UNMOUNT it —
+  // `useTimeline`'s loaded pages, the scroll offset, and the virtual window all
+  // live in Timeline's own local state, so returning re-ran the fetch from page
+  // 1 and reset scroll to the top (#432). Once visited, keep it mounted for the
+  // rest of MainApp's lifetime instead of swapping it in and out of the switch
+  // below — `active` (passed to Timeline) toggles it hidden rather than gone,
+  // so its state simply survives the round trip. This mirrors the pattern the
+  // NavigationProvider's favourite-override map already established: state
+  // that must outlive a sibling view's remount lives ABOVE the swap, not
+  // inside it.
+  const [timelineMounted, setTimelineMounted] = useState(isTimeline);
+  useEffect(() => {
+    if (isTimeline) {
+      setTimelineMounted(true);
+    }
+  }, [isTimeline]);
 
   return (
     <AppShell variant="main" sidebar={<Sidebar />} libraryName={library?.name}>
-      {view.name === 'timeline' ? (
-        renderSection()
-      ) : (
-        <div className="mx-auto flex max-w-3xl flex-col gap-8">{renderSection()}</div>
-      )}
+      {timelineMounted ? <Timeline active={isTimeline} /> : null}
+      {isTimeline ? null : <div className="mx-auto flex max-w-3xl flex-col gap-8">{renderSection()}</div>}
     </AppShell>
   );
 
@@ -43,7 +59,9 @@ export function MainApp(): ReactElement {
         // <h1> auto-focus re-runs, and the transcript re-reads for the new id).
         return <ItemView key={`item-${view.item.id}`} />;
       case 'timeline':
-        return <Timeline />;
+        // Handled above via the persistent, hidden-when-inactive mount (#432) —
+        // unreachable here since that branch never calls renderSection().
+        return null;
       // Onboarding is routed by the top-level <Router/> (App.tsx) and never reaches
       // MainApp; the case exists only so the switch stays exhaustive over View.
       case 'onboarding':

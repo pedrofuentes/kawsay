@@ -25,7 +25,6 @@ import { cx } from '@renderer/lib/cx';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
 import { useTimeline } from '@renderer/lib/use-timeline';
-import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 import { computeVirtualWindow } from '@renderer/lib/virtual-window';
 import type { ItemCardDTO, MediaType } from '@shared/kawsay-api';
 
@@ -109,7 +108,24 @@ function buildRows(items: ItemCardDTO[]): Row[] {
   return rows;
 }
 
-export function Timeline(): ReactElement {
+export interface TimelineProps {
+  /**
+   * Is Timeline the CURRENTLY VISIBLE view? Defaults to `true` for every
+   * existing caller that renders Timeline as the sole active view.
+   *
+   * MainApp keeps Timeline mounted (rather than swapping it for Search/ItemView
+   * and back) once the person has visited it, so its loaded pages, scroll
+   * offset, and virtualization window survive a "Back" or a trip to Search
+   * without a page-1 refetch (#432). While `active` is false the root is
+   * marked `hidden` — natively out of the accessibility tree, unfocusable, and
+   * not tabbable, with zero visual footprint — and the scroll/resize/streaming
+   * side effects below pause so a backgrounded Timeline never measures a
+   * collapsed (display:none) layout or fires an IPC call no one can see.
+   */
+  active?: boolean;
+}
+
+export function Timeline({ active = true }: TimelineProps = {}): ReactElement {
   const { navigate } = useNavigation();
   const { library } = useLibrary();
   const { items, status, hasMore, loadMore, reload } = useTimeline();
@@ -118,7 +134,7 @@ export function Timeline(): ReactElement {
   const headingTitle = who.length > 0 ? `${who}'s timeline` : 'Timeline';
   const memoriesLabel = `${who.length > 0 ? `${who}'s` : 'Your'} memories`;
 
-  const headingRef = useAutoFocusHeading<HTMLHeadingElement>();
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(DEFAULT_VIEWPORT);
@@ -132,9 +148,26 @@ export function Timeline(): ReactElement {
     overscan: OVERSCAN,
   });
 
-  // Keep the viewport height in sync with the real scroll container once it is
-  // mounted; fall back to a sensible default when layout is unmeasured.
+  // Re-orient keyboard/screen-reader users to the heading (WCAG 2.4.3) whenever
+  // Timeline BECOMES the active view — on first mount, same as every other
+  // view, and again whenever it reappears after being hidden behind an opened
+  // memory or Search (#432), since staying mounted means it never remounts to
+  // re-run a mount-only autofocus effect.
   useEffect(() => {
+    if (active) {
+      headingRef.current?.focus();
+    }
+  }, [active]);
+
+  // Keep the viewport height in sync with the real scroll container once it is
+  // mounted; fall back to a sensible default when layout is unmeasured. Paused
+  // while inactive: a `hidden` (display:none) container reports a 0 height, so
+  // measuring then would poison the virtual window — re-measure instead as
+  // soon as `active` flips back to true.
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
     const element = scrollRef.current;
     if (element === null) {
       return undefined;
@@ -145,14 +178,16 @@ export function Timeline(): ReactElement {
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [status]);
+  }, [status, active]);
 
   // Stream the next page as the window approaches the end of what's loaded.
+  // Paused while inactive so a backgrounded Timeline never fires an IPC call
+  // no one can see (#432).
   useEffect(() => {
-    if (status === 'ready' && hasMore && windowed.endIndex >= rows.length - LOAD_MORE_AHEAD) {
+    if (active && status === 'ready' && hasMore && windowed.endIndex >= rows.length - LOAD_MORE_AHEAD) {
       loadMore();
     }
-  }, [status, hasMore, windowed.endIndex, rows.length, loadMore]);
+  }, [active, status, hasMore, windowed.endIndex, rows.length, loadMore]);
 
   const handleScroll = useCallback((event: React.UIEvent<HTMLElement>): void => {
     setScrollTop(event.currentTarget.scrollTop);
@@ -167,20 +202,27 @@ export function Timeline(): ReactElement {
   );
 
   return (
-    <div className="flex h-full flex-col gap-5">
-      <header className="flex flex-col gap-1">
-        <h1
-          ref={headingRef}
-          tabIndex={-1}
-          className="font-display text-3xl font-semibold text-text-primary outline-none"
-        >
-          {headingTitle}
-        </h1>
-        {status === 'ready' && items.length > 0 ? (
-          <p className="font-body text-base text-text-secondary">Everything, newest first.</p>
-        ) : null}
-      </header>
-      {renderBody()}
+    // A bare wrapper carrying only `hidden` — no sibling layout classes here,
+    // so nothing in the author stylesheet (e.g. a `flex`/`block` utility) can
+    // out-cascade the UA `[hidden] { display: none }` rule and defeat it.
+    // `hidden` alone removes the whole subtree from the accessibility tree,
+    // from the tab order, and from view — no separate `aria-hidden` needed.
+    <div hidden={!active}>
+      <div className="flex h-full flex-col gap-5">
+        <header className="flex flex-col gap-1">
+          <h1
+            ref={headingRef}
+            tabIndex={-1}
+            className="font-display text-3xl font-semibold text-text-primary outline-none"
+          >
+            {headingTitle}
+          </h1>
+          {status === 'ready' && items.length > 0 ? (
+            <p className="font-body text-base text-text-secondary">Everything, newest first.</p>
+          ) : null}
+        </header>
+        {renderBody()}
+      </div>
     </div>
   );
 
