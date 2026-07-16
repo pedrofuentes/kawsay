@@ -13,10 +13,17 @@ import { fileURLToPath } from 'node:url';
 import { app } from 'electron';
 import { createElectronRuntime, registerPrivilegedSchemes } from './app/electron-runtime';
 import { createCompositionRoot } from './app/composition-root';
+import { configureLog } from './log';
 
 // This module is bundled to `out/main/index.js`, so its own directory is the anchor
 // the composition root joins the preload/renderer/worker paths against.
 const moduleDir = dirname(fileURLToPath(import.meta.url));
+
+// Derive the logger's verbosity from packaged state (NOT NODE_ENV, which the shipped
+// app never sets): a packaged build stays quiet below `warn`; dev is chattier. This
+// is the ONE place `app.isPackaged` is read for logging — the logger itself never
+// imports Electron, so it stays unit-testable. Redaction is unconditional either way.
+configureLog({ isPackaged: app.isPackaged });
 
 // The custom LOCAL media scheme (#428) must be registered as privileged BEFORE the
 // app is ready — so it runs at module load, alongside the other pre-ready setup.

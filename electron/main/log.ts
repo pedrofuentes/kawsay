@@ -23,16 +23,25 @@ export interface Logger {
 }
 
 export interface LoggerOptions {
-  /** Minimum level to emit. Defaults to dev→`debug`, packaged/prod→`warn`. */
+  /** Minimum level to emit. When omitted, derived from {@link LoggerOptions.isPackaged}. */
   readonly level?: LogLevel;
   /** Where emissions go. Defaults to the native `console`. */
   readonly sink?: LogSink;
+  /**
+   * Whether this is a packaged (shipped) build. When `level` is omitted the default
+   * threshold is derived from THIS — packaged → `warn`, unpackaged (dev) → `debug`.
+   * It is INJECTED (from `app.isPackaged`, wired in `electron/main/index.ts`) rather
+   * than read from `process.env.NODE_ENV` — which the packaged Electron app never
+   * sets, so an env-based default would leave the shipped build chatty — and never
+   * from a `require('electron')` here, so `log.ts` stays unit-testable off a runtime.
+   */
+  readonly isPackaged?: boolean;
 }
 
-/** Dev is chattier than prod, but BOTH redact: the projected form of an Error never
- *  carries message/stack regardless of level. Prod stays quiet below `warn`. */
-function defaultLevel(): LogLevel {
-  return process.env.NODE_ENV === 'production' ? 'warn' : 'debug';
+/** Packaged (shipped) builds stay quiet below `warn`; dev is chattier. BOTH redact
+ *  unconditionally — the level only gates verbosity, never leakage. */
+function defaultLevel(isPackaged: boolean | undefined): LogLevel {
+  return isPackaged ? 'warn' : 'debug';
 }
 
 /** Project any `Error` argument to its safe {name, code} shape; leave already-safe
@@ -43,7 +52,7 @@ function redactArg(arg: unknown): unknown {
 
 export function createLogger(options: LoggerOptions = {}): Logger {
   const sink = options.sink ?? console;
-  const threshold = LEVEL_ORDER[options.level ?? defaultLevel()];
+  const threshold = LEVEL_ORDER[options.level ?? defaultLevel(options.isPackaged)];
 
   function emit(level: LogLevel, message: string, args: unknown[]): void {
     if (LEVEL_ORDER[level] < threshold) return;
@@ -75,5 +84,22 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   };
 }
 
-/** The shared main-process logger singleton. */
-export const log: Logger = createLogger();
+// The shared main-process logger singleton. Its verbosity depends on packaged state,
+// which is only known once the Electron `app` exists — so the singleton starts at the
+// dev-safe default and `configureLog` re-derives the threshold at process start (from
+// `app.isPackaged`, in `electron/main/index.ts`). Redaction is unconditional, so even
+// before configuration nothing can leak; only the debug/info verbosity gate changes.
+let active: Logger = createLogger();
+
+/** Reconfigure the shared {@link log} — called once at startup with the injected
+ *  packaged state so the shipped build's default threshold is `warn`, not `debug`. */
+export function configureLog(options: LoggerOptions): void {
+  active = createLogger(options);
+}
+
+export const log: Logger = {
+  debug: (message, ...args) => active.debug(message, ...args),
+  info: (message, ...args) => active.info(message, ...args),
+  warn: (message, ...args) => active.warn(message, ...args),
+  error: (message, ...args) => active.error(message, ...args),
+};

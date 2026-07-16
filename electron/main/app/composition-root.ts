@@ -406,6 +406,10 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
   const ingestionCoordinator = createIngestionCoordinator({
     spawn: createWorkerThreadsSpawner({ scriptPath: join(moduleDir, 'ingestion-worker.js') }),
     emitProgress: (event) => emitEvent(IMPORT_PROGRESS, event),
+    // Route worker faults through the REDACTING logger (#440; closes #480 item 2):
+    // pass the Error as a separate arg so `projectError` reduces it to {name, code} —
+    // never the raw stack/message the coordinator's bare-console default would print.
+    logWorkerFault: (error) => log.error('[kawsay] ingestion worker fault', error),
   });
 
   // ── Phase 2 cells: set in bootstrap(), post-`whenReady` ──────────────────────
