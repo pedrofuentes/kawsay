@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import { existsSync } from 'node:fs';
+import { log } from '../log';
 import { clusterPlaces } from './places-cluster';
 import { clusterThemes } from './themes-cluster';
 import type {
@@ -269,18 +270,19 @@ export interface ProductionClusterTransportOptions {
  * worker). A packaged build always ships the entry, so production takes the
  * off-thread path; the fallback only keeps unbuilt checkouts working.
  *
- * The degrade emits a single one-time warning (#401): the selector is built once per
- * port, so a packaged build that somehow omitted the worker entry — silently
- * reintroducing main-thread clustering — is now surfaced. The message carries no path
- * or id, per the zero-egress diagnostic convention.
+ * The degrade emits a single one-time warning (#401, #441): the selector is built once
+ * per port, so a packaged build that somehow omitted the worker entry — silently
+ * reintroducing MAIN-THREAD CLUSTERING (a perf-invariant violation) — is now surfaced
+ * LOUDLY through the redacting logger and framed as a possible packaging regression.
+ * The message carries no path or id, per the zero-egress diagnostic convention.
  */
 export function createProductionClusterTransport(
   options: ProductionClusterTransportOptions,
 ): ClusterTransport {
   const scriptExists = options.scriptExists ?? existsSync;
   if (!scriptExists(options.scriptPath)) {
-    console.warn(
-      '[kawsay] categorization worker entry missing; falling back to inline main-thread clustering',
+    log.warn(
+      '[kawsay] categorization worker entry missing; falling back to inline main-thread clustering — expected in a dev checkout, but a possible packaging regression in a shipped build',
     );
     return createInlineClusterTransport(
       options.isCancelled === undefined ? {} : { isCancelled: options.isCancelled },

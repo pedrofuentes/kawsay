@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  APP_CAPABILITIES,
   APP_GET_VERSION,
   CATALOG_TIMELINE,
   SMART_SEARCH_MODEL_STATUS,
@@ -45,6 +46,13 @@ function fakeDeps(overrides: Partial<IpcHandlerDeps> = {}): {
     requireSettingsStore: () => ({}) as never,
     isSmartSearchOffered: () => true,
     isCategorizationOffered: () => true,
+    getCapabilities: () => ({
+      ffmpeg: true,
+      ffprobe: true,
+      clusterWorker: true,
+      embedder: true,
+      gazetteer: true,
+    }),
     ...overrides,
   };
   return { deps, catalog, consent, modelController };
@@ -70,6 +78,19 @@ describe('buildIpcHandlers', () => {
     const { deps } = fakeDeps();
     const result = await buildIpcHandlers(deps)[APP_GET_VERSION](undefined as never);
     expect(result).toEqual({ version: '4.5.6' });
+  });
+
+  it('routes app:capabilities through the injected getCapabilities (#441)', async () => {
+    const report = {
+      ffmpeg: false,
+      ffprobe: false,
+      clusterWorker: true,
+      embedder: false,
+      gazetteer: true,
+    };
+    const { deps } = fakeDeps({ getCapabilities: () => report });
+    const result = await buildIpcHandlers(deps)[APP_CAPABILITIES](undefined as never);
+    expect(result).toEqual(report);
   });
 
   it('delegates catalog:timeline to the catalog session', async () => {

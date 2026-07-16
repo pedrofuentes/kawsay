@@ -7,6 +7,7 @@ import {
   QUERY_MAX_LENGTH,
   THUMBNAIL_MAX_SIZE,
   THUMBNAIL_MIN_SIZE,
+  capabilitiesSchema,
   categorizationCorrectionSchema,
   categorizationStartResultSchema,
   categorizationStatusSchema,
@@ -32,6 +33,15 @@ import {
 
 /** IPC channel: request the running application version. */
 export const APP_GET_VERSION = 'app:getVersion';
+/**
+ * IPC channel: read the aggregate CAPABILITY report (#441) — a boolean-per-seam
+ * snapshot of the bundled-asset seams that "resolve lazily, degrade, never throw"
+ * (ffmpeg/ffprobe, the off-thread cluster worker entry, the embedder, the
+ * gazetteer). A packaged build reports every capability available; any `false`
+ * is a packaging regression the main process also logs loudly. Resolves the
+ * {@link capabilitiesSchema} DTO — plain booleans only, no path/id (AC-4).
+ */
+export const APP_CAPABILITIES = 'app:capabilities';
 
 /** IPC channel: create a brand-new library at a chosen root directory. */
 export const LIBRARY_CREATE = 'library:create';
@@ -239,6 +249,10 @@ export const ipcContract = {
   [APP_GET_VERSION]: {
     request: z.strictObject({}),
     response: z.strictObject({ version: z.string().min(1) }),
+  },
+  [APP_CAPABILITIES]: {
+    request: z.strictObject({}),
+    response: capabilitiesSchema,
   },
   [LIBRARY_CREATE]: {
     request: z.strictObject({

@@ -33,6 +33,7 @@ import type {
   Session,
 } from 'electron';
 import {
+  APP_CAPABILITIES,
   APP_GET_VERSION,
   CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
@@ -75,7 +76,12 @@ import {
   TRANSCRIPTION_MODEL_DOWNLOAD_PROGRESS,
   TRANSCRIPTION_PROGRESS,
 } from '@shared/ipc/events';
-import { handleGetVersion } from '../ipc/handlers/app';
+import { handleCapabilities, handleGetVersion } from '../ipc/handlers/app';
+import {
+  buildVideoThumbnailer,
+  createCapabilitiesResolver,
+  type CapabilitiesReport,
+} from './capabilities';
 import { handleOpenDirectory, handleOpenFile, type ShowOpenDialog } from '../ipc/handlers/dialog';
 import { handleDownloadModel, handleModelStatus } from '../ipc/handlers/transcription';
 import {
@@ -266,6 +272,8 @@ export interface IpcHandlerDeps {
   isSmartSearchOffered(): boolean;
   /** `categorize:status`'s `offered`: the gazetteer asset is bundled. */
   isCategorizationOffered(): boolean;
+  /** `app:capabilities`'s aggregate report: the live per-seam bundled-asset probe (#441). */
+  getCapabilities(): CapabilitiesReport;
 }
 
 /**
@@ -277,6 +285,7 @@ export function buildIpcHandlers(deps: IpcHandlerDeps): IpcHandlerMap {
   const { catalogSession } = deps;
   return {
     [APP_GET_VERSION]: () => handleGetVersion({ getVersion: () => deps.getVersion() }),
+    [APP_CAPABILITIES]: () => handleCapabilities({ getCapabilities: () => deps.getCapabilities() }),
     [LIBRARY_CREATE]: (request) => catalogSession.createLibrary(request),
     [LIBRARY_OPEN]: (request) => catalogSession.openLibrary(request),
     [CATALOG_TIMELINE]: (request) => catalogSession.getTimeline(request),
@@ -495,16 +504,33 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
   };
 
   // The bundled ffmpeg may be absent in a dev/CI checkout (no staged binary); if it
-  // can't be resolved, videos simply fall back to their type icon rather than
-  // crashing the boot path. Resolved lazily here inside the guard.
-  const buildVideoThumbnailer = (): VideoThumbnailer => {
-    try {
-      const frame = createFfmpegVideoFrameThumbnailer({ ffmpegPath: resolveFfmpegBinaryPath() });
+  // can't be resolved, videos simply fall back to their type icon rather than crashing
+  // the boot path — but the degrade is now LOUD (#441): {@link buildVideoThumbnailer}
+  // emits a single redacted packaging-regression warning through the logger instead of
+  // the previous silent try/catch. Resolved lazily here inside the guard.
+  const videoThumbnailer: VideoThumbnailer = buildVideoThumbnailer({
+    resolveFfmpegPath: resolveFfmpegBinaryPath,
+    createFrameThumbnailer: ({ ffmpegPath }) => {
+      const frame = createFfmpegVideoFrameThumbnailer({ ffmpegPath });
       return (absPath, maxDimension) => frame(absPath, maxDimension);
-    } catch {
-      return async () => null;
-    }
-  };
+    },
+  });
+
+  // The path of the built off-thread cluster-worker entry (alongside this bundled main
+  // entry). Its presence is a capability the aggregate report probes: an absent entry
+  // silently reintroduces main-thread clustering (a perf-invariant violation) — the
+  // production transport already warns loudly, and this surfaces it in the DTO too.
+  const clusterWorkerPath = join(moduleDir, 'categorization-cluster-worker.js');
+
+  // The live aggregate capability report (#441): the REAL production probe→DTO wiring
+  // lives in `createCapabilitiesResolver` (capabilities.ts), so this closure IS the
+  // one the app:/status handler answers with AND the one the packaging guard drives
+  // directly — never a copy. Each seam is probed at report time so it reflects the
+  // current bundled state; ffprobe + embedder degrades warn loudly (redacted) there.
+  const resolveCapabilities: () => CapabilitiesReport = createCapabilitiesResolver({
+    resolveInputs,
+    clusterWorkerPath,
+  });
 
   // The catalog application service — the single seam every catalog/library/import
   // handler calls into (ARCHITECTURE §2.3). Injected its Electron-free collaborators
@@ -512,7 +538,7 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
   // stays fully unit-testable.
   const catalogSession = createCatalogSession({
     coordinator: ingestionCoordinator,
-    thumbnailers: { image: imageThumbnailer, video: buildVideoThumbnailer() },
+    thumbnailers: { image: imageThumbnailer, video: videoThumbnailer },
     resolveMediaBinaries,
     // The on-device text embedder for M4 smart search (ADR-0029). Resolved lazily
     // (like the media binaries) and non-throwing: until the packaging slice bundles
@@ -536,7 +562,7 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
           db,
           gazetteer: loadGazetteer(resolveInputs()),
           transport: createProductionClusterTransport({
-            scriptPath: join(moduleDir, 'categorization-cluster-worker.js'),
+            scriptPath: clusterWorkerPath,
             isCancelled,
           }),
           getStatus: () =>
@@ -575,6 +601,7 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
     requireSettingsStore: () => settingsStore.demand(),
     isSmartSearchOffered: () => isEmbedModelPublished() && smartSearchDownloaderSupported,
     isCategorizationOffered: () => isGazetteerBundled(resolveInputs()),
+    getCapabilities: resolveCapabilities,
   });
 
   function createMainWindow(): void {
@@ -729,6 +756,13 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
     );
 
     registerIpcHandlers(runtime.ipcMain, ipcHandlers, senderOptions);
+
+    // Report capabilities ONCE at startup (#441): computing the aggregate report here
+    // makes any degraded seam loud at BOOT — not only when the renderer later queries
+    // `app:capabilities` — so a shipped build missing a bundled binary/worker entry
+    // surfaces immediately. The resolver dedups per seam, so the later UI query never
+    // re-spams. Purely diagnostic (path-free, redacted) — the return value is unused.
+    resolveCapabilities();
 
     createMainWindow();
 

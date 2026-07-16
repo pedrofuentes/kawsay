@@ -15,6 +15,7 @@ import { PrivacyNotice } from '@renderer/components/PrivacyNotice';
 import { ReducedMotionToggle } from '@renderer/components/ReducedMotionToggle';
 import { SmartSearchConsent } from '@renderer/components/SmartSearchConsent';
 import { SuggestionsTray } from '@renderer/components/SuggestionsTray';
+import { SystemCapabilities } from '@renderer/components/SystemCapabilities';
 import { TextSizeControl } from '@renderer/components/TextSizeControl';
 import { TranscriptionConsent } from '@renderer/components/TranscriptionConsent';
 import { TranscriptionRun } from '@renderer/components/TranscriptionRun';
@@ -38,6 +39,7 @@ export function Settings(): ReactElement {
         <ReducedMotionToggle />
       </section>
       <LibrarySettings />
+      <SystemCapabilities />
       <TranscriptionConsent />
       <TranscriptionRun />
       <SmartSearchConsent />

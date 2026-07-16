@@ -529,7 +529,7 @@ describe('createProductionClusterTransport (#344 worker transport with inline fa
     expect(response.themes).toBeUndefined();
   });
 
-  it('warns once about the degraded inline fallback when the worker entry is missing (#401)', async () => {
+  it('warns LOUDLY once about the degraded inline fallback when the worker entry is missing (#401, #441)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const transport = createProductionClusterTransport({
@@ -537,13 +537,15 @@ describe('createProductionClusterTransport (#344 worker transport with inline fa
         scriptExists: () => false,
       });
 
-      // Constructing the transport (once per port) emits a single degraded-mode warning.
+      // Constructing the transport (once per port) emits a single degraded-mode warning
+      // through the redacting logger, framed as a possible PACKAGING REGRESSION — a
+      // packaged build that omitted the worker entry silently reintroduces main-thread
+      // clustering (a perf-invariant violation), so the degrade must be loud (#441).
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledWith(
-        '[kawsay] categorization worker entry missing; falling back to inline main-thread clustering',
-      );
-      // Zero-egress diagnostics: the message must NOT leak the worker script path.
       const logged = warn.mock.calls[0]?.[0];
+      expect(String(logged).toLowerCase()).toContain('main-thread clustering');
+      expect(String(logged).toLowerCase()).toContain('packaging');
+      // Zero-egress diagnostics: the message must NOT leak the worker script path.
       expect(String(logged)).not.toContain('categorization-cluster-worker.js');
 
       // The degraded transport still works — it is the inline main-thread one.
