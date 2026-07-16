@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ItemView } from '@renderer/views/ItemView';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
@@ -592,6 +592,114 @@ describe('ItemView — ←/→ keyboard navigation between memories (#434)', () 
 
     await screen.findByRole('heading', { level: 1, name: /second memory/i });
     await expectNoAxeViolations(container);
+  });
+});
+
+describe('ItemView — ←/→ nav must not fight the user (#458 review fixes)', () => {
+  it('does NOT navigate away while a text selection is active — the arrow stays with the selection', async () => {
+    // A user selecting a sentence in the read-only transcript and pressing ← to
+    // collapse it must not be teleported to the previous memory (losing their
+    // selection). The global arrow handler defers to a live, non-collapsed
+    // selection exactly as it defers to a focused input.
+    const a = makeItemCard({ mediaType: 'audio', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'audio', title: 'Second memory' });
+    const api = makeFakeApi({
+      getTranscript: vi.fn(() =>
+        Promise.resolve(
+          makeTranscriptView({ status: 'done', language: 'en', text: 'A sentence worth selecting.' }),
+        ),
+      ),
+    });
+    render(
+      wrapInProviders(<ItemView />, api, {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    const transcript = await screen.findByText(/a sentence worth selecting/i);
+    const range = document.createRange();
+    range.selectNodeContents(transcript);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    expect(selection?.isCollapsed).toBe(false);
+
+    // At index 0, ArrowRight WOULD move to the next memory if the guard were absent.
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+    // The selection was left intact — not discarded by a spurious navigation.
+    expect(window.getSelection()?.isCollapsed).toBe(false);
+  });
+
+  it('ignores auto-repeat so holding an arrow does not fire a burst of remounts', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    render(
+      wrapInProviders(<ItemView />, makeFakeApi(), {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    // An auto-repeated keydown (key held) must be a no-op.
+    fireEvent.keyDown(window, { key: 'ArrowRight', repeat: true });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('ItemView — favourite survives arrow-nav within a session (#458 review fix)', () => {
+  it('keeps a memory favourited when you arrow away and back — no stale-siblings revert', async () => {
+    const a = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000e1',
+      mediaType: 'photo',
+      title: 'First memory',
+      isFavourite: false,
+    });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory', isFavourite: false });
+    const favCalls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      favCalls.push(input);
+      return Promise.resolve({ isFavourite: input.favourite });
+    });
+    const api = makeFakeApi({ setFavourite });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(<ItemView />, api, {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    // Favourite the first memory and let the save settle.
+    await user.click(screen.getByRole('button', { name: /mark as favourite/i }));
+    await screen.findByRole('button', { name: /remove from favourites/i });
+
+    // Arrow to the next memory, then back to the first.
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await user.keyboard('{ArrowLeft}');
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+
+    // The heart must still read favourited — not reverted from a frozen snapshot.
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    // And clicking now correctly UN-favourites (computes next=false), never re-favourites.
+    await user.click(toggle);
+    expect(favCalls[favCalls.length - 1]).toEqual({ id: a.id, favourite: false });
   });
 });
 
