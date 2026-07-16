@@ -105,9 +105,9 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
       }
       return { ...DEFAULT_SETTINGS };
     }
-    let parsed: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(raw) as Record<string, unknown>;
+      parsed = JSON.parse(raw);
     } catch (error) {
       console.warn(
         '[kawsay]',
@@ -117,11 +117,28 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
       );
       return { ...DEFAULT_SETTINGS };
     }
+    // A syntactically-valid but NON-object top-level JSON (`null`, a number, a
+    // string, a boolean, an array) parses without a SyntaxError, so it slips
+    // past the try/catch above. Guard the shape before dereferencing a field —
+    // otherwise `parsed['textSize']` throws a TypeError out of read() and
+    // rejects the renderer invoke, breaking the "malformed ⇒ calm baseline,
+    // never a throw" invariant. (`typeof null === 'object'`, so null is checked
+    // explicitly; arrays are objects too but carry no named fields, so they
+    // resolve to defaults per-field anyway — excluded here for clarity.)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.warn(
+        '[kawsay]',
+        'settings',
+        'was not a settings object; falling back to the default settings',
+      );
+      return { ...DEFAULT_SETTINGS };
+    }
+    const record = parsed as Record<string, unknown>;
     return {
-      textSize: isTextSizeStep(parsed['textSize']) ? parsed['textSize'] : DEFAULT_SETTINGS.textSize,
+      textSize: isTextSizeStep(record['textSize']) ? record['textSize'] : DEFAULT_SETTINGS.textSize,
       reducedMotion:
-        typeof parsed['reducedMotion'] === 'boolean'
-          ? parsed['reducedMotion']
+        typeof record['reducedMotion'] === 'boolean'
+          ? record['reducedMotion']
           : DEFAULT_SETTINGS.reducedMotion,
     };
   }
