@@ -1,12 +1,18 @@
 import type { ReactElement } from 'react';
 import { useEffect } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MainApp } from '@renderer/app/MainApp';
 import { useLibrary } from '@renderer/lib/library';
 import type { TimelinePageDTO } from '@shared/kawsay-api';
-import { makeFakeApi, makeItemCard, makeLibrarySummary } from './support/fake-api';
+import {
+  makeFakeApi,
+  makeItemCard,
+  makeImportSummary,
+  makeLibrarySummary,
+  makeProgressEvent,
+} from './support/fake-api';
 import { wrapInProviders } from './support/render';
 import { expectNoAxeViolations } from './support/axe';
 
@@ -228,5 +234,128 @@ describe('MainApp — the hidden Timeline stays out of the a11y tree while inact
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.queryByRole('region', { name: /memories/i })).not.toBeInTheDocument();
     await expectNoAxeViolations(container);
+  });
+});
+
+// Keeping Timeline mounted (the #432 fix) removed the ONE thing that used to
+// refresh its cached pages: a remount. Two data changes must therefore reach
+// the mounted-but-cached timeline WITHOUT a remount, or "nothing is ever lost"
+// silently breaks (#432 review regressions A + B).
+describe('MainApp — cached timeline still reflects data changes without a remount (#432)', () => {
+  function page(over: Partial<TimelinePageDTO> = {}): TimelinePageDTO {
+    return { items: [], nextCursor: null, ...over };
+  }
+
+  // ── Regression A: a favourite marked on the item view must show on the card ──
+  it('reflects a favourite marked in the item view on the timeline card when you go Back (no refetch)', async () => {
+    const items = [makeItemCard({ id: 'fav-1', title: 'A tender moment', isFavourite: false })];
+    const getTimeline = vi.fn(() => Promise.resolve(page({ items })));
+    const api = makeFakeApi({ getTimeline });
+    const user = userEvent.setup();
+    render(wrapInProviders(<MainApp />, api, { name: 'timeline' }));
+
+    // The card starts un-favourited — no heart glyph on it yet.
+    const card = await screen.findByRole('article', { name: /a tender moment/i });
+    expect(within(card).queryByRole('img', { name: /favourite/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /open a tender moment/i }));
+    await screen.findByRole('heading', { level: 1, name: 'A tender moment' });
+
+    // Mark it as a favourite — this persists via catalog:setFavourite and, on
+    // settle, reconciles into the navigation-owned favourite override map.
+    await user.click(screen.getByRole('button', { name: /mark as favourite/i }));
+    await waitFor(() => expect(api.setFavourite).toHaveBeenCalledWith({ id: 'fav-1', favourite: true }));
+
+    await user.click(screen.getByRole('button', { name: /back/i }));
+
+    // Back on the (never-refetched) timeline, the card must now show the heart —
+    // read from the override overlay, exactly as ItemView already does.
+    const cardAfter = await screen.findByRole('article', { name: /a tender moment/i });
+    await waitFor(() =>
+      expect(within(cardAfter).getByRole('img', { name: /favourite/i })).toBeInTheDocument(),
+    );
+    // The whole round trip fetched page 1 exactly once — the override, not a
+    // refetch, is what surfaced the change.
+    expect(getTimeline).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Regression B: a completed import must appear, not wait for a relaunch ──
+  it('shows memories from a completed import when you return to the timeline (refetches page 1)', async () => {
+    const oldItem = makeItemCard({ id: 'old-1', title: 'An older memory' });
+    const newItem = makeItemCard({ id: 'new-1', title: 'A freshly imported memory' });
+    const getTimeline = vi
+      .fn()
+      .mockResolvedValueOnce(page({ items: [oldItem], nextCursor: null }))
+      .mockResolvedValueOnce(page({ items: [oldItem, newItem], nextCursor: null }));
+    const api = makeFakeApi({ getTimeline });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(
+        <OpenLibraryThenRender>
+          <MainApp />
+        </OpenLibraryThenRender>,
+        api,
+        { name: 'timeline' },
+      ),
+    );
+
+    await screen.findByText('An older memory');
+    expect(getTimeline).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('A freshly imported memory')).not.toBeInTheDocument();
+
+    // Walk the full Add Memories flow to a completed import.
+    await user.click(screen.getByRole('button', { name: 'Add memories' }));
+    await user.click(await screen.findByRole('button', { name: /whatsapp/i }));
+    await screen.findByRole('heading', { level: 1, name: /whatsapp/i });
+    for (let i = 0; i < 8; i += 1) {
+      const next = screen.queryByRole('button', { name: /i've done this/i });
+      if (!next) break;
+      await user.click(next);
+    }
+    await user.type(screen.getByLabelText(/file|folder|where/i), '/exports/whatsapp.zip');
+    await user.click(screen.getByRole('button', { name: /bring .*memories in/i }));
+    api.emitProgress(makeProgressEvent({ phase: 'done', summary: makeImportSummary({ occurrencesAdded: 1 }) }));
+    await screen.findByText(/1 memory is/i);
+
+    // "See everything" returns to the timeline — which must now show the import.
+    await user.click(screen.getByRole('button', { name: /see everything/i }));
+
+    expect(await screen.findByText('A freshly imported memory')).toBeInTheDocument();
+    // The completed import invalidated the cached timeline, so page 1 refetched.
+    await waitFor(() => expect(getTimeline).toHaveBeenCalledTimes(2));
+    // The older memory is still there too — nothing was lost.
+    expect(screen.getByText('An older memory')).toBeInTheDocument();
+  });
+
+  // ── The AC invariant this must NOT break: pure navigation never refetches ──
+  it('holds the sticky mount across a chained item + search round trip with no refetch (unchanged data)', async () => {
+    const items = [0, 1].map((i) =>
+      makeItemCard({ id: `c-${i}`, title: `Chained memory ${i}`, captureDate: '2021-05-01T10:00:00.000Z' }),
+    );
+    const getTimeline = vi.fn(() => Promise.resolve(page({ items, nextCursor: null })));
+    const api = makeFakeApi({ getTimeline });
+    const user = userEvent.setup();
+    render(wrapInProviders(<MainApp />, api, { name: 'timeline' }));
+
+    await screen.findByText('Chained memory 0');
+    expect(getTimeline).toHaveBeenCalledTimes(1);
+
+    // Timeline → item → Back
+    await user.click(screen.getByRole('button', { name: /open chained memory 0/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Chained memory 0' });
+    await user.click(screen.getByRole('button', { name: /back/i }));
+    await screen.findByRole('heading', { level: 1, name: /timeline/i });
+
+    // → Search → Timeline
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByRole('heading', { level: 1, name: 'Search' });
+    await user.click(screen.getByRole('button', { name: 'Timeline' }));
+    await screen.findByRole('heading', { level: 1, name: /timeline/i });
+
+    // The sticky mount held through every hop, and with data unchanged there was
+    // never a bump — so page 1 was fetched exactly once across the whole chain.
+    expect(screen.getByText('Chained memory 0')).toBeInTheDocument();
+    expect(screen.getByText('Chained memory 1')).toBeInTheDocument();
+    expect(getTimeline).toHaveBeenCalledTimes(1);
   });
 });
