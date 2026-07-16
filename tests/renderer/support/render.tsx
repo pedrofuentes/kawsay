@@ -7,6 +7,7 @@ import { render, type RenderResult } from '@testing-library/react';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { LibraryProvider } from '@renderer/lib/library';
 import { NavigationProvider, useNavigation, type View } from '@renderer/lib/navigation';
+import { SettingsProvider } from '@renderer/lib/settings';
 import type { FakeApi } from './fake-api';
 import { makeFakeApi } from './fake-api';
 
@@ -23,9 +24,11 @@ export function renderWithProviders(ui: ReactNode, options: RenderOptions = {}):
   const api = options.api ?? makeFakeApi();
   const result = render(
     <KawsayApiProvider api={api}>
-      <LibraryProvider>
-        <NavigationProvider initialView={options.initialView}>{ui}</NavigationProvider>
-      </LibraryProvider>
+      <SettingsProvider>
+        <LibraryProvider>
+          <NavigationProvider initialView={options.initialView}>{ui}</NavigationProvider>
+        </LibraryProvider>
+      </SettingsProvider>
     </KawsayApiProvider>,
   );
   return { ...result, api };
@@ -49,9 +52,11 @@ export function SiblingsProbe(): ReactElement {
 export function wrapInProviders(children: ReactNode, api: FakeApi, initialView?: View): ReactElement {
   return (
     <KawsayApiProvider api={api}>
-      <LibraryProvider>
-        <NavigationProvider initialView={initialView}>{children}</NavigationProvider>
-      </LibraryProvider>
+      <SettingsProvider>
+        <LibraryProvider>
+          <NavigationProvider initialView={initialView}>{children}</NavigationProvider>
+        </LibraryProvider>
+      </SettingsProvider>
     </KawsayApiProvider>
   );
 }
