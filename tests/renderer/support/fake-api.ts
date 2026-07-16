@@ -293,6 +293,7 @@ export interface FakeApiOptions {
   dismissSuggestion?: KawsayAPI['dismissSuggestion'];
   listCollections?: KawsayAPI['listCollections'];
   getCollection?: KawsayAPI['getCollection'];
+  getCapabilities?: KawsayAPI['getCapabilities'];
 }
 
 /** A zero transcription tally (the calm default for status/start fakes). */
@@ -323,6 +324,17 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
 
   return {
     getAppVersion: vi.fn(() => Promise.resolve(opts.appVersion ?? '0.1.0')),
+    getCapabilities:
+      opts.getCapabilities ??
+      vi.fn(() =>
+        Promise.resolve({
+          ffmpeg: true,
+          ffprobe: true,
+          clusterWorker: true,
+          embedder: true,
+          gazetteer: true,
+        }),
+      ),
     createLibrary:
       opts.createLibrary ??
       vi.fn((input: { path: string; personName?: string }) =>

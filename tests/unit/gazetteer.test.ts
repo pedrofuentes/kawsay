@@ -402,8 +402,8 @@ describe('loadGazetteer (asset loading + graceful degrade)', () => {
       warnSpy.mockRestore();
     });
 
-    it('emits ONE console.warn (with path + error) when the asset is present but read fails', () => {
-      const diskError = new Error('disk error');
+    it('emits ONE REDACTED console.warn (no path leak) when the asset is present but read fails (#331, #480)', () => {
+      const diskError = new Error('disk error at /home/someone/Library/kawsay/gazetteer');
       const readFile = vi.fn(() => {
         throw diskError;
       });
@@ -414,12 +414,15 @@ describe('loadGazetteer (asset loading + graceful degrade)', () => {
       const [msg, ...args] = call ?? [];
       expect(typeof msg).toBe('string');
       expect((msg as string).toLowerCase()).toContain('gazetteer');
-      // The resolved path must appear in the warning so triage can locate the asset.
+      // #480: the diagnostic now routes through the REDACTING logger, so the resolved
+      // asset path is NEVER interpolated into the template (the template is not
+      // redacted — only Error args are). A path leak is the exact thing #480 closes.
       const resolvedPath = resolveGazetteerAssetPath({ ...OPTIONS, exists: () => true });
       expect(resolvedPath).not.toBeNull();
-      expect(msg as string).toContain(resolvedPath as string);
-      // The caught error must be forwarded as well.
-      expect(args).toContain(diskError);
+      expect(msg as string).not.toContain(resolvedPath as string);
+      // The caught error is forwarded as a separate arg, PROJECTED to its safe
+      // {name} shape by the logger — never the raw message (which carried a path).
+      expect(args).toEqual([{ name: 'Error' }]);
     });
 
     it('emits ONE console.warn (with skip count) when the asset is present but its rows are malformed (#333)', () => {

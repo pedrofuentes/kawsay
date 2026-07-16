@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createKawsayApi } from '../../electron/preload/api';
 import {
+  APP_CAPABILITIES,
   APP_GET_VERSION,
   CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
@@ -47,6 +48,13 @@ function fakeInvoke() {
   const calls: { channel: string; payload: unknown }[] = [];
   const replies: Record<string, unknown> = {
     [APP_GET_VERSION]: { version: '9.9.9' },
+    [APP_CAPABILITIES]: {
+      ffmpeg: true,
+      ffprobe: true,
+      clusterWorker: true,
+      embedder: true,
+      gazetteer: true,
+    },
     [LIBRARY_CREATE]: { root: '/lib', name: 'Mum', createdAt: 't', schemaVersion: 1 },
     [LIBRARY_OPEN]: { root: '/lib', name: 'Mum', createdAt: 't', schemaVersion: 1 },
     [CATALOG_TIMELINE]: { items: [], nextCursor: null },
@@ -132,10 +140,18 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     });
     const catStart = await api.startCategorization();
     const catCancel = await api.cancelCategorization();
-    // Appended last so the ordered channel/payload indices above are unshifted (#429).
+    // Appended last so the ordered channel/payload indices above are unshifted (#429, #441).
     const undone = await api.undoImport({ sourceId: UUID });
+    const capabilities = await api.getCapabilities();
 
     expect(undone).toEqual({ itemsRemoved: 2, occurrencesRemoved: 2 });
+    expect(capabilities).toEqual({
+      ffmpeg: true,
+      ffprobe: true,
+      clusterWorker: true,
+      embedder: true,
+      gazetteer: true,
+    });
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
     expect(thumbnail).toBe('data:image/png;base64,AAAA');
@@ -194,6 +210,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       CATEGORIZE_START,
       CATEGORIZE_CANCEL,
       CATALOG_UNDO_IMPORT,
+      APP_CAPABILITIES,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
@@ -322,6 +339,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'downloadTranscriptionModel',
         'enableSmartSearch',
         'getAppVersion',
+        'getCapabilities',
         'getCategorizationStatus',
         'getCollection',
         'getSettings',

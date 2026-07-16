@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { handleGetVersion } from '../../electron/main/ipc/handlers/app';
+import { handleCapabilities, handleGetVersion } from '../../electron/main/ipc/handlers/app';
 
 describe('handleGetVersion (app:getVersion handler logic)', () => {
   it('returns the version reported by the injected app, shaped to the contract', () => {
@@ -14,5 +14,30 @@ describe('handleGetVersion (app:getVersion handler logic)', () => {
 
   it('refuses to emit an empty version (defensive: response schema demands a non-empty string)', () => {
     expect(() => handleGetVersion({ getVersion: () => '' })).toThrow();
+  });
+});
+
+describe('handleCapabilities (app:capabilities handler logic, #441)', () => {
+  const HEALTHY = {
+    ffmpeg: true,
+    ffprobe: true,
+    clusterWorker: true,
+    embedder: true,
+    gazetteer: true,
+  } as const;
+
+  it('returns the injected capability report, shaped + validated to the contract', () => {
+    expect(handleCapabilities({ getCapabilities: () => ({ ...HEALTHY }) })).toEqual(HEALTHY);
+  });
+
+  it('passes a partially-degraded report straight through (the surface the UI reads)', () => {
+    const degraded = { ...HEALTHY, ffmpeg: false, clusterWorker: false };
+    expect(handleCapabilities({ getCapabilities: () => degraded })).toEqual(degraded);
+  });
+
+  it('refuses a malformed report (defensive: the strict response schema rejects it)', () => {
+    expect(() =>
+      handleCapabilities({ getCapabilities: () => ({ ffmpeg: true }) as never }),
+    ).toThrow();
   });
 });
