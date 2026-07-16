@@ -871,6 +871,89 @@ describe('ItemView — favourite that SETTLES only after you arrowed away (befor
   });
 });
 
+describe('ItemView — a save still IN FLIGHT survives the id-keyed remount (#458 residual race)', () => {
+  // Flush pending microtasks + the timer tick so a late settlement runs.
+  async function flushPending(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it('keeps the in-flight favourite pressed AND busy after you arrow away and back BEFORE it settles — never a stale, re-clickable heart', async () => {
+    // The residual race the before-settle patch does not close. The per-hook-instance
+    // `saving`/sequence guards die with the ItemView that MainApp keys by item id, so:
+    // toggle A (slow save in flight) → arrow to B and back to A BEFORE it settles →
+    // the remounted A resets to the STALE open-time value with an ENABLED control.
+    // A re-click there issues a SECOND, racing save that the older in-flight reply can
+    // arrive after and clobber — inverting the persisted value. The in-flight state must
+    // instead live ABOVE the remount so the reopened memory shows the pending favourite
+    // and stays busy until the one save settles.
+    const a = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000c1',
+      mediaType: 'photo',
+      title: 'First memory',
+      isFavourite: false,
+    });
+    const b = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000c2',
+      mediaType: 'photo',
+      title: 'Second memory',
+      isFavourite: false,
+    });
+    const pending = deferred<{ isFavourite: boolean }>();
+    const favCalls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      favCalls.push(input);
+      // Only the first save (favouriting A) is deferred; keep it in flight across the round trip.
+      return favCalls.length === 1 ? pending.promise : Promise.resolve({ isFavourite: input.favourite });
+    });
+    const api = makeFakeApi({ setFavourite });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(<KeyedItemViewHarness />, api, {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    // Favourite A, but leave the save UNSETTLED.
+    await user.click(screen.getByRole('button', { name: /mark as favourite/i }));
+    expect(favCalls).toEqual([{ id: a.id, favourite: true }]);
+
+    // Arrow to B and back to A — all BEFORE the save settles (id-keyed remount of ItemView-A).
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await user.keyboard('{ArrowLeft}');
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+
+    // The reopened A must reflect the in-flight favourite AND still be busy — never the
+    // stale un-favourited value on an enabled control that a re-click could race.
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(toggle).toBeDisabled();
+    // The remount opened NO second racing save.
+    expect(favCalls).toEqual([{ id: a.id, favourite: true }]);
+
+    // Let the one save settle: the heart resolves to favourited and becomes interactive.
+    await act(async () => {
+      pending.resolve({ isFavourite: true });
+      await Promise.resolve();
+    });
+    await flushPending();
+    expect(favCalls).toEqual([{ id: a.id, favourite: true }]);
+    const settled = screen.getByRole('button', { name: /remove from favourites/i });
+    expect(settled).not.toBeDisabled();
+
+    // And a click now correctly UN-favourites (computes next=false) — never a spurious
+    // re-favourite that could invert the real persisted value.
+    await user.click(settled);
+    expect(favCalls[favCalls.length - 1]).toEqual({ id: a.id, favourite: false });
+  });
+});
+
 describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
   it('the favourite toggle has no axe violations, unfavourited and favourited', async () => {
     const unfav = makeItemCard({ mediaType: 'photo', title: 'Not yet loved', isFavourite: false });
