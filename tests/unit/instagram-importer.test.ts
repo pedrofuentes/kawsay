@@ -339,17 +339,18 @@ describe('instagramImporter (M3 — Instagram Meta DYI direct messages connector
     }
   });
 
-  // Generous timeout (#454): the streamed 2.5 MB parse is ~2 s isolated but ran
-  // well past the 5 s default under parallel CI CPU load. This is a correctness
-  // (cap) test, not a perf assertion — a 30 s ceiling removes the load-sensitive
-  // flake without weakening what it checks.
-  it('caps one oversized message object and keeps later messages without unbounded buffering', { timeout: 30_000 }, async () => {
+  // De-flake (#454): shrink the oversized fixture to just OVER the cap
+  // (`MAX_MESSAGE_JSON_CHARS` = 1_000_000) instead of 2.5 MB — it proves the exact
+  // same cap behaviour with the minimal input the parser must scan, so the test no
+  // longer leans on a wall-clock timeout for a multi-MB parse. Generous timeout kept
+  // only as margin.
+  it('caps one oversized message object and keeps later messages without unbounded buffering', { timeout: 20_000 }, async () => {
     const dir = makeTmpDir('instagram-bounds-');
     try {
       const path = writeInstagramMessageFile(dir, 'huge_abcd', 'message_1.json', {
         participants: [{ name: 'Mamá' }],
         messages: [
-          { sender_name: 'Mamá', timestamp_ms: 1, content: 'A'.repeat(2_500_000) },
+          { sender_name: 'Mamá', timestamp_ms: 1, content: 'A'.repeat(1_000_001) },
           { sender_name: 'Mamá', timestamp_ms: 2, content: 'after huge' },
         ],
       });

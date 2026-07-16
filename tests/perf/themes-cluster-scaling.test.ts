@@ -156,6 +156,13 @@ describe('clusterThemes — scales sub-quadratically on a large diverse corpus (
       // centroids ⇒ exactly N calls here (all members retained, minClusterSize 1).
       // The naive per-pair scan would make Ω(n·k) ≈ millions — so this fails
       // deterministically if #318's bound is ever removed, under ANY CPU load.
+      //
+      // BLIND SPOT (documented, not guarded): this counts the SWITCH away from
+      // per-pair `cosineSimilarity`, not the work INSIDE `boundedCosine`. Removing
+      // its Cauchy-Schwarz early-termination (themes-cluster.ts:364-371) would leave
+      // the count at N and the output bit-identical, so this test would not catch it
+      // — that micro-optimisation is covered only by the correctness oracle above
+      // (output stays correct) and the module's own inline-prune unit reasoning.
       expect(boundedCosineCalls).toBe(N);
       // Guard the oracle: N is orders of magnitude below the naive per-pair cost, so
       // this is a genuine sub-quadratic assertion, not a trivially-satisfiable one.

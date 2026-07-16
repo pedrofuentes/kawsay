@@ -142,33 +142,66 @@ describe('scale budget — documented library sizes + complexity bounds (#442)',
     db.close();
   });
 
-  it('smart-search semantic augmentation is bounded by the page limit, not the corpus', () => {
-    // catalog-session merges the WHOLE exact set with at most `limit` semantic hits
-    // (K = limit, page-independent). The complexity property that keeps smart search
-    // affordable as the corpus grows: the count of semantic-only EXTRAS the merge
-    // appends does NOT grow with the exact-set size — it stays ≤ K. Assert it at two
-    // exact-set sizes with the SAME fixed-K semantic list: identical extra count.
-    const K = 20; // a page limit
+  it('semantic-hit count feeding smart search is bounded by the page limit, not the corpus', () => {
+    // The PRODUCTION bound (`app/catalog-session`): the semantic list handed to the
+    // merge is `embeddings.semanticSearch(queryVector, input.limit, …)` — pre-capped
+    // at the page limit. That is what keeps smart search corpus-independent: the merge
+    // input never grows with the corpus. Prove it on the actual code path at two corpus
+    // sizes — a fixed limit K yields exactly K hits whether the corpus is n or 2n.
+    const dim = SCALE_BUDGET.embeddingDim;
+    const K = 20;
+
+    const small = seedCorpus(3000, dim);
+    const hitsSmall = createEmbeddingsRepo(small.db).semanticSearch(small.queryVector, K, {
+      modelId: MODEL,
+    });
+    const large = seedCorpus(6000, dim);
+    const hitsLarge = createEmbeddingsRepo(large.db).semanticSearch(large.queryVector, K, {
+      modelId: MODEL,
+    });
+
+    // Exactly K hits at BOTH sizes — corpus-independent (would be n/2n if unbounded).
+    expect(hitsSmall).toHaveLength(K);
+    expect(hitsLarge).toHaveLength(K);
+
+    small.db.close();
+    large.db.close();
+  });
+
+  it('mergeSemanticAndExact CLAMPS semantic-only extras to the page limit (not the candidate count)', () => {
+    // Second, independent bound: `mergeSemanticAndExact`'s own `limit` clamp caps the
+    // semantic-only extras at `max(0, limit − exactCount)` — every exact row is kept
+    // (AC-29) and only the remaining slots are filled, no matter how many semantic
+    // candidates exist. Exercised DISCRIMINATINGLY: feed FAR more candidates than any
+    // capacity below (the "corpus" that must NOT leak through) and assert the extras
+    // equal the CLAMPED capacity, never the candidate count. Deleting the `capacity`
+    // clamp in search/semantic.ts makes every count below wrong (all 200 would leak).
+    const limit = 25;
+    const candidates = 200; // ≫ any capacity below — must be clamped away
+    const semantic: SemanticHit<{ id: string }>[] = Array.from({ length: candidates }, (_, i) => ({
+      item: { id: `sem-${String(i).padStart(6, '0')}` },
+      score: 1 - i / (candidates * 2),
+    }));
     const exact = (size: number): { id: string }[] =>
       Array.from({ length: size }, (_, i) => ({ id: `x-${String(i).padStart(6, '0')}` }));
-    // K semantic hits on ids DISJOINT from any exact set (pure semantic-only extras).
-    const semantic: SemanticHit<{ id: string }>[] = Array.from({ length: K }, (_, i) => ({
-      item: { id: `sem-${String(i).padStart(6, '0')}` },
-      score: 1 - i / (K * 2),
-    }));
-
-    const mergedSmall = mergeSemanticAndExact(exact(1000), semantic);
-    const mergedLarge = mergeSemanticAndExact(exact(2000), semantic);
-
-    const extras = (m: typeof mergedSmall): number =>
+    const extras = (m: ReturnType<typeof mergeSemanticAndExact<{ id: string }>>): number =>
       m.filter((r) => r.origin === 'semantic').length;
 
-    // Every exact row is preserved (AC-29) …
-    expect(mergedSmall.filter((r) => r.origin !== 'semantic')).toHaveLength(1000);
-    expect(mergedLarge.filter((r) => r.origin !== 'semantic')).toHaveLength(2000);
-    // … and the semantic augmentation is EXACTLY K in both — page/corpus-independent.
-    expect(extras(mergedSmall)).toBe(K);
-    expect(extras(mergedLarge)).toBe(K);
-    expect(extras(mergedLarge)).toBe(extras(mergedSmall));
+    // 10 exact ⇒ 15 slots remain ⇒ extras clamp to 15 (NOT 200), merged fills to limit.
+    const few = mergeSemanticAndExact(exact(10), semantic, { limit });
+    expect(few).toHaveLength(limit);
+    expect(extras(few)).toBe(limit - 10);
+
+    // 20 exact ⇒ only 5 slots remain ⇒ extras clamp to 5. The 200-candidate pool never
+    // leaks: extras depend on the LIMIT and the exact count, never the candidate count.
+    const more = mergeSemanticAndExact(exact(20), semantic, { limit });
+    expect(more).toHaveLength(limit);
+    expect(extras(more)).toBe(limit - 20);
+
+    // Exact set already at/over the limit ⇒ ZERO semantic extras, yet every exact row
+    // is still preserved (AC-29) — augmentation is strictly bounded by the page limit.
+    const over = mergeSemanticAndExact(exact(limit + 5), semantic, { limit });
+    expect(over.filter((r) => r.origin !== 'semantic')).toHaveLength(limit + 5);
+    expect(extras(over)).toBe(0);
   });
 });
