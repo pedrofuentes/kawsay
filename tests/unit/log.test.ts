@@ -77,3 +77,36 @@ describe('createLogger (single main-process logger, #440)', () => {
     expect(serialized).not.toContain('Users/alice');
   });
 });
+
+describe('default level derived from packaged state (#440 FIX A — not NODE_ENV)', () => {
+  it('a PACKAGED build gates out debug/info — only warn/error emit', () => {
+    const sink = fakeSink();
+    // No explicit `level` — the default must come from `isPackaged`, so a shipped
+    // build (which never sets NODE_ENV) stays quiet below `warn`.
+    const log = createLogger({ isPackaged: true, sink });
+    log.debug('noise');
+    log.info('more noise');
+    log.warn('kept');
+    log.error('kept');
+    expect(sink.debug).not.toHaveBeenCalled();
+    expect(sink.info).not.toHaveBeenCalled();
+    expect(sink.warn).toHaveBeenCalledTimes(1);
+    expect(sink.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('an UNPACKAGED (dev) build emits debug', () => {
+    const sink = fakeSink();
+    const log = createLogger({ isPackaged: false, sink });
+    log.debug('trace');
+    log.info('info');
+    expect(sink.debug).toHaveBeenCalledTimes(1);
+    expect(sink.info).toHaveBeenCalledTimes(1);
+  });
+
+  it('an explicit `level` still wins over the packaged default', () => {
+    const sink = fakeSink();
+    const log = createLogger({ isPackaged: true, level: 'debug', sink });
+    log.debug('kept');
+    expect(sink.debug).toHaveBeenCalledTimes(1);
+  });
+});
