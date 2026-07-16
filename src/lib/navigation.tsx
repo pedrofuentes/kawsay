@@ -40,19 +40,24 @@ export type View =
       via?: 'prev' | 'next';
     };
 
-/** The best-known favourite flag per item id — the optimistic value while a
- *  `catalog:setFavourite` save is in flight, then the durable value it persisted —
- *  overlaid on the (possibly stale) flag frozen into a `siblings`/timeline snapshot
- *  at open time. */
+/** The last SETTLED favourite flag per item id — the value a `catalog:setFavourite`
+ *  save actually persisted (or reverted to on failure) — overlaid on the (possibly
+ *  stale) flag frozen into a `siblings`/timeline snapshot at open time. Deliberately
+ *  NOT the optimistic in-flight value: overlay consumers show settled truth so a save
+ *  that later fails never leaves a phantom favourite on another view (#488). */
 export type FavouriteOverrides = Readonly<Record<string, boolean>>;
 
 /** The live favourite state for one item id, owned by the provider so it survives
- *  ItemView's id-keyed remount. `value` is optimistic-then-reconciled; `saving` is
- *  true while a save is in flight (from ANY mount), so the reopened memory shows the
- *  pending state and disables its toggle until the one save settles (#458). */
+ *  ItemView's id-keyed remount. `value` is the optimistic-then-reconciled value the
+ *  mounted toggle shows; `saving` is true while a save is in flight (from ANY mount),
+ *  so the reopened memory shows the pending state and disables its toggle until the
+ *  one save settles (#458). `settledValue` is the last value a save actually PERSISTED
+ *  (undefined until the first settlement) — the settled truth overlay consumers read,
+ *  kept distinct from the optimistic `value` (#488). */
 export interface FavouriteState {
   value: boolean;
   saving: boolean;
+  settledValue?: boolean;
 }
 
 /** The outcome handed back to `settleFavouriteSave`: the durable flag on success,
@@ -66,10 +71,12 @@ export interface NavigationValue {
   view: View;
   navigate: (view: View) => void;
   /**
-   * The best-known favourite flag per item id (optimistic-or-settled), for
-   * overlay consumers (Timeline, ItemView's sibling snapshot). Derived from the
-   * provider-owned favourite state, which lives ABOVE MainApp's
-   * `<ItemView key={`item-${id}`}/>` so it OUTLIVES the id-keyed remount.
+   * The last SETTLED favourite flag per item id, for overlay consumers (Timeline,
+   * ItemView's sibling snapshot). Derived from the provider-owned favourite state,
+   * which lives ABOVE MainApp's `<ItemView key={`item-${id}`}/>` so it OUTLIVES the
+   * id-keyed remount. Deliberately excludes the optimistic in-flight value — that
+   * stays scoped to the mounted toggle (`favouriteStateFor`) — so a save that later
+   * fails never leaves a phantom favourite on another view (#488).
    */
   favouriteOverrides: FavouriteOverrides;
   /** The live favourite state for one id, or `undefined` if it was never toggled
@@ -145,7 +152,12 @@ export function NavigationProvider({
     const seq = favouriteSeqRef.current.get(id) ?? { attempt: 0, settled: 0 };
     const attempt = seq.attempt + 1;
     favouriteSeqRef.current.set(id, { attempt, settled: seq.settled });
-    setFavourites((prev) => ({ ...prev, [id]: { value: optimistic, saving: true } }));
+    // Optimistic value for the toggle; the last SETTLED value is preserved so overlay
+    // consumers keep showing settled truth while this new save is in flight (#488).
+    setFavourites((prev) => ({
+      ...prev,
+      [id]: { value: optimistic, saving: true, settledValue: prev[id]?.settledValue },
+    }));
     return attempt;
   }, []);
 
@@ -165,10 +177,17 @@ export function NavigationProvider({
         // Only the newest in-flight save clears the busy flag; an older reply must not
         // re-enable the control while a newer save is still pending.
         const saving = isNewestAttempt ? false : (current?.saving ?? false);
-        if (current !== undefined && current.value === value && current.saving === saving) {
+        // This settlement establishes the persisted truth for overlay consumers (#488):
+        // the durable value on success, the reverted value on failure.
+        if (
+          current !== undefined &&
+          current.value === value &&
+          current.saving === saving &&
+          current.settledValue === value
+        ) {
           return prev;
         }
-        return { ...prev, [id]: { value, saving } };
+        return { ...prev, [id]: { value, saving, settledValue: value } };
       });
       return true;
     },
@@ -177,8 +196,14 @@ export function NavigationProvider({
 
   const favouriteOverrides = useMemo<FavouriteOverrides>(() => {
     const overrides: Record<string, boolean> = {};
+    // Settled truth only: expose an id ONLY once a save has actually persisted a
+    // value for it. An id that was never toggled — or whose first save is still in
+    // flight — is absent, so overlay consumers fall back to the card's own frozen
+    // (persisted-at-fetch) flag rather than a phantom optimistic value (#488).
     for (const [id, state] of Object.entries(favourites)) {
-      overrides[id] = state.value;
+      if (state.settledValue !== undefined) {
+        overrides[id] = state.settledValue;
+      }
     }
     return overrides;
   }, [favourites]);

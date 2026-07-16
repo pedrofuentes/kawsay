@@ -72,7 +72,9 @@ export function ItemView(): ReactElement | null {
   // OVERRIDES on top so any toggle that has SETTLED is reflected — including one
   // that resolved only after the user arrowed away (which unmounts this ItemView
   // via MainApp's id-keyed remount, so a local-state patch could not survive; the
-  // override map lives ABOVE MainApp and does — #458 before-settle race).
+  // override map lives ABOVE MainApp and does — #458 before-settle race). The map
+  // carries settled values only, so a sibling card never flashes an optimistic
+  // favourite that a still-pending save might revert (#488).
   const rawSiblings = isItemView ? view.siblings : undefined;
   const siblings = useMemo<ItemCardDTO[]>(() => {
     const base = rawSiblings ?? [];
