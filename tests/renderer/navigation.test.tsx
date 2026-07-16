@@ -118,4 +118,30 @@ describe('favourite overrides — settled truth only for overlay consumers (#488
     });
     expect(result.current.favouriteOverrides['item-3']).toBe(true);
   });
+
+  it('records settled truth from an older reply that lands while a newer save is still pending', () => {
+    // Two overlapping saves on the SAME id, older reply settling first. This exercises
+    // the isNewestAttempt=false branch AND the settledValue short-circuit clause: the
+    // older reply establishes the current persisted truth for the overlay even though
+    // its optimistic value already matches, while the toggle stays busy for the newer
+    // save. Without the clause the update is wrongly skipped and the id stays absent.
+    const { result } = renderHook(() => useNavigation(), { wrapper: wrapper() });
+    let older = 0;
+    let newer = 0;
+    act(() => {
+      older = result.current.beginFavouriteSave('item-4', true); // optimistic favourite
+      newer = result.current.beginFavouriteSave('item-4', false); // then un-favourite
+    });
+    // Nothing settled yet → overlay shows no override (falls back to the card's flag).
+    expect(result.current.favouriteOverrides['item-4']).toBeUndefined();
+    // The OLDER save fails and reverts to the pre-toggle value (false) — which equals
+    // the newer optimistic value, so only the settledValue transition distinguishes it.
+    act(() => {
+      result.current.settleFavouriteSave('item-4', older, { ok: false, revertTo: false });
+    });
+    // Overlay now reflects that settled truth...
+    expect(result.current.favouriteOverrides['item-4']).toBe(false);
+    // ...and the toggle stays busy because the newer save is still in flight.
+    expect(result.current.favouriteStateFor('item-4')?.saving).toBe(true);
+  });
 });
