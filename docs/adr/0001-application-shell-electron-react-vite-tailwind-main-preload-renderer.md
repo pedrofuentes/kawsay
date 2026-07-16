@@ -30,4 +30,3 @@ Chromium harness + visual verification). Renderer is organized by **feature**; `
 - ✅ Clear process boundaries that make the sandbox + zero-egress model enforceable (ADR-0005).
 - ⚠️ Electron's larger binary footprint vs Tauri (accepted trade-off, MISSION §3).
 - ⚠️ Native module (`better-sqlite3`) requires per-arch rebuilds in packaging (handled in ADR-0007).
-
