@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserWindow, NativeImage, Net, Session } from 'electron';
 import { createCompositionRoot, type MainRuntime } from '../../electron/main/app/composition-root';
 
-// The load-bearing security-install ORDER inside bootstrap() (ARCHITECTURE §10):
+// The load-bearing security-install ORDER inside bootstrap() (ARCHITECTURE §2.2/§6.1):
 // the CSP, the zero-egress network guard, and the `kawsay-media:` protocol handler
 // MUST install on `session.defaultSession` BEFORE any BrowserWindow is created or
 // any renderer content is loaded — and the IPC handlers register before the window
@@ -18,23 +19,51 @@ type Milestone =
   | 'create-window'
   | 'load-renderer';
 
+/** A recording fake of the one guarded session, with the exact structural shape the
+ *  security installers reach into (webRequest + protocol.handle). */
+interface FakeSession {
+  webRequest: {
+    onHeadersReceived: ReturnType<typeof vi.fn>;
+    onBeforeRequest: ReturnType<typeof vi.fn>;
+  };
+  protocol: { handle: ReturnType<typeof vi.fn> };
+}
+
+/** A recording fake window exposing only what the composition root touches. */
+interface FakeWindow {
+  webContents: {
+    setWindowOpenHandler: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
+    getURL: ReturnType<typeof vi.fn>;
+    send: ReturnType<typeof vi.fn>;
+  };
+  once: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
+  show: ReturnType<typeof vi.fn>;
+  loadFile: ReturnType<typeof vi.fn>;
+  loadURL: ReturnType<typeof vi.fn>;
+}
+
 interface Harness {
   runtime: MainRuntime;
   calls: Milestone[];
+  session: FakeSession;
+  window: FakeWindow;
+  createBrowserWindow: ReturnType<typeof vi.fn>;
+  onActivate: ReturnType<typeof vi.fn>;
 }
 
 function createHarness(overrides: { rendererDevUrl?: string } = {}): Harness {
   const calls: Milestone[] = [];
 
-  const webContents = {
+  const window: FakeWindow = {
     // applyNavigationHardening touches these; loadRenderer/emit touch send/loadFile.
-    setWindowOpenHandler: vi.fn(),
-    on: vi.fn(),
-    getURL: vi.fn(() => ''),
-    send: vi.fn(),
-  };
-  const window = {
-    webContents,
+    webContents: {
+      setWindowOpenHandler: vi.fn(),
+      on: vi.fn(),
+      getURL: vi.fn(() => ''),
+      send: vi.fn(),
+    },
     once: vi.fn(),
     on: vi.fn(),
     show: vi.fn(),
@@ -46,7 +75,7 @@ function createHarness(overrides: { rendererDevUrl?: string } = {}): Harness {
     }),
   };
 
-  const session = {
+  const session: FakeSession = {
     webRequest: {
       onHeadersReceived: vi.fn(() => {
         calls.push('install-csp');
@@ -63,7 +92,7 @@ function createHarness(overrides: { rendererDevUrl?: string } = {}): Harness {
   };
 
   let ipcRegistered = false;
-  const ipcMain = {
+  const ipcMain: MainRuntime['ipcMain'] = {
     handle: vi.fn(() => {
       // registerIpcHandlers loops over every channel; record only the first call.
       if (!ipcRegistered) {
@@ -73,7 +102,16 @@ function createHarness(overrides: { rendererDevUrl?: string } = {}): Harness {
     }),
   };
 
-  const runtime = {
+  const createBrowserWindow = vi.fn(() => {
+    calls.push('create-window');
+    return window as unknown as BrowserWindow;
+  });
+  const onActivate = vi.fn();
+
+  // Typed as MainRuntime so the shape is structurally checked; only the leaf Electron
+  // objects (session/net/window/image) are cast, since a full Electron double is not
+  // needed to exercise the wiring the composition root actually calls.
+  const runtime: MainRuntime = {
     moduleDir: '/app/out/main',
     isPackaged: true,
     rendererDevUrl: overrides.rendererDevUrl,
@@ -82,21 +120,18 @@ function createHarness(overrides: { rendererDevUrl?: string } = {}): Harness {
     getUserDataPath: () => '/tmp/kawsay-userdata',
     getAppPath: () => '/app',
     whenReady: () => Promise.resolve(),
-    session,
-    net: { request: vi.fn() },
+    getSession: () => session as unknown as Session,
+    net: { request: vi.fn() } as unknown as Net,
     ipcMain,
-    createImageFromPath: vi.fn(),
-    createBrowserWindow: vi.fn(() => {
-      calls.push('create-window');
-      return window;
-    }),
+    createImageFromPath: vi.fn(() => ({}) as unknown as NativeImage),
+    createBrowserWindow,
     getFocusedWindow: () => null,
-    showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
+    showOpenDialog: vi.fn(async () => ({ canceled: true as const, filePaths: [] })),
     getAllWindowsCount: () => 0,
-    onActivate: vi.fn(),
-  } as unknown as MainRuntime;
+    onActivate,
+  };
 
-  return { runtime, calls };
+  return { runtime, calls, session, window, createBrowserWindow, onActivate };
 }
 
 describe('composition root — security-install ordering', () => {
@@ -153,14 +188,10 @@ describe('composition root — security-install ordering', () => {
   });
 
   it('binds the CSP + network guard + media protocol to the SAME guarded default session', async () => {
-    const { runtime } = createHarness();
+    const { runtime, session } = createHarness();
 
     await createCompositionRoot(runtime).bootstrap();
 
-    const session = runtime.session as unknown as {
-      webRequest: { onHeadersReceived: ReturnType<typeof vi.fn>; onBeforeRequest: ReturnType<typeof vi.fn> };
-      protocol: { handle: ReturnType<typeof vi.fn> };
-    };
     expect(session.webRequest.onHeadersReceived).toHaveBeenCalledTimes(1);
     expect(session.webRequest.onBeforeRequest).toHaveBeenCalledTimes(1);
     // The media protocol is registered under the `kawsay-media:` scheme, once.
@@ -169,27 +200,21 @@ describe('composition root — security-install ordering', () => {
   });
 
   it('creates exactly one window and loads it via loadFile in a packaged (production) build', async () => {
-    const { runtime } = createHarness();
+    const { runtime, createBrowserWindow, window } = createHarness();
 
     await createCompositionRoot(runtime).bootstrap();
 
-    const create = runtime.createBrowserWindow as unknown as ReturnType<typeof vi.fn>;
-    expect(create).toHaveBeenCalledTimes(1);
-    const window = create.mock.results[0]?.value as {
-      loadFile: ReturnType<typeof vi.fn>;
-      loadURL: ReturnType<typeof vi.fn>;
-    };
+    expect(createBrowserWindow).toHaveBeenCalledTimes(1);
     // Production loads the packaged file entry, never a dev-server URL.
     expect(window.loadFile).toHaveBeenCalledTimes(1);
     expect(window.loadURL).not.toHaveBeenCalled();
   });
 
   it('registers an activate handler and re-opens a window when none remain (macOS)', async () => {
-    const { runtime, calls } = createHarness();
+    const { runtime, calls, onActivate } = createHarness();
 
     await createCompositionRoot(runtime).bootstrap();
 
-    const onActivate = runtime.onActivate as unknown as ReturnType<typeof vi.fn>;
     expect(onActivate).toHaveBeenCalledTimes(1);
     const activate = onActivate.mock.calls[0]?.[0] as () => void;
     calls.length = 0;
@@ -209,15 +234,10 @@ describe('composition root — dev vs packaged renderer load', () => {
   });
 
   it('loads the dev-server URL (not the file) when a renderer dev URL is present', async () => {
-    const { runtime } = createHarness({ rendererDevUrl: 'http://localhost:5173' });
+    const { runtime, window } = createHarness({ rendererDevUrl: 'http://localhost:5173' });
 
     await createCompositionRoot(runtime).bootstrap();
 
-    const create = runtime.createBrowserWindow as unknown as ReturnType<typeof vi.fn>;
-    const window = create.mock.results[0]?.value as {
-      loadFile: ReturnType<typeof vi.fn>;
-      loadURL: ReturnType<typeof vi.fn>;
-    };
     expect(window.loadURL).toHaveBeenCalledTimes(1);
     expect(window.loadFile).not.toHaveBeenCalled();
   });

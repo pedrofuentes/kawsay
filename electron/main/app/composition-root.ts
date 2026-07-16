@@ -171,8 +171,13 @@ export interface MainRuntime {
   getAppPath(): string;
   /** `app.whenReady()`. */
   whenReady(): Promise<void>;
-  /** The guarded default session (`session.defaultSession`). */
-  readonly session: Session;
+  /**
+   * The guarded default session (`session.defaultSession`). A DEFERRED thunk, not
+   * an eager value: Electron throws "Session can only be received when app is
+   * ready" if `session.defaultSession` is read before `app.whenReady()`, so this is
+   * only ever called from inside {@link CompositionRoot.bootstrap}, AFTER whenReady.
+   */
+  getSession(): Session;
   /** Electron's `net` — issues the model download through the guarded session. */
   readonly net: Net;
   /** `ipcMain` — the invoke registrar. */
@@ -198,7 +203,7 @@ export interface MainRuntime {
 export interface CompositionRoot {
   /** Post-`whenReady` wiring: install the security guards + media protocol on the
    *  guarded session, build the phase-2 services, register the IPC handlers, and
-   *  open the main window — in exactly that order (ARCHITECTURE §10). */
+   *  open the main window — in exactly that order (ARCHITECTURE §2.2/§6.1). */
   bootstrap(): Promise<void>;
   /** Full teardown on quit: close the open library + terminate every worker. */
   dispose(): void;
@@ -604,9 +609,11 @@ export function createCompositionRoot(runtime: MainRuntime): CompositionRoot {
 
   async function bootstrap(): Promise<void> {
     await runtime.whenReady();
-    const guardedSession = runtime.session;
+    // Read the guarded session ONLY now — post-whenReady — because
+    // `session.defaultSession` throws if accessed before the app is ready.
+    const guardedSession = runtime.getSession();
 
-    // Security guards are installed BEFORE any window loads content (ARCHITECTURE §10).
+    // Security guards are installed BEFORE any window loads content (ARCHITECTURE §2.2/§6.1).
     installContentSecurityPolicy(guardedSession, cspOptions);
     // The runtime zero-egress kill-switch (AC-4): cancel every non-local request.
     installNetworkGuard(guardedSession, { isPackaged: runtime.isPackaged });

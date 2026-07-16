@@ -74,7 +74,10 @@ the renderer; ESM throughout). Module system is **ESM**; package manager **pnpm*
 kawsay/
 ├── electron/
 │   ├── main/
-│   │   ├── index.ts                 # app lifecycle, BrowserWindow, installs all guards FIRST
+│   │   ├── index.ts                 # thin entry: app lifecycle + builds the Electron runtime seam
+│   │   ├── app/
+│   │   │   ├── composition-root.ts  # wires the dependency graph; installs all guards FIRST (§2.2/§6.1)
+│   │   │   └── electron-runtime.ts  # adapts Electron globals into the injectable MainRuntime seam
 │   │   ├── security/
 │   │   │   ├── network-guard.ts     # session.webRequest.onBeforeRequest egress kill-switch (AC-4)
 │   │   │   ├── csp.ts               # onHeadersReceived → strict CSP (AC-4)
