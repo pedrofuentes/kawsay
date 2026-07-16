@@ -507,7 +507,10 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
       AND ${sourceFilter('i')}
       AND ${typeFilter('i')}
       AND ${dateFilter('i')}
-    ORDER BY rank
+    -- rank decides relevance; the (capture_date DESC NULLS LAST, id DESC) tiebreak
+    -- makes the order TOTAL so bm25 rank ties can never skip or duplicate a row across
+    -- offset pages (mirrors the timeline keyset order, #431/#456).
+    ORDER BY rank, i.capture_date DESC NULLS LAST, i.id DESC
     LIMIT @limit OFFSET @offset
   `);
   const searchCountStmt = db.prepare(`

@@ -239,6 +239,53 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
     });
   });
 
+  describe('search — stable, total ordering across "show more" pages (#456)', () => {
+    // bm25 rank ties are common (identical match text), and `ORDER BY rank` alone
+    // leaves the tie order undefined — so offset paging could skip or duplicate a row
+    // between page 0 and a later page. A deterministic secondary/tertiary key
+    // (capture_date DESC, id DESC) makes the order TOTAL and stable, so the pages tile
+    // the match set exactly once (#431's whole point).
+    it('breaks rank ties by a deterministic key (capture_date DESC, id DESC)', () => {
+      // Five memories with IDENTICAL match text ⇒ identical rank; their ids sort the
+      // OPPOSITE way to insertion (rowid) order, so only a real tiebreaker gives this order.
+      const ids = ['1', '2', '3', '4', '5'];
+      for (const id of ids) {
+        repo.insertItem({ id, mediaType: 'message', description: 'familia', contentHash: `h-${id}` });
+      }
+      const full = repo.search({ query: 'familia', limit: 10, offset: 0 });
+      expect(full.rows.map((r) => r.id)).toEqual(['5', '4', '3', '2', '1']);
+    });
+
+    it('pages through a rank-tied set with no dup/skip across the page boundary', () => {
+      const ids = ['1', '2', '3', '4', '5'];
+      for (const id of ids) {
+        repo.insertItem({ id, mediaType: 'message', description: 'familia', contentHash: `h-${id}` });
+      }
+      const full = repo.search({ query: 'familia', limit: 10, offset: 0 });
+
+      const p0 = repo.search({ query: 'familia', limit: 2, offset: 0 });
+      const p1 = repo.search({ query: 'familia', limit: 2, offset: 2 });
+      const p2 = repo.search({ query: 'familia', limit: 2, offset: 4 });
+      const paged = [...p0.rows, ...p1.rows, ...p2.rows].map((r) => r.id);
+
+      // The paged sequence IS the full order — same rows, same order, no gaps.
+      expect(paged).toEqual(full.rows.map((r) => r.id));
+      // No duplicate across the boundary, and no row skipped.
+      expect(new Set(paged).size).toBe(paged.length);
+      expect(new Set(paged)).toEqual(new Set(ids));
+    });
+
+    it('orders by rank FIRST, then the tiebreakers (relevance still wins)', () => {
+      // A stronger lexical match must rank ahead regardless of id — the tiebreakers only
+      // decide WITHIN an equal-rank group, they never override relevance.
+      repo.insertItem({ id: 'z-strong', mediaType: 'message', description: 'familia familia familia', contentHash: 'h-strong' });
+      repo.insertItem({ id: 'a-weak', mediaType: 'message', description: 'familia y algo mas y mas y mas', contentHash: 'h-weak' });
+      const res = repo.search({ query: 'familia', limit: 10, offset: 0 });
+      // The denser match ('z-strong') ranks first even though 'a-weak' < 'z-strong' by id.
+      expect(res.rows[0]?.id).toBe('z-strong');
+    });
+  });
+
   describe('search — type/date filters server-side, past the page (#431)', () => {
     // Seed a match set BIGGER than one search page so a filter that runs only over
     // the first page (the old client-side bug) could never see a low-ranked match.

@@ -558,6 +558,76 @@ describe('Search — truncation and "show more" (#431)', () => {
 
     await expectNoAxeViolations(container);
   });
+
+  it('does not duplicate rows when "Show more" is double-clicked before a page settles (#456)', async () => {
+    const first = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `First ${i}` }));
+    const second = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `Second ${i}` }));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const searchCatalog = vi.fn((input: { offset?: number }) =>
+      (input.offset ?? 0) === 0
+        ? Promise.resolve(makeSearchResult({ items: first, total: 128 }))
+        : gate.then(() => makeSearchResult({ items: second, total: 128 })),
+    );
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    const more = await screen.findByRole('button', { name: /show more/i });
+
+    // Two clicks dispatched in the SAME commit, before React re-renders the button to
+    // its disabled state — the classic double-append race. Only ONE append must survive.
+    await act(async () => {
+      more.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      more.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+
+    await act(async () => {
+      release();
+      await gate;
+    });
+
+    await screen.findByText(caption('Second 0'));
+    expect(screen.getAllByText(caption('Second 0'))).toHaveLength(1);
+    // 50 (first page) + 50 (one appended page) — never 150.
+    expect(screen.getAllByRole('article')).toHaveLength(100);
+  });
+
+  it('preserves already-loaded results when "Show more" fails, with an inline retry that resumes (#456)', async () => {
+    const first = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `First ${i}` }));
+    const second = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `Second ${i}` }));
+    let moreCalls = 0;
+    const searchCatalog = vi.fn((input: { offset?: number }) => {
+      if ((input.offset ?? 0) === 0) {
+        return Promise.resolve(makeSearchResult({ items: first, total: 128 }));
+      }
+      moreCalls += 1;
+      // The first "show more" attempt fails; the retry (same offset) succeeds.
+      return moreCalls === 1
+        ? Promise.reject(new Error('SQLITE_BUSY: database is locked'))
+        : Promise.resolve(makeSearchResult({ items: second, total: 128 }));
+    });
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    expect(await screen.findByText(caption('First 0'))).toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: /show more/i }));
+
+    // The already-loaded page is NOT wiped, and the full-page error never appears.
+    expect(await screen.findByText(/couldn't load more/i)).toBeInTheDocument();
+    expect(screen.getByText(caption('First 0'))).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't search just now/i)).not.toBeInTheDocument();
+
+    // The inline retry RESUMES from the current offset (50), not from page 1.
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+    await waitFor(() =>
+      expect(searchCatalog).toHaveBeenLastCalledWith({ query: 'mama', limit: 50, offset: 50 }),
+    );
+    expect(await screen.findByText(caption('Second 0'))).toBeInTheDocument();
+    expect(screen.getByText(caption('First 0'))).toBeInTheDocument();
+  });
 });
 
 describe('Search — opening a result', () => {
