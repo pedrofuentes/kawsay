@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { ItemView } from '@renderer/views/ItemView';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { useFavourite } from '@renderer/lib/use-favourite';
-import { useNavigation } from '@renderer/lib/navigation';
+import { NavigationProvider, useNavigation } from '@renderer/lib/navigation';
 import type { ItemCardDTO, TranscriptionSnapshotDTO } from '@shared/kawsay-api';
 import { makeFakeApi, makeItemCard, makeTranscriptView } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
@@ -414,8 +414,12 @@ describe('ItemView — favourite toggle race + lifecycle guards (#434)', () => {
       return calls.length === 1 ? first.promise : second.promise;
     });
     const api = makeFakeApi({ setFavourite });
+    // useFavourite reads its value/busy/sequence state from the navigation provider
+    // (owned above ItemView's id-keyed remount), so the hook needs it in scope.
     const wrapper = ({ children }: { children: ReactNode }) => (
-      <KawsayApiProvider api={api}>{children}</KawsayApiProvider>
+      <KawsayApiProvider api={api}>
+        <NavigationProvider>{children}</NavigationProvider>
+      </KawsayApiProvider>
     );
     const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), { wrapper });
 

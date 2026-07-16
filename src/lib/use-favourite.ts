@@ -1,20 +1,21 @@
-// The renderer-side act layer for the favourite toggle (#434, part of #434 —
-// arrow-nav and the tour are separate later slices). Mirrors
-// `useCategorizationStatus`'s optimistic-then-reconcile shape: reflect the click
-// immediately (the toggle feels instant), persist via the validated
-// `catalog:setFavourite` channel, and revert to the prior state on a failed save
-// so the UI never claims something is favourited that isn't actually on disk.
+// The renderer-side act layer for the favourite toggle (#434). It reflects a click
+// immediately (the toggle feels instant), persists via the validated
+// `catalog:setFavourite` channel, and reverts on a failed save so the UI never
+// claims something is favourited that isn't actually on disk.
 //
-// Two async guards, ported from `useItemCategories` (#360/#383), keep that honest
-// against the reachable races: (1) a MOUNT guard, because `MainApp` keys ItemView
-// by item id — navigating to another memory fully unmounts this instance, and a
-// user who toggles then clicks Back unmounts it while the save is still in flight;
-// (2) a monotonic SEQUENCE guard, because `ipcRenderer.invoke` gives no ordering
-// guarantee, so two quick toggles can resolve out of order and a stale older reply
-// must never clobber the newer one. `isSaving` also disables the control while a
-// save is pending, discouraging the rapid re-click that triggers the race.
+// The value and the in-flight `saving` flag are NOT held in this hook — they live in
+// the navigation provider, keyed by item id (see `navigation.tsx`). `MainApp` keys
+// `<ItemView key={`item-${id}`}/>`, so arrowing between memories fully UNMOUNTS this
+// hook; keeping the state here meant a save left in flight across that remount lost
+// its saving/sequence guards, and the reopened memory showed the stale open-time
+// value on an enabled control — a re-click there could start a second save whose
+// older in-flight reply arrived last and clobbered the newer intent, inverting the
+// persisted value (#458). Owning the state ABOVE the remount closes that: every mount
+// of the same id reads the SAME value + busy state, and the per-id sequence token
+// drops an out-of-order older reply even when it belongs to an unmounted ItemView.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useKawsayApi } from './kawsay-api';
+import { useNavigation } from './navigation';
 
 export interface UseFavouriteResult {
   /** The current (optimistic, then reconciled) favourite state. */
@@ -37,38 +38,31 @@ const SAVE_FAILURE_MESSAGE = "We couldn't save that change just now. Nothing was
 
 /**
  * Track and toggle ONE item's favourite flag. `itemId`/`initial` describe the
- * memory currently being viewed; a new `itemId` resets the visible state to that
- * item's own `initial` value and drops any stale announcement.
- *
- * `onSettled` (optional) is called with the durable `isFavourite` the main
- * process echoed back, but ONLY when a save actually persisted — never on a
- * failed/reverted save, and never for a settlement the monotonic SEQUENCE guard
- * dropped (a stale older reply must not regress a newer one). It deliberately is
- * NOT gated behind the mount guard: it reconciles PERSISTENT owner state (the
- * navigation-owned favourite override map), which stays mounted while this
- * ItemView unmounts on its id-keyed remount — so a save that settles only after
- * the user arrowed away still lands the corrected flag for the next mount to read
- * (#458 before-settle race). Held in a ref so a changing callback identity never
- * re-runs the item-switch effect or stales the toggle closure.
+ * memory currently being viewed; the visible value and busy state come from the
+ * provider-owned favourite state for `itemId` (so they survive an id-keyed remount),
+ * falling back to `initial` for a memory not toggled this session.
  */
-export function useFavourite(
-  itemId: string,
-  initial: boolean,
-  onSettled?: (isFavourite: boolean) => void,
-): UseFavouriteResult {
+export function useFavourite(itemId: string, initial: boolean): UseFavouriteResult {
   const api = useKawsayApi();
-  const [isFavourite, setIsFavourite] = useState(initial);
-  const [isSaving, setIsSaving] = useState(false);
+  const { favouriteStateFor, beginFavouriteSave, settleFavouriteSave } = useNavigation();
   const [announcement, setAnnouncement] = useState('');
 
-  const onSettledRef = useRef(onSettled);
-  useEffect(() => {
-    onSettledRef.current = onSettled;
-  });
+  // Optimistic-or-settled value + in-flight flag, owned by the provider and keyed by
+  // id — the same for every mount of this memory, including a remount over a still
+  // in-flight save.
+  const favourite = favouriteStateFor(itemId);
+  const isFavourite = favourite?.value ?? initial;
+  const isSaving = favourite?.saving ?? false;
 
-  // False after unmount, so a late-arriving save settlement never calls setState
-  // on a dead tree (mirrors useItemCategories's mountedRef). The user can toggle
-  // then click Back — ItemView unmounts while the invoke is still pending.
+  // A fresh item drops any stale announcement (the value/busy state are keyed by id
+  // in the provider, so they need no reset here).
+  useEffect(() => {
+    setAnnouncement('');
+  }, [itemId]);
+
+  // False after unmount, so a late-arriving save settlement never announces on a dead
+  // tree. The reconcile itself still lands — it targets the always-mounted provider —
+  // but the live-region text belongs to this instance.
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -77,92 +71,36 @@ export function useFavourite(
     };
   }, []);
 
-  // Monotonic per-toggle sequence. Each toggle captures its own `seq` when it is
-  // SENT; a settlement applies its outcome only if a NEWER toggle has not already
-  // settled (`seq >= lastSettledSeqRef`). `ipcRenderer.invoke` does not guarantee
-  // response order == request order, so without this a stale older reply could
-  // clobber the newer state (the symmetric residual guarded in useItemCategories).
-  const attemptSeqRef = useRef(0);
-  const lastSettledSeqRef = useRef(0);
-
-  useEffect(() => {
-    setIsFavourite(initial);
-    setIsSaving(false);
-    setAnnouncement('');
-    // A fresh item starts its own sequence clean.
-    attemptSeqRef.current = 0;
-    lastSettledSeqRef.current = 0;
-    // `initial` intentionally excluded: it is the item's value AT MOUNT/ITEM-
-    // SWITCH time only. Re-running this effect every time `initial` ticks (e.g.
-    // after our own optimistic setIsFavourite settles) would fight the toggle's
-    // own state — the effect should fire on item identity change alone.
-  }, [itemId]);
-
   const toggle = useCallback((): void => {
     if (api === undefined) {
       return;
     }
-    const next = !isFavourite;
-    const seq = ++attemptSeqRef.current;
-    setIsFavourite(next);
-    setIsSaving(true);
+    const current = favouriteStateFor(itemId)?.value ?? initial;
+    const next = !current;
+    const token = beginFavouriteSave(itemId, next);
     setAnnouncement(next ? 'Added to favourites.' : 'Removed from favourites.');
     void api
       .setFavourite({ id: itemId, favourite: next })
       .then((result) => {
-        // SEQUENCE guard first, and it drops the settlement ENTIRELY (reconcile
-        // included): an out-of-order OLDER reply a newer toggle already settled must
-        // never regress the persistent source with a stale value. Preserved from
-        // #453 — `ipcRenderer.invoke` gives no response-order guarantee.
-        if (seq < lastSettledSeqRef.current) {
-          console.debug('[kawsay] favourite toggle result dropped; superseded');
-          return;
-        }
-        lastSettledSeqRef.current = seq;
-        // Reconcile the PERSISTENT owner (e.g. the navigation-owned favourite
-        // override map) with what actually persisted — success path only, so a
-        // failed/reverted save never writes a value not on disk. This runs even when
-        // this ItemView has UNMOUNTED (the user toggled then arrowed away before the
-        // save settled): it targets state the still-mounted parent owns, which
-        // outlives ItemView's id-keyed remount, so the corrected flag is there for
-        // the next mount to read (#458 before-settle race).
-        onSettledRef.current?.(result.isFavourite);
-        // The DISPLAYED toggle's own state stays MOUNT-guarded — no setState on a
-        // dead tree, no React unmounted-update warning (#453 behaviour preserved).
-        if (!mountedRef.current) {
-          console.debug('[kawsay] favourite toggle display update skipped; unmounted');
-          return;
-        }
-        setIsFavourite(result.isFavourite);
-        // Only the newest in-flight save clears the busy state, so an older reply
-        // can't re-enable the control while a newer save is still pending.
-        if (seq === attemptSeqRef.current) {
-          setIsSaving(false);
-        }
+        settleFavouriteSave(itemId, token, { ok: true, value: result.isFavourite });
       })
       .catch((error: unknown) => {
-        if (seq < lastSettledSeqRef.current) {
-          console.debug('[kawsay] favourite toggle rejection dropped; superseded', error);
+        // Revert to the pre-toggle value — a failed save persisted nothing, so the UI
+        // must not keep claiming the change. The provider drops this if a newer toggle
+        // already settled (an older reply must never regress the newer intent).
+        const applied = settleFavouriteSave(itemId, token, { ok: false, revertTo: current });
+        if (!applied) {
           return;
         }
-        lastSettledSeqRef.current = seq;
-        // A FAILED save persisted NOTHING, so there is nothing to reconcile into the
-        // persistent source — never call `onSettled` here (it is success-path only).
-        // If this ItemView has unmounted there is likewise no display to revert.
+        // The value reverted on the always-mounted provider regardless; only the
+        // announcement, which belongs to this (possibly dead) instance, is guarded.
         if (!mountedRef.current) {
-          console.debug('[kawsay] favourite toggle rejection dropped; unmounted');
           return;
         }
-        // Nothing on disk changed — fall back to the prior state so the toggle
-        // never lies about what is actually persisted.
         console.warn('[kawsay] favourite toggle failed; reverting', error);
-        setIsFavourite(!next);
         setAnnouncement(SAVE_FAILURE_MESSAGE);
-        if (seq === attemptSeqRef.current) {
-          setIsSaving(false);
-        }
       });
-  }, [api, itemId, isFavourite]);
+  }, [api, itemId, initial, favouriteStateFor, beginFavouriteSave, settleFavouriteSave]);
 
   return { isFavourite, isSaving, announcement, toggle };
 }
