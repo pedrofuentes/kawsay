@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   APP_GET_VERSION,
+  CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
+  CATALOG_LIST_COLLECTIONS,
   CATALOG_SEARCH,
+  CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATALOG_UNDO_IMPORT,
   CATEGORIZE_APPLY_CORRECTION,
   CATEGORIZE_CANCEL,
   CATEGORIZE_LIST_FOR_ITEM,
@@ -17,6 +21,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SETTINGS_GET,
+  SETTINGS_SET,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
   SUGGESTIONS_ACCEPT,
@@ -55,8 +61,12 @@ const otherHandlers = {
   [CATALOG_TIMELINE]: () => ({ items: [], nextCursor: null }),
   [CATALOG_SEARCH]: () => ({ items: [], total: 0 }),
   [CATALOG_THUMBNAIL]: () => null,
-  [IMPORT_START]: () => ({ jobId: '00000000-0000-0000-0000-000000000000' }),
+  [IMPORT_START]: () => ({
+    jobId: '00000000-0000-0000-0000-000000000000',
+    sourceId: '00000000-0000-0000-0000-000000000000',
+  }),
   [IMPORT_CANCEL]: () => ({ cancelled: false }),
+  [CATALOG_UNDO_IMPORT]: () => ({ itemsRemoved: 0, occurrencesRemoved: 0 }),
   [DIALOG_OPEN_DIRECTORY]: () => null,
   [DIALOG_OPEN_FILE]: () => null,
   [TRANSCRIPTION_DOWNLOAD_MODEL]: () => ({ status: 'already-present' as const }),
@@ -80,6 +90,13 @@ const otherHandlers = {
     text: null,
     segments: [],
   }),
+  [CATALOG_SET_FAVOURITE]: () => ({ isFavourite: false }),
+  [CATALOG_LIST_COLLECTIONS]: () => ({ collections: [] }),
+  [CATALOG_GET_COLLECTION]: () => ({
+    collection: { id: '00000000-0000-0000-0000-000000000000', name: 'x', itemCount: 0, coverItemId: null },
+    items: [],
+    total: 0,
+  }),
   [CATEGORIZE_STATUS]: () => ({ optedIn: false, offered: false }),
   [CATEGORIZE_SET_CONSENT]: () => ({ optedIn: false }),
   [CATEGORIZE_LIST_FOR_ITEM]: () => [],
@@ -94,6 +111,8 @@ const otherHandlers = {
   [SUGGESTIONS_ACCEPT]: () => ({ suggestions: [], collections: [] }),
   [SUGGESTIONS_MERGE]: () => ({ suggestions: [], collections: [] }),
   [SUGGESTIONS_DISMISS]: () => ({ suggestions: [], collections: [] }),
+  [SETTINGS_GET]: () => ({ textSize: 'default' as const, reducedMotion: false }),
+  [SETTINGS_SET]: () => ({ textSize: 'default' as const, reducedMotion: false }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };

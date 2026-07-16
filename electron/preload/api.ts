@@ -7,10 +7,14 @@
 
 import {
   APP_GET_VERSION,
+  CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
+  CATALOG_LIST_COLLECTIONS,
   CATALOG_SEARCH,
+  CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATALOG_UNDO_IMPORT,
   CATEGORIZE_APPLY_CORRECTION,
   CATEGORIZE_CANCEL,
   CATEGORIZE_LIST_FOR_ITEM,
@@ -23,6 +27,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SETTINGS_GET,
+  SETTINGS_SET,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
   SUGGESTIONS_ACCEPT,
@@ -73,8 +79,12 @@ export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSub
     searchCatalog: (input) => invoke(CATALOG_SEARCH, input),
     getThumbnail: (input) => invoke(CATALOG_THUMBNAIL, input),
     getTranscript: (input) => invoke(CATALOG_GET_TRANSCRIPT, input),
+    setFavourite: (input) => invoke(CATALOG_SET_FAVOURITE, input),
+    listCollections: () => invoke(CATALOG_LIST_COLLECTIONS, {}),
+    getCollection: (input) => invoke(CATALOG_GET_COLLECTION, { offset: 0, ...input }),
     startImport: (input) => invoke(IMPORT_START, input),
     cancelImport: (input) => invoke(IMPORT_CANCEL, input),
+    undoImport: (input) => invoke(CATALOG_UNDO_IMPORT, input),
     openDirectory: (options) => invoke(DIALOG_OPEN_DIRECTORY, options ?? {}),
     openFile: (options) => invoke(DIALOG_OPEN_FILE, options ?? {}),
     onImportProgress: (listener) => subscribe(IMPORT_PROGRESS, listener),
@@ -105,5 +115,8 @@ export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSub
     acceptSuggestion: (input) => invoke(SUGGESTIONS_ACCEPT, input),
     mergeSuggestion: (input) => invoke(SUGGESTIONS_MERGE, input),
     dismissSuggestion: (input) => invoke(SUGGESTIONS_DISMISS, input),
+
+    getSettings: () => invoke(SETTINGS_GET, {}),
+    setSettings: (input) => invoke(SETTINGS_SET, input),
   };
 }

@@ -9,16 +9,21 @@
   --font-display: 'Lora', 'Source Serif 4', Georgia, serif;
   --font-body: 'Inter', system-ui, sans-serif;
 
-  /* ── Typography: size scale (18px preferred body for 60+ readers) ────── */
-  --text-xs: 12px;
-  --text-sm: 14px;
-  --text-base: 16px;
-  --text-md: 18px;
-  --text-lg: 20px;
-  --text-xl: 24px;
-  --text-2xl: 30px;
-  --text-3xl: 36px;
-  --text-4xl: 48px;
+  /* ── Typography: size scale (18px preferred body for 60+ readers). Every
+   * step is `basePx * var(--text-scale, 1)` so the Settings text-size control
+   * (AC-13 / Journey G, #433) can scale EVERY size proportionally from ONE root
+   * override (src/lib/settings.tsx sets `--text-scale` on <html>) — not just
+   * the body base. `--text-scale` itself defaults to 1 (see the plain :root
+   * block below) until a preference has loaded. ─────────────────────────── */
+  --text-xs: calc(12px * var(--text-scale, 1));
+  --text-sm: calc(14px * var(--text-scale, 1));
+  --text-base: calc(16px * var(--text-scale, 1));
+  --text-md: calc(18px * var(--text-scale, 1));
+  --text-lg: calc(20px * var(--text-scale, 1));
+  --text-xl: calc(24px * var(--text-scale, 1));
+  --text-2xl: calc(30px * var(--text-scale, 1));
+  --text-3xl: calc(36px * var(--text-scale, 1));
+  --text-4xl: calc(48px * var(--text-scale, 1));
 
   /* ── Typography: line-heights ────────────────────────────────────────── */
   --leading-tight: 1.25;
@@ -123,6 +128,11 @@
  * Spacing intentionally mirrors Tailwind's default 4px scale (USER_FLOWS §5.5),
  * so `p-6` = 24px, `gap-4` = 16px, etc. already match the token steps. */
 :root {
+  /* The text-size multiplier the Settings control (AC-13 / Journey G, #433)
+   * overrides at runtime (src/lib/settings.tsx sets this inline on <html>); 1
+   * (unscaled) until a persisted preference has loaded. */
+  --text-scale: 1;
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -159,4 +169,20 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* The explicit in-app reduced-motion OVERRIDE (Settings, AC-13 / Journey G,
+ * #433): composes with — never fights — the OS query above. ON (the root
+ * `data-reduced-motion="on"` attribute src/lib/settings.tsx maintains) forces
+ * the identical collapse regardless of the OS setting; OFF/unset simply leaves
+ * the media query as the sole source of truth. `usePrefersReducedMotion`
+ * (src/lib/use-reduced-motion.ts) reads BOTH so JS-driven motion composes the
+ * same way this CSS does. */
+:root[data-reduced-motion='on'] *,
+:root[data-reduced-motion='on'] *::before,
+:root[data-reduced-motion='on'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
 }

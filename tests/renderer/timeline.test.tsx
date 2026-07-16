@@ -4,11 +4,11 @@ import userEvent from '@testing-library/user-event';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { LibraryProvider } from '@renderer/lib/library';
 import { NavigationProvider } from '@renderer/lib/navigation';
-import { Timeline } from '@renderer/views/Timeline';
+import { Timeline, applyFavouriteOverrides } from '@renderer/views/Timeline';
 import type { ItemCardDTO, TimelinePageDTO } from '@shared/kawsay-api';
 import { makeFakeApi, makeItemCard } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
-import { ViewProbe, wrapInProviders } from './support/render';
+import { SiblingsProbe, ViewProbe, wrapInProviders } from './support/render';
 
 function page(over: Partial<TimelinePageDTO> = {}): TimelinePageDTO {
   return { items: [], nextCursor: null, ...over };
@@ -302,6 +302,34 @@ describe('Timeline — opening a memory', () => {
     await user.click(await screen.findByRole('button', { name: /open this one/i }));
     expect(screen.getByTestId('active-view')).toHaveTextContent('item');
   });
+
+  it('threads the whole ordered (newest-first) loaded page along as arrow-nav siblings', async () => {
+    // The wiring that makes ItemView's ←/→ work at all: opening a memory must carry
+    // the timeline's loaded, in-order items along as `siblings`, so ItemView has
+    // neighbours to step through without re-fetching. Regressing this silently
+    // strips arrow-nav of its data, so assert it end-to-end from the real card.
+    const items = [
+      makeItemCard({ id: 'sib-a', title: 'Newest memory', captureDate: '2024-03-03T10:00:00.000Z' }),
+      makeItemCard({ id: 'sib-b', title: 'Middle memory', captureDate: '2024-02-02T10:00:00.000Z' }),
+      makeItemCard({ id: 'sib-c', title: 'Oldest memory', captureDate: '2024-01-01T10:00:00.000Z' }),
+    ];
+    const api = makeFakeApi({ getTimeline: vi.fn(() => Promise.resolve(page({ items }))) });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(
+        <>
+          <Timeline />
+          <SiblingsProbe />
+        </>,
+        api,
+      ),
+    );
+
+    await user.click(await screen.findByRole('button', { name: /middle memory/i }));
+
+    // The full page, in the newest-first order the timeline rendered it.
+    expect(screen.getByTestId('siblings')).toHaveTextContent('sib-a,sib-b,sib-c');
+  });
 });
 
 describe('Timeline — tolerates a missing bridge (browser preview)', () => {
@@ -322,5 +350,36 @@ describe('Timeline — tolerates a missing bridge (browser preview)', () => {
     } finally {
       if (original !== undefined) window.kawsayAPI = original;
     }
+  });
+});
+
+// The favourite-overrides overlay (#432 review 🟡): a full O(n) remap of the whole
+// loaded list on ANY favourite toggle anywhere — even while Timeline is hidden and
+// even for an item not on this page — reallocated the list and cascaded into the
+// row/virtualization memos. The overlay must be a no-op (SAME reference) when it
+// changes nothing, and clone only the affected card when it does.
+describe('applyFavouriteOverrides', () => {
+  it('returns the same list reference when there are no overrides', () => {
+    const items = [makeItemCard({ id: 'a' }), makeItemCard({ id: 'b' })];
+    expect(applyFavouriteOverrides(items, {})).toBe(items);
+  });
+
+  it('returns the same list reference when no override applies to a loaded item', () => {
+    const items = [makeItemCard({ id: 'a', isFavourite: false })];
+    // An override for an off-page item, plus a no-op override that already matches
+    // the loaded state — neither changes anything on this page.
+    expect(applyFavouriteOverrides(items, { 'not-on-page': true, a: false })).toBe(items);
+  });
+
+  it('clones only the affected card when a relevant override differs', () => {
+    const a = makeItemCard({ id: 'a', isFavourite: false });
+    const b = makeItemCard({ id: 'b', isFavourite: false });
+    const out = applyFavouriteOverrides([a, b], { a: true });
+
+    expect(out).not.toBe(undefined);
+    expect(out[0]?.isFavourite).toBe(true);
+    // The changed card is a fresh object; the untouched card is kept by reference.
+    expect(out[0]).not.toBe(a);
+    expect(out[1]).toBe(b);
   });
 });

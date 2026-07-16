@@ -34,6 +34,8 @@ Kawsay's privacy guarantee is a **core, tested invariant** — not a policy:
 - ✅ Originals are **never moved or altered**
 - ✅ Fully **offline** — v1 makes zero network connections at runtime
 
+Media plays inside a memory over a local-only `kawsay-media:` protocol (never `file://`, never the network): the renderer names only an opaque id, and the main process resolves it to a confined original and re-checks the file's real path against an allowlist of servable roots **at serve time** — so a later symlink swap on a watched folder can never stream a file from outside your library.
+
 An automated test enforces the zero-egress guarantee on every pull request. See [`MISSION.md`](MISSION.md) §5.
 
 ---

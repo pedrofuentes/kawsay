@@ -1,16 +1,14 @@
 // The main application shell after onboarding. It owns the sidebar + status bar and
-// routes the primary sections. The timeline (U1) and search (U2) are the real screens;
-// add-memories and settings stay light placeholders for now, all reading the open
-// library from LibraryContext and moving between sections via useNavigation.
+// routes the primary sections: the timeline (U1), search (U2), the Add Memories
+// re-entry (#427), and settings — all reading the open library from LibraryContext
+// and moving between sections via useNavigation.
+import { useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { AppShell } from '@renderer/components/AppShell';
-import { Button } from '@renderer/components/Button';
-import { EmptyState } from '@renderer/components/EmptyState';
-import { Icon } from '@renderer/components/Icon';
-import type { IconName } from '@renderer/components/Icon';
-import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
+import { AddMemories } from '@renderer/views/AddMemories';
+import { CollectionDetail, Collections } from '@renderer/views/Collections';
 import { Search } from '@renderer/views/Search';
 import { Settings } from '@renderer/views/Settings';
 import { Timeline } from '@renderer/views/Timeline';
@@ -18,17 +16,31 @@ import { ItemView } from '@renderer/views/ItemView';
 import { Sidebar } from './Sidebar';
 
 export function MainApp(): ReactElement {
-  const { view, navigate } = useNavigation();
+  const { view } = useNavigation();
   const { library } = useLibrary();
-  const who = library?.name ?? 'your loved one';
+  const isTimeline = view.name === 'timeline';
+
+  // Leaving Timeline for an opened memory or Search used to UNMOUNT it —
+  // `useTimeline`'s loaded pages, the scroll offset, and the virtual window all
+  // live in Timeline's own local state, so returning re-ran the fetch from page
+  // 1 and reset scroll to the top (#432). Once visited, keep it mounted for the
+  // rest of MainApp's lifetime instead of swapping it in and out of the switch
+  // below — `active` (passed to Timeline) toggles it hidden rather than gone,
+  // so its state simply survives the round trip. This mirrors the pattern the
+  // NavigationProvider's favourite-override map already established: state
+  // that must outlive a sibling view's remount lives ABOVE the swap, not
+  // inside it.
+  const [timelineMounted, setTimelineMounted] = useState(isTimeline);
+  useEffect(() => {
+    if (isTimeline) {
+      setTimelineMounted(true);
+    }
+  }, [isTimeline]);
 
   return (
     <AppShell variant="main" sidebar={<Sidebar />} libraryName={library?.name}>
-      {view.name === 'timeline' ? (
-        renderSection()
-      ) : (
-        <div className="mx-auto flex max-w-3xl flex-col gap-8">{renderSection()}</div>
-      )}
+      {timelineMounted ? <Timeline active={isTimeline} /> : null}
+      {isTimeline ? null : <div className="mx-auto flex max-w-3xl flex-col gap-8">{renderSection()}</div>}
     </AppShell>
   );
 
@@ -37,28 +49,27 @@ export function MainApp(): ReactElement {
       case 'search':
         return <Search />;
       case 'add-memories':
-        return (
-          <InfoView
-            key="add-memories"
-            heading="Add memories"
-            icon="archive"
-            emptyTitle="Bring in more"
-            description={`Add another source to ${who}'s library whenever you're ready.`}
-            action={
-              <Button variant="primary" onClick={() => navigate({ name: 'timeline' })}>
-                Back to the timeline
-              </Button>
-            }
-          />
-        );
+        // Keyed so re-entering "Add memories" remounts the flow at its source
+        // chooser (the reused steps' <h1> auto-focus re-runs) rather than stranding
+        // the user mid-import from a previous visit.
+        return <AddMemories key="add-memories" />;
       case 'settings':
         return <Settings key="settings" />;
+      case 'collections':
+        return <Collections key="collections" />;
+      case 'collection':
+        // Keyed by collection id so opening a different collection remounts the
+        // view (its <h1> auto-focus re-runs and the members re-fetch for the
+        // new id), mirroring the 'item' case below.
+        return <CollectionDetail key={`collection-${view.collectionId}`} />;
       case 'item':
         // Keyed by item id so opening a different memory remounts the view (its
         // <h1> auto-focus re-runs, and the transcript re-reads for the new id).
         return <ItemView key={`item-${view.item.id}`} />;
       case 'timeline':
-        return <Timeline />;
+        // Handled above via the persistent, hidden-when-inactive mount (#432) —
+        // unreachable here since that branch never calls renderSection().
+        return null;
       // Onboarding is routed by the top-level <Router/> (App.tsx) and never reaches
       // MainApp; the case exists only so the switch stays exhaustive over View.
       case 'onboarding':
@@ -67,40 +78,6 @@ export function MainApp(): ReactElement {
         return assertNever(view);
     }
   }
-}
-
-interface InfoViewProps {
-  heading: string;
-  icon: IconName;
-  emptyTitle: string;
-  description: string;
-  action?: ReactElement;
-}
-
-// The light placeholder sections (add-memories, settings). Like Timeline and Search,
-// each moves focus to its <h1> on mount so that switching sections lands the keyboard
-// and screen-reader cursor on the new view's name (WCAG 2.4.3, AC-13). The distinct
-// `key` per section in renderSection() remounts this on every switch so the effect
-// re-runs.
-function InfoView({ heading, icon, emptyTitle, description, action }: InfoViewProps): ReactElement {
-  const headingRef = useAutoFocusHeading<HTMLHeadingElement>();
-  return (
-    <section className="flex flex-col gap-6">
-      <h1
-        ref={headingRef}
-        tabIndex={-1}
-        className="font-display text-3xl font-semibold text-text-primary outline-none"
-      >
-        {heading}
-      </h1>
-      <EmptyState
-        icon={<Icon name={icon} className="h-8 w-8" />}
-        title={emptyTitle}
-        description={description}
-        action={action}
-      />
-    </section>
-  );
 }
 
 // Exhaustiveness guard for the typed view router (ADR-0015, issue #95): if a new

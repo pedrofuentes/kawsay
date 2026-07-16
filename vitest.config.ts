@@ -34,6 +34,7 @@ export default defineConfig({
         // singletons at module load, so it cannot run under vitest/jsdom. Each
         // collaborator it composes is unit-tested in isolation.
         'electron/main/index.ts', // main-process entry (app/BrowserWindow bootstrap)
+        'electron/main/app/composition-root.ts', // bootstrap glue: composes unit-tested collaborators (ordering asserted in composition-root.test.ts)
         'electron/preload/index.ts', // preload bootstrap (contextBridge.exposeInMainWorld)
         'electron/main/importers/workers/ingestion-worker.ts', // worker_threads entry
         'electron/main/transcription/workers/transcription-worker.ts', // worker_threads entry
@@ -53,6 +54,29 @@ export default defineConfig({
           name: 'node',
           environment: 'node',
           include: ['tests/**/*.test.ts'],
+          // The perf-sensitive suite runs in its own serial `perf` project below
+          // (isolated, generous timeout) so it never double-runs here.
+          exclude: ['tests/perf/**'],
+        },
+      },
+      {
+        // Perf / scaling suite (#442, #454): scale-budget enforcement, the
+        // themes-cluster sub-quadratic guard, and the WER/RTF harness. Runs SERIALLY
+        // in a single fork (no file parallelism) with a generous timeout, so it does
+        // not compete with the parallel jsdom+node load that made timing/timeout
+        // assertions flake under CPU pressure. The load-bearing perf assertions are
+        // operation counts (deterministic), not wall clock; the serial pool + timeout
+        // additionally shield the streamed-parse timeout tests from contention.
+        extends: true,
+        test: {
+          name: 'perf',
+          environment: 'node',
+          include: ['tests/perf/**/*.test.ts'],
+          testTimeout: 60_000,
+          // Single fork ⇒ every perf file runs SERIALLY in one worker (no file
+          // parallelism), so timing/timeout-sensitive tests don't compete for CPU.
+          pool: 'forks',
+          poolOptions: { forks: { singleFork: true } },
         },
       },
       {

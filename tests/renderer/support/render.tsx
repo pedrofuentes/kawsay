@@ -7,6 +7,7 @@ import { render, type RenderResult } from '@testing-library/react';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { LibraryProvider } from '@renderer/lib/library';
 import { NavigationProvider, useNavigation, type View } from '@renderer/lib/navigation';
+import { SettingsProvider } from '@renderer/lib/settings';
 import type { FakeApi } from './fake-api';
 import { makeFakeApi } from './fake-api';
 
@@ -23,9 +24,11 @@ export function renderWithProviders(ui: ReactNode, options: RenderOptions = {}):
   const api = options.api ?? makeFakeApi();
   const result = render(
     <KawsayApiProvider api={api}>
-      <LibraryProvider>
-        <NavigationProvider initialView={options.initialView}>{ui}</NavigationProvider>
-      </LibraryProvider>
+      <SettingsProvider>
+        <LibraryProvider>
+          <NavigationProvider initialView={options.initialView}>{ui}</NavigationProvider>
+        </LibraryProvider>
+      </SettingsProvider>
     </KawsayApiProvider>,
   );
   return { ...result, api };
@@ -37,12 +40,23 @@ export function ViewProbe(): ReactElement {
   return <div data-testid="active-view">{view.name}</div>;
 }
 
+/** Renders the ordered sibling ids threaded into the active item view (comma
+ *  separated), so tests can assert that opening a memory carried the loaded list
+ *  along for ←/→ arrow-nav. Empty when not on an item view. */
+export function SiblingsProbe(): ReactElement {
+  const { view } = useNavigation();
+  const ids = view.name === 'item' ? (view.siblings ?? []).map((sibling) => sibling.id) : [];
+  return <div data-testid="siblings">{ids.join(',')}</div>;
+}
+
 export function wrapInProviders(children: ReactNode, api: FakeApi, initialView?: View): ReactElement {
   return (
     <KawsayApiProvider api={api}>
-      <LibraryProvider>
-        <NavigationProvider initialView={initialView}>{children}</NavigationProvider>
-      </LibraryProvider>
+      <SettingsProvider>
+        <LibraryProvider>
+          <NavigationProvider initialView={initialView}>{children}</NavigationProvider>
+        </LibraryProvider>
+      </SettingsProvider>
     </KawsayApiProvider>
   );
 }

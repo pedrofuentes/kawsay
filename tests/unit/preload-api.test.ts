@@ -4,8 +4,10 @@ import {
   APP_GET_VERSION,
   CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
+  CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATALOG_UNDO_IMPORT,
   CATEGORIZE_APPLY_CORRECTION,
   CATEGORIZE_CANCEL,
   CATEGORIZE_LIST_FOR_ITEM,
@@ -49,8 +51,9 @@ function fakeInvoke() {
     [LIBRARY_OPEN]: { root: '/lib', name: 'Mum', createdAt: 't', schemaVersion: 1 },
     [CATALOG_TIMELINE]: { items: [], nextCursor: null },
     [CATALOG_SEARCH]: { items: [], total: 0 },
-    [IMPORT_START]: { jobId: UUID },
+    [IMPORT_START]: { jobId: UUID, sourceId: UUID },
     [IMPORT_CANCEL]: { cancelled: true },
+    [CATALOG_UNDO_IMPORT]: { itemsRemoved: 2, occurrencesRemoved: 2 },
     [DIALOG_OPEN_DIRECTORY]: '/picked/dir',
     [DIALOG_OPEN_FILE]: '/picked/file.zip',
     [CATALOG_THUMBNAIL]: 'data:image/png;base64,AAAA',
@@ -75,6 +78,7 @@ function fakeInvoke() {
       text: 'Hola, te quiero mucho.',
       segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
     },
+    [CATALOG_SET_FAVOURITE]: { isFavourite: true },
     [CATEGORIZE_STATUS]: { optedIn: false, offered: true },
     [CATEGORIZE_SET_CONSENT]: { optedIn: true },
     [CATEGORIZE_LIST_FOR_ITEM]: [],
@@ -115,6 +119,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     const runStatus = await api.getTranscriptionStatus();
     const cancelRun = await api.cancelTranscription();
     const transcript = await api.getTranscript({ id: UUID });
+    const favourite = await api.setFavourite({ id: UUID, favourite: true });
     const smartStatus = await api.getSmartSearchStatus();
     const smartEnable = await api.enableSmartSearch();
     const catStatus = await api.getCategorizationStatus();
@@ -127,7 +132,10 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     });
     const catStart = await api.startCategorization();
     const catCancel = await api.cancelCategorization();
+    // Appended last so the ordered channel/payload indices above are unshifted (#429).
+    const undone = await api.undoImport({ sourceId: UUID });
 
+    expect(undone).toEqual({ itemsRemoved: 2, occurrencesRemoved: 2 });
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
     expect(thumbnail).toBe('data:image/png;base64,AAAA');
@@ -146,6 +154,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       text: 'Hola, te quiero mucho.',
       segments: [{ startMs: 0, endMs: 1500, text: 'Hola, te quiero mucho.' }],
     });
+    expect(favourite).toEqual({ isFavourite: true });
     expect(smartStatus).toEqual({ optedIn: true, modelReady: false, offered: true });
     expect(smartEnable).toEqual({ outcome: 'download-started' });
     expect(catStatus).toEqual({ optedIn: false, offered: true });
@@ -175,6 +184,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       TRANSCRIPTION_STATUS,
       TRANSCRIPTION_CANCEL,
       CATALOG_GET_TRANSCRIPT,
+      CATALOG_SET_FAVOURITE,
       SMART_SEARCH_MODEL_STATUS,
       SMART_SEARCH_DOWNLOAD_MODEL,
       CATEGORIZE_STATUS,
@@ -183,6 +193,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       CATEGORIZE_APPLY_CORRECTION,
       CATEGORIZE_START,
       CATEGORIZE_CANCEL,
+      CATALOG_UNDO_IMPORT,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
@@ -194,14 +205,16 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(calls[13].payload).toEqual({});
     expect(calls[14].payload).toEqual({});
     expect(calls[15].payload).toEqual({ id: UUID });
-    expect(calls[16].payload).toEqual({});
+    expect(calls[16].payload).toEqual({ id: UUID, favourite: true });
     expect(calls[17].payload).toEqual({});
     expect(calls[18].payload).toEqual({});
-    expect(calls[19].payload).toEqual({ optedIn: true });
-    expect(calls[20].payload).toEqual({ itemId: UUID });
-    expect(calls[21].payload).toEqual({ kind: 'confirm', itemId: UUID, categoryId: UUID });
-    expect(calls[22].payload).toEqual({});
+    expect(calls[19].payload).toEqual({});
+    expect(calls[20].payload).toEqual({ optedIn: true });
+    expect(calls[21].payload).toEqual({ itemId: UUID });
+    expect(calls[22].payload).toEqual({ kind: 'confirm', itemId: UUID, categoryId: UUID });
     expect(calls[23].payload).toEqual({});
+    expect(calls[24].payload).toEqual({});
+    expect(calls[25].payload).toEqual({ sourceId: UUID });
   });
 
   it('maps each suggestions method to its exact channel and payload (#351 #7)', async () => {
@@ -310,12 +323,15 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'enableSmartSearch',
         'getAppVersion',
         'getCategorizationStatus',
+        'getCollection',
+        'getSettings',
         'getSmartSearchStatus',
         'getThumbnail',
         'getTimeline',
         'getTranscript',
         'getTranscriptionStatus',
         'isTranscriptionModelReady',
+        'listCollections',
         'listItemCategories',
         'listSuggestions',
         'mergeSuggestion',
@@ -329,9 +345,12 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'openLibrary',
         'searchCatalog',
         'setCategorizationConsent',
+        'setFavourite',
+        'setSettings',
         'startCategorization',
         'startImport',
         'startTranscription',
+        'undoImport',
       ].sort(),
     );
     // No catch-all transport or Node escape hatch is reachable from the renderer.
@@ -341,5 +360,38 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(surface.send).toBeUndefined();
     expect(surface.invoke).toBeUndefined();
     expect(Object.values(api).every((value) => typeof value === 'function')).toBe(true);
+  });
+
+  // #437 — the Collections browser view's two READ-ONLY channels: list every
+  // browsable collection, and fetch one collection's offset-paginated members.
+  // Both use the literal channel string (not an imported contract constant) so
+  // this test exercises the RUNTIME wiring independently of the contract module.
+  it('routes listCollections/getCollection to their catalog:* channels with the right payload', async () => {
+    const calls: { channel: string; payload: unknown }[] = [];
+    const invoke = vi.fn((channel: string, payload: unknown) => {
+      calls.push({ channel, payload });
+      if (channel === 'catalog:listCollections') {
+        return Promise.resolve({ collections: [] });
+      }
+      if (channel === 'catalog:getCollection') {
+        return Promise.resolve({
+          collection: { id: UUID, name: 'A summer by the lake', itemCount: 0, coverItemId: null },
+          items: [],
+          total: 0,
+        });
+      }
+      return Promise.reject(new Error(`unexpected channel: ${channel}`));
+    }) as never;
+    const api = createKawsayApi(invoke, vi.fn(() => () => {}) as never);
+
+    const list = await api.listCollections();
+    const page = await api.getCollection({ id: UUID, limit: 50, offset: 0 });
+
+    expect(list).toEqual({ collections: [] });
+    expect(page.collection).toMatchObject({ id: UUID, name: 'A summer by the lake' });
+    expect(calls).toEqual([
+      { channel: 'catalog:listCollections', payload: {} },
+      { channel: 'catalog:getCollection', payload: { id: UUID, limit: 50, offset: 0 } },
+    ]);
   });
 });

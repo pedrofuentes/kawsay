@@ -14,8 +14,12 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { MediaType, SourceType } from '@shared/catalog';
 import {
+  collectionSummarySchema,
   itemCardSchema,
   transcriptViewSchema,
+  type CollectionItemsPageDTO,
+  type CollectionsListDTO,
+  type CollectionSummaryDTO,
   type ItemCardDTO,
   type LibrarySummaryDTO,
   type SearchResultDTO,
@@ -28,9 +32,11 @@ import {
   type LibrarySummary,
 } from '../library/library-service';
 import { openCatalog, type CatalogDatabase } from '../db/connection';
+import { removeSource } from '../library/originals-store';
 import {
   createCatalogRepo,
   type CatalogRepo,
+  type CollectionSummary,
   type ItemRow,
   type TimelineCursor,
 } from '../db/catalog-repo';
@@ -48,6 +54,11 @@ import {
   type ThumbnailService,
   type VideoThumbnailer,
 } from '../library/thumbnail-service';
+import {
+  createMediaFileService,
+  type MediaFileDescriptor,
+  type MediaFileService,
+} from '../library/media-file-service';
 import { importers } from '../importers/registry';
 import type { IngestionCoordinator } from '../importers/ingestion/coordinator';
 import type { IngestionJobSpec } from '../importers/ingestion/protocol';
@@ -147,6 +158,15 @@ export interface CatalogSession {
   /** Render one memory's bounded thumbnail by opaque id (U4), or null. */
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
   /**
+   * Resolve ONE memory's confined original + content-type by opaque id, for the
+   * `kawsay-media:` protocol to STREAM (#428). Id-only in; the path is resolved and
+   * confined server-side (never renderer-supplied). Returns null when no library is
+   * open, the id is unknown/non-playable, or there is no surviving original; THROWS
+   * (like {@link resolveOriginal}) if a stored content-address would escape the
+   * originals root. Synchronous — the protocol handler calls it per request.
+   */
+  resolveMedia(id: string): MediaFileDescriptor | null;
+  /**
    * Read ONE item's transcript by opaque id (#136) — the renderer-safe view a
    * screen reader can read (status + words + detected language + ms segments).
    * Rejects with {@link CatalogSessionError} when no library is open or the id
@@ -154,8 +174,26 @@ export interface CatalogSession {
    * skipped items.
    */
   getTranscript(input: { id: string }): Promise<TranscriptViewDTO>;
-  beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
+  /**
+   * Set (or clear) one memory's favourite flag by its opaque id (#434). Echoes
+   * the RESOLVED `isFavourite` so the renderer reflects exactly what is now
+   * persisted. Throws {@link CatalogSessionError} when no library is open or the
+   * id names no item (an unknown id is never silently ignored).
+   */
+  setFavourite(input: { id: string; favourite: boolean }): { isFavourite: boolean };
+  beginImport(input: { sourceType: SourceType; inputPath: string }): {
+    jobId: string;
+    sourceId: string;
+  };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
+  /**
+   * Undo an import (#429, AC-14): remove exactly the named source's occurrences,
+   * drop the items left with no other occurrence (cascading their derived rows), and
+   * reclaim only those orphans' copied originals/thumbnails — a memory deduped into
+   * another source (and its file) survives. One transaction (all-or-nothing). Throws
+   * {@link CatalogSessionError} when no library is open. Echoes the counts removed.
+   */
+  undoImport(input: { sourceId: string }): { itemsRemoved: number; occurrencesRemoved: number };
   /** The host-side transcription library port for the OPEN library (#157). */
   transcription(): TranscriptionLibraryPort;
   /**
@@ -170,6 +208,21 @@ export interface CatalogSession {
    * factory was injected (the headless default).
    */
   suggestions(): SuggestionsLibraryPort;
+  /**
+   * List every browsable collection (#437), name-ordered with member counts. A
+   * `dismissed` tombstone collection never appears — it carries no members and
+   * exists purely so the suggestion derivation never re-proposes it.
+   */
+  listCollections(): CollectionsListDTO;
+  /**
+   * Fetch one collection's summary plus an offset-paginated page of its members
+   * (#437), projected as the SAME renderer-safe {@link ItemCardDTO} tile the
+   * timeline/search already use. Throws {@link CatalogSessionError} when no
+   * library is open OR the id names no browsable collection (unknown, or a
+   * dismissed tombstone) — an unknown id is never silently ignored, mirroring
+   * {@link CatalogSession.getTranscript}.
+   */
+  getCollection(input: { id: string; limit: number; offset: number }): CollectionItemsPageDTO;
   /** Close the open library and tear down every in-flight import (window-close). */
   dispose(): void;
 }
@@ -180,6 +233,7 @@ interface OpenLibrary {
   repo: CatalogRepo;
   embeddings: EmbeddingsRepo;
   thumbnails: ThumbnailService;
+  mediaFiles: MediaFileService;
   transcripts: TranscriptRepo;
   transcription: TranscriptionLibraryPort;
   /** The categorization port, or undefined when no factory was injected (#270). */
@@ -229,6 +283,17 @@ function toItemCard(row: ItemRow): ItemCardDTO {
     // A pure render-ability hint — photos and videos can be shown as a real
     // thumbnail; everything else stays an icon. No path/asset URL leaks here.
     hasThumbnail: row.mediaType === 'photo' || row.mediaType === 'video',
+  });
+}
+
+/** Project an internal collection row onto the renderer-safe summary tile
+ *  (#437) — bounds the name defensively, mirroring {@link toItemCard}. */
+function toCollectionSummary(row: CollectionSummary): CollectionSummaryDTO {
+  return collectionSummarySchema.parse({
+    id: row.id,
+    name: row.name,
+    itemCount: row.itemCount,
+    coverItemId: row.coverItemId,
   });
 }
 
@@ -283,6 +348,9 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       image: thumbnailers.image,
       video: thumbnailers.video,
     });
+    // The id→confined-path media resolver behind the `kawsay-media:` protocol (#428);
+    // shares the SAME originals-store confinement boundary as the thumbnail service.
+    const mediaFiles = createMediaFileService({ db, root: summary.root });
     const transcripts = createTranscriptRepo(db);
     const transcription = createTranscriptionLibrary({
       db,
@@ -304,6 +372,7 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       repo,
       embeddings,
       thumbnails,
+      mediaFiles,
       transcripts,
       transcription,
       categorization,
@@ -436,6 +505,13 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       const { thumbnails } = requireOpen();
       return thumbnails.getThumbnail(input.id, input.size);
     },
+    resolveMedia(id) {
+      // A protocol request may arrive before/after any library is open — answer a
+      // calm null (the handler renders 404) rather than throwing. A confinement
+      // rejection from an escaping content-address still propagates by design.
+      if (current === undefined) return null;
+      return current.mediaFiles.resolve(id);
+    },
     async getTranscript(input) {
       // `async` so requireOpen's synchronous throw becomes a rejected invoke,
       // exactly like getThumbnail above.
@@ -490,11 +566,26 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         segments: record.segments ?? [],
       });
     },
+    setFavourite(input) {
+      const { repo } = requireOpen();
+      const isFavourite = repo.setFavourite(input);
+      if (isFavourite === null) {
+        throw new CatalogSessionError(`no such item: ${input.id}`);
+      }
+      return { isFavourite };
+    },
     beginImport(input) {
       const library = requireOpen();
       const importer = importers.find((candidate) => candidate.id === input.sourceType);
       if (importer === undefined) {
         throw new CatalogSessionError(`no importer available for source type: ${input.sourceType}`);
+      }
+      // One import at a time (defense-in-depth for the Add Memories re-entry, #427):
+      // if a user leaves mid-import and returns, the cooperative cancel may still be
+      // winding the first job down. Refuse a second start while any job is active so
+      // we never stack concurrent imports onto the same library.
+      if (coordinator.active().length > 0) {
+        throw new CatalogSessionError('an import is already in progress');
       }
       const { ffmpegPath, ffprobePath } = resolveMediaBinaries();
       const sourceId = library.repo.registerSource({
@@ -517,10 +608,27 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         ffprobePath,
       };
       coordinator.start(job);
-      return { jobId };
+      return { jobId, sourceId };
     },
     cancelImport(input) {
       return { cancelled: coordinator.cancel(input.jobId) };
+    },
+    undoImport(input) {
+      const { db, summary } = requireOpen();
+      // Never undo while ANY import is still in flight: the worker thread may still be
+      // writing occurrences/originals for a source, and removing rows out from under it
+      // could corrupt state. Imports are one-at-a-time (see beginImport), and a settled
+      // import's worker is torn down before its summary/UndoBanner appears — so in the
+      // normal post-import flow this is empty. Surfaced as a rejected invoke the UI
+      // shows as a reverent "still here" (the memories are untouched).
+      if (coordinator.active().length > 0) {
+        throw new CatalogSessionError('an import is in progress');
+      }
+      const result = removeSource(db, summary.root, input.sourceId);
+      return {
+        itemsRemoved: result.itemsRemoved,
+        occurrencesRemoved: result.occurrencesRemoved,
+      };
     },
     transcription() {
       return requireOpen().transcription;
@@ -538,6 +646,22 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         throw new CatalogSessionError('suggestions are not available');
       }
       return open.suggestions;
+    },
+    listCollections() {
+      const { repo } = requireOpen();
+      return { collections: repo.listCollections().map(toCollectionSummary) };
+    },
+    getCollection(input) {
+      const { repo } = requireOpen();
+      const result = repo.getCollection(input);
+      if (result.collection === null) {
+        throw new CatalogSessionError(`no such collection: ${input.id}`);
+      }
+      return {
+        collection: toCollectionSummary(result.collection),
+        items: result.rows.map(toItemCard),
+        total: result.total,
+      };
     },
     dispose() {
       coordinator.disposeAll();

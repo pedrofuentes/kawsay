@@ -4,6 +4,9 @@
 import { vi } from 'vitest';
 import type {
   CategorizationProgressEvent,
+  CollectionItemsPageDTO,
+  CollectionsListDTO,
+  CollectionSummaryDTO,
   ImportProgressEvent,
   ImportSummaryDTO,
   ItemCardDTO,
@@ -12,6 +15,7 @@ import type {
   LibrarySummaryDTO,
   ModelDownloadProgressEvent,
   SearchResultDTO,
+  SettingsDTO,
   SuggestionDTO,
   SuggestionsViewDTO,
   TranscriptionProgressEvent,
@@ -20,6 +24,8 @@ import type {
 
 /** A stable, valid-looking job id used across import tests. */
 export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+/** A stable, valid-looking source id an import writes against (undo handle, #429). */
+export const FAKE_SOURCE_ID = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
 
 let itemCardSeq = 0;
 let itemCategorySeq = 0;
@@ -63,6 +69,16 @@ export function makeLibrarySummary(over: Partial<LibrarySummaryDTO> = {}): Libra
     name: 'Elena',
     createdAt: '2026-06-24T12:00:00.000Z',
     schemaVersion: 1,
+    ...over,
+  };
+}
+
+/** Build a persisted UX-settings snapshot (AC-13 / Journey G, #433). Defaults to
+ *  the calm baseline (default text size, no reduced-motion override). */
+export function makeSettings(over: Partial<SettingsDTO> = {}): SettingsDTO {
+  return {
+    textSize: 'default',
+    reducedMotion: false,
     ...over,
   };
 }
@@ -181,6 +197,43 @@ export function makeSuggestionsView(over: Partial<SuggestionsViewDTO> = {}): Sug
   };
 }
 
+let collectionSeq = 0;
+
+/**
+ * Build a collection summary tile (the collections browser view, #437). The id
+ * is unique per call so list-key tests get distinct rows; pass `over` (e.g.
+ * `{ id }`) to pin any field — including a deterministic id — when a test
+ * asserts on it.
+ */
+export function makeCollectionSummary(over: Partial<CollectionSummaryDTO> = {}): CollectionSummaryDTO {
+  collectionSeq += 1;
+  return {
+    id: `30000000-0000-4000-8000-${String(collectionSeq).padStart(12, '0')}`,
+    name: 'A summer by the lake',
+    itemCount: 3,
+    coverItemId: null,
+    ...over,
+  };
+}
+
+/** Build a `catalog:listCollections` response. Empty by default. */
+export function makeCollectionsListView(over: Partial<CollectionsListDTO> = {}): CollectionsListDTO {
+  return { collections: over.collections ?? [] };
+}
+
+/** Build a `catalog:getCollection` response page; `total` defaults to the
+ *  number of items given (a single, un-paginated page). */
+export function makeCollectionItemsPage(
+  over: Partial<CollectionItemsPageDTO> = {},
+): CollectionItemsPageDTO {
+  const items = over.items ?? [];
+  return {
+    collection: over.collection ?? makeCollectionSummary(),
+    items,
+    total: over.total ?? items.length,
+  };
+}
+
 export interface FakeApi extends KawsayAPI {
   /** Push a progress event to every current onImportProgress subscriber. */
   emitProgress(event: ImportProgressEvent): void;
@@ -213,6 +266,7 @@ export interface FakeApiOptions {
   searchCatalog?: KawsayAPI['searchCatalog'];
   startImport?: KawsayAPI['startImport'];
   cancelImport?: KawsayAPI['cancelImport'];
+  undoImport?: KawsayAPI['undoImport'];
   openDirectory?: KawsayAPI['openDirectory'];
   openFile?: KawsayAPI['openFile'];
   getThumbnail?: KawsayAPI['getThumbnail'];
@@ -222,8 +276,11 @@ export interface FakeApiOptions {
   getTranscriptionStatus?: KawsayAPI['getTranscriptionStatus'];
   cancelTranscription?: KawsayAPI['cancelTranscription'];
   getTranscript?: KawsayAPI['getTranscript'];
+  setFavourite?: KawsayAPI['setFavourite'];
   getSmartSearchStatus?: KawsayAPI['getSmartSearchStatus'];
   enableSmartSearch?: KawsayAPI['enableSmartSearch'];
+  getSettings?: KawsayAPI['getSettings'];
+  setSettings?: KawsayAPI['setSettings'];
   getCategorizationStatus?: KawsayAPI['getCategorizationStatus'];
   setCategorizationConsent?: KawsayAPI['setCategorizationConsent'];
   listItemCategories?: KawsayAPI['listItemCategories'];
@@ -234,6 +291,8 @@ export interface FakeApiOptions {
   acceptSuggestion?: KawsayAPI['acceptSuggestion'];
   mergeSuggestion?: KawsayAPI['mergeSuggestion'];
   dismissSuggestion?: KawsayAPI['dismissSuggestion'];
+  listCollections?: KawsayAPI['listCollections'];
+  getCollection?: KawsayAPI['getCollection'];
 }
 
 /** A zero transcription tally (the calm default for status/start fakes). */
@@ -276,8 +335,11 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       vi.fn((input: { path: string }) => Promise.resolve(makeLibrarySummary({ root: input.path }))),
     getTimeline: opts.getTimeline ?? vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
     searchCatalog: opts.searchCatalog ?? vi.fn(() => Promise.resolve({ items: [], total: 0 })),
-    startImport: opts.startImport ?? vi.fn(() => Promise.resolve({ jobId })),
+    startImport:
+      opts.startImport ?? vi.fn(() => Promise.resolve({ jobId, sourceId: FAKE_SOURCE_ID })),
     cancelImport: opts.cancelImport ?? vi.fn(() => Promise.resolve({ cancelled: true })),
+    undoImport:
+      opts.undoImport ?? vi.fn(() => Promise.resolve({ itemsRemoved: 0, occurrencesRemoved: 0 })),
     // Default to "cancelled" (null) so existing flows that never click Browse are
     // unaffected; tests that exercise the picker pass their own resolved path.
     openDirectory: opts.openDirectory ?? vi.fn(() => Promise.resolve(null)),
@@ -329,6 +391,14 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
     // Default to a not-yet-transcribed item so transcription-agnostic tests see a
     // calm "pending" view; #136's item-view tests inject their own transcript.
     getTranscript: opts.getTranscript ?? vi.fn(() => Promise.resolve(makeTranscriptView())),
+    // Default echoes back whatever the caller asked for, mirroring the real main
+    // process's resolved-state echo (#434); favourite-toggle tests inject their
+    // own behaviour to exercise a failed save / a divergent echo.
+    setFavourite:
+      opts.setFavourite ??
+      vi.fn((input: { id: string; favourite: boolean }) =>
+        Promise.resolve({ isFavourite: input.favourite }),
+      ),
     onTranscriptionProgress: (listener) => {
       transcriptionListeners.add(listener);
       return () => {
@@ -350,6 +420,15 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         smartSearchModelListeners.delete(listener);
       };
     },
+    // App-wide UX settings (AC-13 / Journey G, #433) — text size + reduced-motion
+    // override. Defaults stay calm (default size, no override); `setSettings`
+    // mirrors the real main process's merge-and-echo: it folds the patch onto
+    // whatever was last read/written by THIS fake so a test's round trip behaves
+    // like the durable store without needing its own state machine.
+    getSettings: opts.getSettings ?? vi.fn(() => Promise.resolve(makeSettings())),
+    setSettings:
+      opts.setSettings ??
+      vi.fn((patch: Partial<SettingsDTO>) => Promise.resolve(makeSettings(patch))),
     // Categorization opt-in (M4-2h / #270) — the explainable-chips + consent UI drive
     // these the same way transcription drives its run methods. Defaults stay calm and
     // DEFAULT-OFF: not offered, not opted in, no chips, an idle run, a no-op cancel.
@@ -389,6 +468,19 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       opts.mergeSuggestion ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
     dismissSuggestion:
       opts.dismissSuggestion ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
+    // Collections browser view (#437) — both READ-ONLY. Defaults stay calm: an
+    // empty collections list, and a not-found-shaped page (collections tests
+    // inject their own list/page as needed).
+    listCollections: opts.listCollections ?? vi.fn(() => Promise.resolve({ collections: [] })),
+    getCollection:
+      opts.getCollection ??
+      vi.fn((input: { id: string; limit: number; offset?: number }) =>
+        Promise.resolve({
+          collection: makeCollectionSummary({ id: input.id, itemCount: 0 }),
+          items: [],
+          total: 0,
+        }),
+      ),
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },

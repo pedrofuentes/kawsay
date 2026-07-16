@@ -8,7 +8,7 @@ import { LibraryProvider } from '@renderer/lib/library';
 import { NavigationProvider } from '@renderer/lib/navigation';
 import { makeFakeApi, makeItemCard, makeSearchResult } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
-import { renderWithProviders, ViewProbe, wrapInProviders } from './support/render';
+import { renderWithProviders, SiblingsProbe, ViewProbe, wrapInProviders } from './support/render';
 import { expectNoAxeViolations } from './support/axe';
 
 /** Render the Search view inside the three renderer providers with a fake bridge. */
@@ -655,5 +655,41 @@ describe('Search — opening a result', () => {
     await user.click(await screen.findByRole('button', { name: /open me/i }));
 
     expect(screen.getByTestId('active-view')).toHaveTextContent('item');
+  });
+
+  it('threads the current (filtered) result set along as arrow-nav siblings, in shown order', async () => {
+    // The wiring that gives ItemView its ←/→ neighbours from Search: opening a
+    // result must carry the current visible result set along as `siblings`, in the
+    // order shown, so arrow-nav steps through the same matches. Zero coverage of
+    // this before, so a silent regression would strip arrow-nav of its data.
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(
+          makeSearchResult({
+            items: [
+              makeItemCard({ id: 'res-a', mediaType: 'photo', title: 'Beach one' }),
+              makeItemCard({ id: 'res-b', mediaType: 'photo', title: 'Beach two' }),
+              makeItemCard({ id: 'res-c', mediaType: 'photo', title: 'Beach three' }),
+            ],
+          }),
+        ),
+      ),
+    });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(
+        <>
+          <Search />
+          <SiblingsProbe />
+        </>,
+        api,
+        { name: 'search' },
+      ),
+    );
+
+    await user.type(screen.getByRole('searchbox'), 'beach');
+    await user.click(await screen.findByRole('button', { name: /beach two/i }));
+
+    expect(screen.getByTestId('siblings')).toHaveTextContent('res-a,res-b,res-c');
   });
 });

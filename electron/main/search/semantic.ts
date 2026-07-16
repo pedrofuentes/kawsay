@@ -1,37 +1,18 @@
 // Pure, dependency-free ranking primitives for on-device semantic search
 // (ADR-0029 Decision 1, milestone M4-1). This module has NO database or model
 // dependency: it is exhaustively unit-tested with synthetic vectors, and it
-// drives both the brute-force cosine scan in the embeddings repo and the
-// FTS-merge that a later slice (M4-1b) wires into the live search path.
+// drives the FTS-merge that a later slice (M4-1b) wires into the live search path.
 //
 // The governing rule is AC-29: the semantic layer EXTENDS exact search, it never
 // regresses it. Every exact/FTS result is preserved and ranked ahead of any
 // purely-semantic match, so with no model present search is exactly today's FTS.
 
-/**
- * Cosine similarity of two equal-length float32 vectors, in [-1, 1] (higher =
- * more similar). Magnitude-normalized, so it is invariant to vector scale.
- * Returns 0 (never NaN) when either vector has zero magnitude, and throws on a
- * dimension mismatch — comparing vectors of different dims (i.e. from different
- * models) is a programming error, not a 0-similarity result.
- */
-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  if (a.length !== b.length) {
-    throw new Error(`cosineSimilarity: dimension mismatch (${a.length} vs ${b.length})`);
-  }
-  let dot = 0;
-  let magASquared = 0;
-  let magBSquared = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    const x = a[i];
-    const y = b[i];
-    dot += x * y;
-    magASquared += x * x;
-    magBSquared += y * y;
-  }
-  if (magASquared === 0 || magBSquared === 0) return 0;
-  return dot / Math.sqrt(magASquared * magBSquared);
-}
+// `cosineSimilarity` is a NEUTRAL vector-math primitive that lives in the db
+// layer (../db/vector) so the brute-force cosine scan in db/embeddings-repo can
+// depend on it WITHOUT reaching UP into ../search (the layering direction is
+// db → primitive, never db → search). It is re-exported here so the ranking
+// layer keeps a single semantic entry point.
+export { cosineSimilarity } from '../db/vector';
 
 /** A semantic (KNN) hit: an item and its cosine similarity to the query. */
 export interface SemanticHit<T extends { readonly id: string }> {

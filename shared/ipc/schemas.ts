@@ -535,3 +535,89 @@ export const suggestionsViewSchema = z.strictObject({
   collections: z.array(suggestionMergeTargetSchema).max(SUGGESTIONS_VIEW_MAX),
 });
 export type SuggestionsViewDTO = z.infer<typeof suggestionsViewSchema>;
+
+// ── Collections browser view (#437) ────────────────────────────────────────
+//
+// The renderer-facing projection for BROWSING real collections (hand-made
+// `user` ones, or already-accepted `suggested` ones — a `dismissed` tombstone is
+// never listed or fetchable here, since it carries no members and exists purely
+// so the derivation never re-proposes it, curation-repo). Both reads are
+// READ-ONLY: nothing here ever creates, renames, or deletes a collection — that
+// stays the suggestions tray's curation actions (#272/#273). Members reuse
+// {@link itemCardSchema}, so a collection's memories render with the exact same
+// tile the timeline/search already use (U1/U2).
+
+/** Generous defence-in-depth ceiling on the collections list (mirrors {@link SUGGESTIONS_VIEW_MAX}). */
+export const COLLECTIONS_LIST_MAX = 100_000;
+
+/**
+ * One collection's summary: its opaque id, its (bounded) name, its member
+ * count, and an optional cover item id — a renderer-safe HINT only (no path);
+ * the renderer still fetches the actual thumbnail bytes by opaque id via
+ * `catalog:thumbnail`, exactly like every other tile.
+ */
+export const collectionSummarySchema = z.strictObject({
+  id: z.uuid(),
+  name: z.string().max(COLLECTION_NAME_MAX_LENGTH),
+  itemCount: z.number().int().nonnegative(),
+  coverItemId: z.uuid().nullable(),
+});
+export type CollectionSummaryDTO = z.infer<typeof collectionSummarySchema>;
+
+/** The full browsable-collections list (`catalog:listCollections`), name-ordered. */
+export const collectionsListSchema = z.strictObject({
+  collections: z.array(collectionSummarySchema).max(COLLECTIONS_LIST_MAX),
+});
+export type CollectionsListDTO = z.infer<typeof collectionsListSchema>;
+
+/**
+ * One offset-paginated page of a collection's members (`catalog:getCollection`):
+ * the collection's own summary plus a slice of its memories (rendered with the
+ * SAME {@link itemCardSchema} tile the timeline/search use) and the collection's
+ * total member count, so the renderer can compute whether more remain.
+ */
+export const collectionItemsPageSchema = z.strictObject({
+  collection: collectionSummarySchema,
+  items: z.array(itemCardSchema),
+  total: z.number().int().nonnegative(),
+});
+export type CollectionItemsPageDTO = z.infer<typeof collectionItemsPageSchema>;
+
+// ── App-wide UX settings (AC-13 / Journey G, #433) ─────────────────────────
+//
+// A small, persisted set of accessibility preferences the Settings view exposes:
+// a named text-size step applied app-wide via a root override (base `--text-md`,
+// ARCHITECTURE §9 token system), and an explicit reduced-motion override that
+// composes with — never fights — the OS-level `prefers-reduced-motion` media
+// query. Both are bounded (an enum and a boolean), so a malformed payload is a
+// hard validation error in either direction, mirroring every other IPC schema.
+
+/** The named, reverent text-size steps — never a raw px/percent from the renderer. */
+export const TEXT_SIZE_STEPS = ['default', 'large', 'larger'] as const;
+export const textSizeSchema = z.enum(TEXT_SIZE_STEPS);
+export type TextSizeDTO = z.infer<typeof textSizeSchema>;
+
+/**
+ * The full persisted settings snapshot: the text-size step (mapped to a token
+ * scale) and the reduced-motion override (`true` forces reduced motion
+ * regardless of the OS setting; `false` defers entirely to
+ * `prefers-reduced-motion`). Returned by `settings:get` and echoed (resolved)
+ * by `settings:set`.
+ */
+export const settingsSchema = z.strictObject({
+  textSize: textSizeSchema,
+  reducedMotion: z.boolean(),
+});
+export type SettingsDTO = z.infer<typeof settingsSchema>;
+
+/**
+ * A partial update to the settings snapshot — every field optional, so a single
+ * control can persist just the field it owns without needing to know the other's
+ * current value. The main-side store merges this onto the durable snapshot and
+ * the handler echoes the full RESOLVED settings, mirroring `categorize:setConsent`.
+ */
+export const settingsPatchSchema = z.strictObject({
+  textSize: textSizeSchema.optional(),
+  reducedMotion: z.boolean().optional(),
+});
+export type SettingsPatchDTO = z.infer<typeof settingsPatchSchema>;

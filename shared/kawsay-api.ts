@@ -9,9 +9,12 @@ import type {
   CategorizationStartResultDTO,
   CategorizationStatusDTO,
   CategorizationCorrectionDTO,
+  CollectionItemsPageDTO,
+  CollectionsListDTO,
   ItemCategoriesDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
+  SettingsDTO,
   SuggestionsViewDTO,
   TimelinePageDTO,
   TranscriptionSnapshotDTO,
@@ -73,10 +76,60 @@ export interface KawsayAPI {
    */
   getTranscript(input: { id: string }): Promise<TranscriptViewDTO>;
 
-  /** Start an off-thread import; resolves with the new job id. */
-  startImport(input: { sourceType: SourceType; inputPath: string }): Promise<{ jobId: string }>;
+  /**
+   * Set (or clear) one memory's favourite flag by its opaque catalog id (#434,
+   * favourite-toggle slice — part of #434). CALLER-INITIATED from the item view's
+   * heart toggle only. The renderer passes only the id (never a path); resolves
+   * the RESOLVED `isFavourite` so the toggle always reflects what is now
+   * persisted on disk, surviving an app restart.
+   */
+  setFavourite(input: { id: string; favourite: boolean }): Promise<{ isFavourite: boolean }>;
+
+  /**
+   * List every browsable collection (#437): each with its name, member count,
+   * and an optional cover item id. READ-ONLY — never creates, renames, or
+   * deletes a collection (that stays the suggestions tray's curation actions).
+   * A `dismissed` tombstone collection never appears — it carries no members
+   * and exists purely so the suggestion derivation never re-proposes it.
+   */
+  listCollections(): Promise<CollectionsListDTO>;
+
+  /**
+   * Fetch ONE collection by its opaque id (#437): its summary plus an
+   * offset-paginated page of its member memories, rendered with the SAME
+   * {@link ItemCardDTO} tile the timeline/search already use. The renderer
+   * passes only the id (never a path); `offset` defaults to 0 for a first
+   * fetch. Rejects when the id names no browsable collection (unknown, or a
+   * dismissed tombstone).
+   */
+  getCollection(input: {
+    id: string;
+    limit: number;
+    offset?: number;
+  }): Promise<CollectionItemsPageDTO>;
+
+  /**
+   * Start an off-thread import; resolves with the new job id AND the `sourceId` this
+   * run writes against, so the renderer can later offer an "undo this import" (#429).
+   */
+  startImport(input: {
+    sourceType: SourceType;
+    inputPath: string;
+  }): Promise<{ jobId: string; sourceId: string }>;
   /** Cooperatively cancel an in-flight import. */
   cancelImport(input: { jobId: string }): Promise<{ cancelled: boolean }>;
+
+  /**
+   * Undo an import (#429, AC-14 / P4b): remove EXACTLY what one import added and
+   * nothing else. The renderer passes only that import's opaque `sourceId` (never a
+   * path); the main process removes that source's occurrences, drops the memories
+   * left with no other source, and reclaims only those orphans' copied files — a
+   * memory that also came from another source (and its file) survives. Resolves the
+   * counts removed. CALLER-INITIATED from the confirm-gated post-import UndoBanner.
+   */
+  undoImport(input: {
+    sourceId: string;
+  }): Promise<{ itemsRemoved: number; occurrencesRemoved: number }>;
 
   /**
    * Open a native folder picker (W2). Resolves with the absolute path the user
@@ -272,6 +325,22 @@ export interface KawsayAPI {
    * Idempotent per category.
    */
   dismissSuggestion(input: { categoryId: string; name?: string }): Promise<SuggestionsViewDTO>;
+
+  /**
+   * Read the persisted app-wide UX settings (AC-13 / Journey G, #433): the
+   * text-size step and the reduced-motion override. Resolves the durable
+   * snapshot the Settings view reads on mount and the app root applies
+   * IMMEDIATELY (src/lib/settings.tsx) — no reload needed.
+   */
+  getSettings(): Promise<SettingsDTO>;
+
+  /**
+   * Persist a PARTIAL settings update — just the field a control changed — and
+   * resolve the RESOLVED full snapshot, so the caller reconciles with what is
+   * actually durable rather than trusting its own optimistic guess. Mirrors
+   * `setCategorizationConsent`'s echo-the-truth shape.
+   */
+  setSettings(input: { textSize?: SettingsDTO['textSize']; reducedMotion?: boolean }): Promise<SettingsDTO>;
 }
 
 /**
@@ -303,10 +372,16 @@ export type {
   SuggestionExampleDTO,
   SuggestionMergeTargetDTO,
   SuggestionKindDTO,
+  CollectionsListDTO,
+  CollectionItemsPageDTO,
+  CollectionSummaryDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
+  SettingsDTO,
+  TextSizeDTO,
   TimelinePageDTO,
   ImportSummaryDTO,
+  SkippedItemDTO,
   TranscriptionSnapshotDTO,
   TranscriptionStartResultDTO,
   TranscriptionCountsDTO,

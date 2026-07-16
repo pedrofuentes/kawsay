@@ -74,7 +74,10 @@ the renderer; ESM throughout). Module system is **ESM**; package manager **pnpm*
 kawsay/
 ├── electron/
 │   ├── main/
-│   │   ├── index.ts                 # app lifecycle, BrowserWindow, installs all guards FIRST
+│   │   ├── index.ts                 # thin entry: app lifecycle + builds the Electron runtime seam
+│   │   ├── app/
+│   │   │   ├── composition-root.ts  # wires the dependency graph; installs all guards FIRST (§2.2/§6.1)
+│   │   │   └── electron-runtime.ts  # adapts Electron globals into the injectable MainRuntime seam
 │   │   ├── security/
 │   │   │   ├── network-guard.ts     # session.webRequest.onBeforeRequest egress kill-switch (AC-4)
 │   │   │   ├── csp.ts               # onHeadersReceived → strict CSP (AC-4)
@@ -906,6 +909,16 @@ Renderer  ──IPC import:start──▶  Main: IngestionCoordinator
 and cleans up `extract/`. Progress is throttled (coarse-grained) and streamed via `import:progress`
 with a running tally ("37 messages… 3 photos found…", PRD §3(f)). First-memory payoff (SM-2: ≤10 s) is
 achieved by emitting/persisting records as they're found rather than batching at the end.
+
+### 5.4 Scale budget (#442)
+
+The library sizes the app commits to handling gracefully on the main process — **50k items / 30k
+embedding vectors / 500 sources / 2k collections** — with the complexity bounds each scale-sensitive
+path must keep (linear brute-force semantic scan, page-independent smart-search augmentation, bounded
+theme-cluster candidate scan). Documented in **[`docs/perf/scale-budget.md`](perf/scale-budget.md)**,
+pinned as a constant in `tests/perf/scale-budget.ts`, and enforced by operation-count perf tests in the
+serial `perf` vitest project. The ANN / cursor-based-semantic-merge work for when a corpus outgrows the
+brute-force scan is **backlogged, not implemented** (measure first — the budget test decides when).
 
 ---
 

@@ -6,6 +6,7 @@ import type { ReactElement } from 'react';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { LibraryProvider } from '@renderer/lib/library';
 import { NavigationProvider, useNavigation } from '@renderer/lib/navigation';
+import { SettingsProvider } from '@renderer/lib/settings';
 import { OnboardingFlow } from '@renderer/onboarding/OnboardingFlow';
 import { MainApp } from '@renderer/app/MainApp';
 
@@ -17,11 +18,13 @@ function Router(): ReactElement {
 export function App(): ReactElement {
   return (
     <KawsayApiProvider>
-      <LibraryProvider>
-        <NavigationProvider>
-          <Router />
-        </NavigationProvider>
-      </LibraryProvider>
+      <SettingsProvider>
+        <LibraryProvider>
+          <NavigationProvider>
+            <Router />
+          </NavigationProvider>
+        </LibraryProvider>
+      </SettingsProvider>
     </KawsayApiProvider>
   );
 }

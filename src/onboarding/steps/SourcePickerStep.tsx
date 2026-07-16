@@ -13,7 +13,18 @@ export interface SourcePickerStepProps {
   personName: string;
   onBack: () => void;
   onPick: (source: SourceMeta) => void;
-  onSkip: () => void;
+  /**
+   * The "I'll add this later" escape hatch. Onboarding passes it to skip straight
+   * into the app; the post-onboarding Add Memories re-entry (#427) omits it — the
+   * user is already in the app, so "Go back" alone is the calm way out.
+   */
+  onSkip?: () => void;
+  /**
+   * Overrides the heading. Onboarding keeps the default first-run question; the
+   * Add Memories re-entry (#427) titles this "Add memories" so the view matches its
+   * sidebar destination and its heading focus target.
+   */
+  heading?: string;
 }
 
 export function SourcePickerStep({
@@ -21,6 +32,7 @@ export function SourcePickerStep({
   onBack,
   onPick,
   onSkip,
+  heading,
 }: SourcePickerStepProps): ReactElement {
   const headingRef = useAutoFocusHeading();
 
@@ -34,7 +46,7 @@ export function SourcePickerStep({
         tabIndex={-1}
         className="font-display text-3xl font-semibold leading-tight text-text-primary outline-none"
       >
-        Where are some of {personName}&apos;s memories?
+        {heading ?? `Where are some of ${personName}'s memories?`}
       </h1>
       <p className="font-body text-lg leading-relaxed text-text-secondary">
         Pick wherever feels easiest to start. You can always bring in more later.
@@ -51,11 +63,13 @@ export function SourcePickerStep({
           </li>
         ))}
       </ul>
-      <div>
-        <Button variant="ghost" onClick={onSkip}>
-          I&apos;ll add this later
-        </Button>
-      </div>
+      {onSkip !== undefined ? (
+        <div>
+          <Button variant="ghost" onClick={onSkip}>
+            I&apos;ll add this later
+          </Button>
+        </div>
+      ) : null}
     </StepContainer>
   );
 }

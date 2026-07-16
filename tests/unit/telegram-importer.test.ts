@@ -132,7 +132,15 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
     }
   });
 
-  it('caps one oversized message object and keeps later Telegram messages', async () => {
+  // De-flake (#454): the old fixture was a 2.5 MB message (~650 ms isolated) whose
+  // char-by-char streamed parse ballooned to 5–13 s under parallel CI CPU load,
+  // tripping the 5 s default. The cap is `MAX_MESSAGE_JSON_CHARS` (1_000_000), so a
+  // message just OVER that threshold proves the exact same cap behaviour with the
+  // MINIMAL input the parser must scan — no dependence on a wall-clock timeout for a
+  // multi-MB parse. `MAX_MESSAGE_JSON_CHARS + 1` chars guarantees the object exceeds
+  // the cap once the `{…"text":"` wrapper is added. Keep a generous timeout purely as
+  // margin; the fast fixture is what removes the flake.
+  it('caps one oversized message object and keeps later Telegram messages', { timeout: 20_000 }, async () => {
     const dir = makeTmpDir('telegram-bounds-');
     try {
       writeResult(dir, {
@@ -140,7 +148,13 @@ describe('telegramImporter (M3 — Telegram Desktop export connector)', () => {
         type: 'personal_chat',
         id: 42,
         messages: [
-          { id: 1, type: 'message', date_unixtime: 1, from: 'Mamá', text: 'A'.repeat(2_500_000) },
+          {
+            id: 1,
+            type: 'message',
+            date_unixtime: 1,
+            from: 'Mamá',
+            text: 'A'.repeat(1_000_001),
+          },
           { id: 2, type: 'message', date_unixtime: 2, from: 'Mamá', text: 'after huge' },
         ],
       });

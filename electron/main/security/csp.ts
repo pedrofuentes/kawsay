@@ -1,8 +1,17 @@
+import { MEDIA_PROTOCOL_SCHEME } from '@shared/media';
+
 export interface CspOptions {
   /** Present only in development: relax the policy just enough for Vite HMR over
    *  this origin. Absent in production, which gets the locked-down policy. */
   readonly devServerUrl?: string | undefined;
 }
+
+/** The custom LOCAL media scheme source token (`kawsay-media:`). This is the ONLY
+ *  net-new source #428 adds — to `media-src` (for <audio>/<video> playback) and
+ *  `img-src` (for full-size <img>). It is NOT networked: the runtime guard treats
+ *  it as strictly local and it opens no socket, so `default-src`/`connect-src` stay
+ *  `'none'` and the zero-egress guarantee (AC-4) is untouched. */
+const MEDIA_SCHEME_SOURCE = `${MEDIA_PROTOCOL_SCHEME}:`;
 
 /**
  * The production Content-Security-Policy (ARCHITECTURE §2.2): local-only, no
@@ -15,9 +24,12 @@ const PRODUCTION_CSP: readonly string[] = [
   "default-src 'none'",
   "script-src 'self'",
   "style-src 'self'",
-  "img-src 'self' data:",
+  `img-src 'self' data: ${MEDIA_SCHEME_SOURCE}`,
   "font-src 'self'",
   "connect-src 'none'",
+  // Explicit-intent playback (#428): <audio>/<video> may load ONLY the local media
+  // scheme — nothing networked. The egress floor below is unchanged.
+  `media-src ${MEDIA_SCHEME_SOURCE}`,
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
@@ -44,9 +56,11 @@ function buildDevContentSecurityPolicy(devServerUrl: string): string {
     "default-src 'none'",
     `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${origin}`,
     `style-src 'self' 'unsafe-inline' ${origin}`,
-    "img-src 'self' data:",
+    `img-src 'self' data: ${MEDIA_SCHEME_SOURCE}`,
     `font-src 'self' ${origin}`,
     `connect-src 'self' ${origin} ${websocket}`,
+    // Local media playback works in dev too — via the SAME local-only scheme.
+    `media-src ${MEDIA_SCHEME_SOURCE}`,
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",

@@ -1,0 +1,1 @@
+- You can now move between memories with the ← and → arrow keys, and first-time visitors get a short, skippable "show me around" tour.

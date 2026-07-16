@@ -1,12 +1,31 @@
+import type { ReactElement, ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ItemView } from '@renderer/views/ItemView';
+import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
+import { useFavourite } from '@renderer/lib/use-favourite';
+import { useNavigation } from '@renderer/lib/navigation';
 import type { ItemCardDTO, TranscriptionSnapshotDTO } from '@shared/kawsay-api';
 import { makeFakeApi, makeItemCard, makeTranscriptView } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
 import { ViewProbe, wrapInProviders } from './support/render';
 import { expectNoAxeViolations } from './support/axe';
+
+/**
+ * Mirrors MainApp's id-keyed remount: a FRESH ItemView instance per memory id, so
+ * arrowing between memories fully unmounts the previous one exactly as in the
+ * running app (`MainApp.tsx` renders `<ItemView key={`item-${id}`}/>`). Rendering
+ * `<ItemView/>` bare would keep ONE instance across navigation and mask the
+ * remount-driven races this suite must reproduce.
+ */
+function KeyedItemViewHarness(): ReactElement {
+  const { view } = useNavigation();
+  if (view.name !== 'item') {
+    return <div data-testid="active-view">{view.name}</div>;
+  }
+  return <ItemView key={`item-${view.item.id}`} />;
+}
 
 function runningStatus(): TranscriptionSnapshotDTO {
   return {
@@ -23,7 +42,7 @@ function renderItem(item: ItemCardDTO, api: FakeApi = makeFakeApi()) {
 }
 
 describe('ItemView — the per-item transcript (read-only, #136)', () => {
-  it('shows the spoken words of a finished transcript, read-only (no media element, no editor)', async () => {
+  it('shows the spoken words of a finished transcript, read-only alongside a never-autoplay player', async () => {
     const item = makeItemCard({
       id: '00000000-0000-4000-8000-0000000000a1',
       mediaType: 'audio',
@@ -40,9 +59,14 @@ describe('ItemView — the per-item transcript (read-only, #136)', () => {
 
     expect(await screen.findByText(/once upon a time, by the sea/i)).toBeInTheDocument();
     expect(api.getTranscript).toHaveBeenCalledWith({ id: '00000000-0000-4000-8000-0000000000a1' });
-    // Read-only: nothing auto-plays and nothing is editable (R11 / AC-14 posture).
-    expect(container.querySelector('video, audio')).toBeNull();
+    // The words themselves stay read-only — no editor (R11 / AC-14 posture).
     expect(container.querySelector('textarea, input, [contenteditable="true"]')).toBeNull();
+    // A voice note IS now playable — but only on explicit intent: the player is
+    // present with controls and never autoplays (#428 / P6).
+    const audio = container.querySelector('audio');
+    expect(audio).not.toBeNull();
+    expect(audio).toHaveAttribute('controls');
+    expect(audio).not.toHaveAttribute('autoplay');
   });
 
   it('marks the words with the detected language so a screen reader pronounces them (lang)', async () => {
@@ -221,7 +245,645 @@ describe('ItemView — moving back', () => {
   });
 });
 
+describe('ItemView — favourite toggle (#434, part of #434)', () => {
+  it('renders a real toggle button reflecting the item’s current favourite state', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Sunset over the bay', isFavourite: false });
+    renderItem(item);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('starts pressed when the item already carries the persisted favourite flag', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Already loved', isFavourite: true });
+    renderItem(item);
+
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('flips state and persists via the catalog:setFavourite channel on click', async () => {
+    const item = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000f1',
+      mediaType: 'photo',
+      title: 'A quiet afternoon',
+      isFavourite: false,
+    });
+    const setFavourite = vi.fn(() => Promise.resolve({ isFavourite: true }));
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    expect(setFavourite).toHaveBeenCalledWith({
+      id: '00000000-0000-4000-8000-0000000000f1',
+      favourite: true,
+    });
+    expect(await screen.findByRole('button', { name: /remove from favourites/i })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('toggling back off calls the channel with favourite: false', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Loved memory', isFavourite: true });
+    const setFavourite = vi.fn(() => Promise.resolve({ isFavourite: false }));
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    await user.click(toggle);
+
+    expect(setFavourite).toHaveBeenCalledWith({ id: item.id, favourite: false });
+    expect(await screen.findByRole('button', { name: /mark as favourite/i })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('politely announces the new state so a screen-reader user hears the change', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const setFavourite = vi.fn(() => Promise.resolve({ isFavourite: true }));
+    const api = makeFakeApi({ setFavourite });
+    const { user, container } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live).not.toBeNull();
+    await screen.findByText(/added to favourites/i);
+  });
+
+  it('reverts the visible state when persisting fails (nothing on disk changed, so the UI must not lie)', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const setFavourite = vi.fn(() => Promise.reject(new Error('SQLITE_BUSY')));
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    expect(await screen.findByRole('button', { name: /mark as favourite/i })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('gives the toggle a real hit target (≥44px) — never a tiny icon-only click zone', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon' });
+    renderItem(item);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    // jsdom has no real layout engine, so assert the Tailwind sizing classes that
+    // fix the hit target at 44px (h-11 w-11 = 2.75rem = 44px) rather than measured
+    // pixels — the same posture as the rest of this suite under jsdom.
+    expect(toggle.className).toMatch(/\bh-11\b/);
+    expect(toggle.className).toMatch(/\bw-11\b/);
+  });
+});
+
+/** A promise whose resolution the test controls, so a test can force a specific
+ *  IPC response ORDER — `ipcRenderer.invoke` guarantees no such order itself. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (err: unknown) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('ItemView — favourite toggle race + lifecycle guards (#434)', () => {
+  // Flush pending microtasks + the timer tick, so a late promise settlement runs
+  // its handlers before assertions.
+  async function flushPending(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it('drops a late save settlement after the item unmounts — no throw, and no "reverting" reaction', async () => {
+    // The REAL reachable case: toggle, then click Back → ItemView unmounts while
+    // catalog:setFavourite is still pending. The late REJECT must not run the
+    // revert/announce reaction on the dead component. (MainApp keys ItemView by
+    // item id, so the item-id guard can never fire — only a mount guard covers
+    // this.) An unguarded hook logs the "reverting" warn + calls setState; a
+    // guarded hook drops it silently. We assert on the observable warn.
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const pending = deferred<{ isFavourite: boolean }>();
+    const setFavourite = vi.fn(() => pending.promise);
+    const api = makeFakeApi({ setFavourite });
+    const { user, unmount } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+    expect(setFavourite).toHaveBeenCalledTimes(1);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      unmount();
+      // Reject AFTER unmount. Must not throw and must not trigger the revert path.
+      pending.reject(new Error('SQLITE_BUSY'));
+      await flushPending();
+      const revertWarns = warnSpy.mock.calls.filter((call) =>
+        String(call[0]).includes('favourite toggle failed; reverting'),
+      );
+      expect(revertWarns).toEqual([]);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('honours the LAST-SENT toggle, not the last-RESOLVED, when responses arrive out of order', async () => {
+    // A hook-level test: two toggles where the 1st sends favourite:true and the
+    // 2nd sends favourite:false, but the 1st invoke RESOLVES last. Without a
+    // sequence guard the stale {isFavourite:true} clobbers the newer false and the
+    // toggle then lies. Exercised through the hook directly (not the button) because
+    // the in-flight `disabled` state deliberately blocks a second DOM click — the
+    // guard still matters for any programmatic/rapid caller, and `invoke` gives no
+    // response-order guarantee.
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const first = deferred<{ isFavourite: boolean }>();
+    const second = deferred<{ isFavourite: boolean }>();
+    const calls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      calls.push(input);
+      return calls.length === 1 ? first.promise : second.promise;
+    });
+    const api = makeFakeApi({ setFavourite });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <KawsayApiProvider api={api}>{children}</KawsayApiProvider>
+    );
+    const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), { wrapper });
+
+    // First toggle → favourite:true; second toggle (optimistic state now true) →
+    // favourite:false.
+    act(() => result.current.toggle());
+    act(() => result.current.toggle());
+
+    expect(calls).toEqual([
+      { id: item.id, favourite: true },
+      { id: item.id, favourite: false },
+    ]);
+
+    // Settle out of order: the SECOND-sent (false) first, then the FIRST-sent (true).
+    await act(async () => {
+      second.resolve({ isFavourite: false });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      first.resolve({ isFavourite: true });
+      await Promise.resolve();
+    });
+
+    // Final state must reflect the last-SENT toggle (false), not the last-RESOLVED.
+    expect(result.current.isFavourite).toBe(false);
+  });
+
+  it('disables the toggle while a save is in flight, discouraging the rapid re-click race', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const pending = deferred<{ isFavourite: boolean }>();
+    const setFavourite = vi.fn(() => pending.promise);
+    const api = makeFakeApi({ setFavourite });
+    const { user } = renderItem(item, api);
+
+    const toggle = await screen.findByRole('button', { name: /mark as favourite/i });
+    await user.click(toggle);
+
+    // While the save is pending the control reflects a busy state.
+    const busy = screen.getByRole('button', { name: /remove from favourites/i });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+
+    await act(async () => {
+      pending.resolve({ isFavourite: true });
+      await Promise.resolve();
+    });
+
+    // Once settled it is interactive again.
+    expect(screen.getByRole('button', { name: /remove from favourites/i })).not.toBeDisabled();
+  });
+});
+
+describe('ItemView — ←/→ keyboard navigation between memories (#434)', () => {
+  function renderWithSiblings(
+    siblings: ItemCardDTO[],
+    current: ItemCardDTO,
+    api: FakeApi = makeFakeApi(),
+  ) {
+    const user = userEvent.setup();
+    const result = render(
+      wrapInProviders(
+        <>
+          <ItemView />
+          <button type="button">outside the memory view</button>
+        </>,
+        api,
+        { name: 'item', item: current, from: { name: 'timeline' }, siblings },
+      ),
+    );
+    return { api, user, ...result };
+  }
+
+  it('ArrowRight moves to the next memory in timeline order', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { user } = renderWithSiblings([a, b, c], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowRight}');
+
+    expect(await screen.findByRole('heading', { level: 1, name: /second memory/i })).toBeInTheDocument();
+  });
+
+  it('ArrowLeft moves to the previous memory in timeline order', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { user } = renderWithSiblings([a, b, c], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await user.keyboard('{ArrowLeft}');
+
+    expect(await screen.findByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+  });
+
+  it('does not wrap past the last memory — ArrowRight is a graceful no-op at the end', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user } = renderWithSiblings([a, b], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await user.keyboard('{ArrowRight}');
+
+    // Still on the last memory — nothing broke, nothing wrapped to the first.
+    expect(screen.getByRole('heading', { level: 1, name: /second memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /first memory/i })).not.toBeInTheDocument();
+  });
+
+  it('does not wrap past the first memory — ArrowLeft is a graceful no-op at the start', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user } = renderWithSiblings([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowLeft}');
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+  });
+
+  it('is a graceful no-op with no timeline context at all (opened without siblings)', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A lone memory' });
+    const user = userEvent.setup();
+    render(wrapInProviders(<ItemView />, makeFakeApi(), { name: 'item', item }));
+
+    await screen.findByRole('heading', { level: 1, name: /a lone memory/i });
+    await user.keyboard('{ArrowRight}');
+    await user.keyboard('{ArrowLeft}');
+
+    expect(screen.getByRole('heading', { level: 1, name: /a lone memory/i })).toBeInTheDocument();
+  });
+
+  it('offers visible Previous/Next controls too — not keyboard-only', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { user } = renderWithSiblings([a, b, c], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    // The middle memory has both directions available.
+    expect(screen.getByRole('button', { name: /previous/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^next/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^next/i }));
+    expect(await screen.findByRole('heading', { level: 1, name: /third memory/i })).toBeInTheDocument();
+  });
+
+  it('hides the Previous control at the start and the Next control at the end', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+
+    // At the START (first memory): no Previous, but Next is offered.
+    const start = renderWithSiblings([a, b], a);
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    expect(screen.queryByRole('button', { name: /previous/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^next/i })).toBeInTheDocument();
+    start.unmount();
+
+    // At the END (last memory): Previous is offered, but no Next — the title's
+    // second half, previously unasserted.
+    renderWithSiblings([a, b], b);
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    expect(screen.getByRole('button', { name: /previous/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^next/i })).not.toBeInTheDocument();
+  });
+
+  it('does not trap focus — Tab still reaches a control outside the memory view', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user } = renderWithSiblings([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+
+    const outside = screen.getByRole('button', { name: /outside the memory view/i });
+    outside.focus();
+    expect(outside).toHaveFocus();
+  });
+
+  it('politely announces the move so a screen-reader user hears which memory is now showing', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user, container } = renderWithSiblings([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+
+    const liveRegions = container.querySelectorAll('[aria-live="polite"]');
+    expect(liveRegions.length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(Array.from(liveRegions).some((el) => /second memory/i.test(el.textContent ?? ''))).toBe(
+        true,
+      ),
+    );
+  });
+
+  it('has no axe violations with Previous/Next controls visible', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { container } = renderWithSiblings([a, b, c], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await expectNoAxeViolations(container);
+  });
+});
+
+describe('ItemView — ←/→ nav must not fight the user (#458 review fixes)', () => {
+  it('does NOT navigate away while a text selection is active — the arrow stays with the selection', async () => {
+    // A user selecting a sentence in the read-only transcript and pressing ← to
+    // collapse it must not be teleported to the previous memory (losing their
+    // selection). The global arrow handler defers to a live, non-collapsed
+    // selection exactly as it defers to a focused input.
+    const a = makeItemCard({ mediaType: 'audio', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'audio', title: 'Second memory' });
+    const api = makeFakeApi({
+      getTranscript: vi.fn(() =>
+        Promise.resolve(
+          makeTranscriptView({ status: 'done', language: 'en', text: 'A sentence worth selecting.' }),
+        ),
+      ),
+    });
+    render(
+      wrapInProviders(<ItemView />, api, {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    const transcript = await screen.findByText(/a sentence worth selecting/i);
+    const range = document.createRange();
+    range.selectNodeContents(transcript);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    expect(selection?.isCollapsed).toBe(false);
+
+    // At index 0, ArrowRight WOULD move to the next memory if the guard were absent.
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+    // The selection was left intact — not discarded by a spurious navigation.
+    expect(window.getSelection()?.isCollapsed).toBe(false);
+  });
+
+  it('ignores auto-repeat so holding an arrow does not fire a burst of remounts', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    render(
+      wrapInProviders(<ItemView />, makeFakeApi(), {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    // An auto-repeated keydown (key held) must be a no-op.
+    fireEvent.keyDown(window, { key: 'ArrowRight', repeat: true });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('ItemView — favourite survives arrow-nav within a session (#458 review fix)', () => {
+  it('keeps a memory favourited when you arrow away and back — no stale-siblings revert', async () => {
+    const a = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000e1',
+      mediaType: 'photo',
+      title: 'First memory',
+      isFavourite: false,
+    });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory', isFavourite: false });
+    const favCalls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      favCalls.push(input);
+      return Promise.resolve({ isFavourite: input.favourite });
+    });
+    const api = makeFakeApi({ setFavourite });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(<ItemView />, api, {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    // Favourite the first memory and let the save settle.
+    await user.click(screen.getByRole('button', { name: /mark as favourite/i }));
+    await screen.findByRole('button', { name: /remove from favourites/i });
+
+    // Arrow to the next memory, then back to the first.
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await user.keyboard('{ArrowLeft}');
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+
+    // The heart must still read favourited — not reverted from a frozen snapshot.
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    // And clicking now correctly UN-favourites (computes next=false), never re-favourites.
+    await user.click(toggle);
+    expect(favCalls[favCalls.length - 1]).toEqual({ id: a.id, favourite: false });
+  });
+});
+
+describe('ItemView — favourite that SETTLES only after you arrowed away (before-settle race, #458)', () => {
+  // Flush pending microtasks + the timer tick so a late settlement runs.
+  async function flushPending(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it('reflects a favourite whose save settles AFTER the id-keyed remount unmounted its ItemView', async () => {
+    // The open race the siblings-patch alone does NOT close: the user toggles a
+    // favourite on A, then arrows away BEFORE `catalog:setFavourite` settles. The
+    // id-keyed remount unmounts ItemView-A, so a mount-guarded settlement drops the
+    // reconciliation — the ordered snapshot threaded forward still carries A's
+    // STALE pre-toggle flag. Arrow back to A and it wrongly reads un-favourited;
+    // a "fix" click then INVERTS the real persisted value. The reconciliation must
+    // target state that OUTLIVES the remount so the late settle still lands.
+    const a = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000d1',
+      mediaType: 'photo',
+      title: 'First memory',
+      isFavourite: false,
+    });
+    const b = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000d2',
+      mediaType: 'photo',
+      title: 'Second memory',
+      isFavourite: false,
+    });
+    const pending = deferred<{ isFavourite: boolean }>();
+    const favCalls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      favCalls.push(input);
+      // Only the FIRST save (favouriting A) is deferred; later saves settle at once.
+      return favCalls.length === 1
+        ? pending.promise
+        : Promise.resolve({ isFavourite: input.favourite });
+    });
+    const api = makeFakeApi({ setFavourite });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(<KeyedItemViewHarness />, api, {
+        name: 'item',
+        item: a,
+        from: { name: 'timeline' },
+        siblings: [a, b],
+      }),
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    // Toggle favourite on A but leave the save UNSETTLED.
+    await user.click(screen.getByRole('button', { name: /mark as favourite/i }));
+    expect(favCalls).toEqual([{ id: a.id, favourite: true }]);
+
+    // Arrow to B BEFORE the save settles → ItemView-A unmounts (id-keyed remount).
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+
+    // NOW the deferred save settles — after ItemView-A is already gone.
+    await act(async () => {
+      pending.resolve({ isFavourite: true });
+      await Promise.resolve();
+    });
+    await flushPending();
+
+    // Arrow back to A.
+    await user.keyboard('{ArrowLeft}');
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+
+    // A must read FAVOURITED — the settle that resolved after we left still landed
+    // on state that survived the remount.
+    const toggle = await screen.findByRole('button', { name: /remove from favourites/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    // And clicking now correctly UN-favourites (computes next=false) — never the
+    // spurious re-favourite that would invert the real persisted value.
+    await user.click(toggle);
+    expect(favCalls[favCalls.length - 1]).toEqual({ id: a.id, favourite: false });
+  });
+
+  it('lands the late settle without a setState-on-unmounted React warning', async () => {
+    // The reconciliation must run when ItemView-A has unmounted, but the DISPLAYED
+    // toggle's own setState must stay mount-guarded (#453) — so no "state update on
+    // an unmounted component" warning is emitted on the dead child.
+    const a = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000d3',
+      mediaType: 'photo',
+      title: 'First memory',
+      isFavourite: false,
+    });
+    const b = makeItemCard({
+      id: '00000000-0000-4000-8000-0000000000d4',
+      mediaType: 'photo',
+      title: 'Second memory',
+      isFavourite: false,
+    });
+    const pending = deferred<{ isFavourite: boolean }>();
+    let deferOnce = true;
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      if (deferOnce) {
+        deferOnce = false;
+        return pending.promise;
+      }
+      return Promise.resolve({ isFavourite: input.favourite });
+    });
+    const api = makeFakeApi({ setFavourite });
+    const user = userEvent.setup();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        wrapInProviders(<KeyedItemViewHarness />, api, {
+          name: 'item',
+          item: a,
+          from: { name: 'timeline' },
+          siblings: [a, b],
+        }),
+      );
+
+      await screen.findByRole('heading', { level: 1, name: /first memory/i });
+      await user.click(screen.getByRole('button', { name: /mark as favourite/i }));
+      await user.keyboard('{ArrowRight}');
+      await screen.findByRole('heading', { level: 1, name: /second memory/i });
+
+      await act(async () => {
+        pending.resolve({ isFavourite: true });
+        await Promise.resolve();
+      });
+      await flushPending();
+
+      const unmountedWarns = errorSpy.mock.calls.filter((call) =>
+        /unmounted component|update on an unmounted/i.test(String(call[0])),
+      );
+      expect(unmountedWarns).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
 describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
+  it('the favourite toggle has no axe violations, unfavourited and favourited', async () => {
+    const unfav = makeItemCard({ mediaType: 'photo', title: 'Not yet loved', isFavourite: false });
+    const { container: c1 } = renderItem(unfav);
+    await screen.findByRole('button', { name: /mark as favourite/i });
+    await expectNoAxeViolations(c1);
+
+    const fav = makeItemCard({ mediaType: 'photo', title: 'Already loved', isFavourite: true });
+    const { container: c2 } = renderItem(fav);
+    await screen.findByRole('button', { name: /remove from favourites/i });
+    await expectNoAxeViolations(c2);
+  });
+
   it('a finished transcript has no axe violations', async () => {
     const item = makeItemCard({ mediaType: 'audio', title: 'A calm story' });
     const api = makeFakeApi({
@@ -242,6 +904,47 @@ describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
     });
     const { container } = renderItem(item, api);
     await screen.findByText(/transcribing/i);
+    await expectNoAxeViolations(container);
+  });
+});
+
+describe('ItemView — explicit-intent media playback (Journey F / #428)', () => {
+  it('offers a never-autoplay audio player for a voice note memory', async () => {
+    const item = makeItemCard({ mediaType: 'audio', title: 'A voice note' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /a voice note/i });
+
+    const audio = container.querySelector('audio');
+    expect(audio).not.toBeNull();
+    expect(audio).toHaveAttribute('controls');
+    expect(audio).not.toHaveAttribute('autoplay');
+  });
+
+  it('offers a never-autoplay video player for a video memory', async () => {
+    const item = makeItemCard({ mediaType: 'video', title: 'A home movie' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /a home movie/i });
+
+    const video = container.querySelector('video');
+    expect(video).not.toBeNull();
+    expect(video).toHaveAttribute('controls');
+    expect(video).not.toHaveAttribute('autoplay');
+  });
+
+  it('opens a photo full-size, and shows no player for a still image', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Sunset over the bay' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /sunset over the bay/i });
+
+    const full = container.querySelector('img[src^="kawsay-media:"]');
+    expect(full).not.toBeNull();
+    expect(container.querySelector('audio, video')).toBeNull();
+  });
+
+  it('stays axe-clean with a video player present', async () => {
+    const item = makeItemCard({ mediaType: 'video', title: 'A quiet clip' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /a quiet clip/i });
     await expectNoAxeViolations(container);
   });
 });

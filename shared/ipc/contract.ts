@@ -10,6 +10,8 @@ import {
   categorizationCorrectionSchema,
   categorizationStartResultSchema,
   categorizationStatusSchema,
+  collectionItemsPageSchema,
+  collectionsListSchema,
   itemCategoriesSchema,
   librarySummarySchema,
   mediaTypeSchema,
@@ -17,6 +19,8 @@ import {
   pathSchema,
   searchResultSchema,
   searchDaySchema,
+  settingsPatchSchema,
+  settingsSchema,
   sourceTypeSchema,
   suggestionsViewSchema,
   thumbnailDataUrlSchema,
@@ -52,8 +56,28 @@ export const CATALOG_THUMBNAIL = 'catalog:thumbnail';
  * segments. No filesystem path or audio byte crosses back (AC-4).
  */
 export const CATALOG_GET_TRANSCRIPT = 'catalog:getTranscript';
+/**
+ * IPC channel: set (or clear) ONE item's favourite flag by its opaque catalog id
+ * (#434, favourite-toggle slice). The `is_favourite` column already exists on
+ * `items` (ARCHITECTURE §4.2, migration 001) — the timeline/item card already
+ * reads it; this channel adds the missing WRITE path. The request carries only
+ * the id and the desired boolean — never a path — and echoes the resolved
+ * `isFavourite` so the caller reflects exactly what is now persisted on disk.
+ */
+export const CATALOG_SET_FAVOURITE = 'catalog:setFavourite';
 /** IPC channel: start an off-thread import; resolves with the new job id. */
 export const IMPORT_START = 'import:start';
+/**
+ * IPC channel: undo an import (#429, AC-14 / P4b). Removes EXACTLY the occurrences
+ * one source contributed, drops the items left with no other occurrence (cascading
+ * their derived rows) and reclaims only those orphans' copied originals/thumbnails —
+ * an item deduped into another source (and its file) SURVIVES. Scoped to the
+ * `sources.id` this import wrote against (the EXISTING dedup-with-provenance schema,
+ * ADR-0003 — no migration), so for a fresh post-import undo the source IS this run.
+ * The request carries only that opaque source id (a uuid — never a path); the
+ * response echoes the counts removed. All-or-nothing (one transaction).
+ */
+export const CATALOG_UNDO_IMPORT = 'catalog:undoImport';
 /** IPC channel: cooperatively cancel an in-flight import by job id. */
 export const IMPORT_CANCEL = 'import:cancel';
 
@@ -156,6 +180,33 @@ export const SUGGESTIONS_MERGE = 'suggestions:merge';
 export const SUGGESTIONS_DISMISS = 'suggestions:dismiss';
 
 /**
+ * IPC channels for the COLLECTIONS BROWSER VIEW (#437). A NEW, self-contained
+ * section — deliberately kept separate from every other channel group so it
+ * merges cleanly alongside concurrent contract changes elsewhere in this file.
+ * Both channels are READ-ONLY: nothing here ever creates, renames, or deletes a
+ * collection — that stays the suggestions tray's curation actions above. A
+ * `dismissed` tombstone collection is never listed or fetchable (it carries no
+ * members and exists purely so the derivation never re-proposes it).
+ */
+/** IPC channel: list every browsable collection (hand-made or accepted-suggested), with member counts. */
+export const CATALOG_LIST_COLLECTIONS = 'catalog:listCollections';
+/** IPC channel: fetch ONE collection by opaque id — its summary plus an offset-paginated page of members. */
+export const CATALOG_GET_COLLECTION = 'catalog:getCollection';
+
+/**
+ * IPC channels for the app-wide UX SETTINGS surface (AC-13 / Journey G, #433).
+ * Both ADDITIVE — no existing channel or the contextBridge exposure model
+ * changes. Mirrors the M2 consent-store pattern (a single small JSON file
+ * main-side, ARCHITECTURE §2.6): `settings:get` reads the durable snapshot and
+ * `settings:set` persists a PARTIAL update, echoing the resolved full snapshot
+ * so the UI never has to guess what actually landed on disk.
+ */
+/** IPC channel: read the persisted settings snapshot (text size + reduced-motion override). */
+export const SETTINGS_GET = 'settings:get';
+/** IPC channel: persist a partial settings update; echoes the resolved full snapshot. */
+export const SETTINGS_SET = 'settings:set';
+
+/**
  * The renderer-controllable options for a native open dialog (W2). This is the
  * ENTIRE surface the sandboxed renderer may influence: a friendly title and an
  * optional starting directory — nothing else. `properties` (file vs directory),
@@ -244,12 +295,30 @@ export const ipcContract = {
     request: z.strictObject({ id: z.uuid() }),
     response: transcriptViewSchema,
   },
+  [CATALOG_SET_FAVOURITE]: {
+    // An opaque catalog id — never a path — plus the desired boolean state.
+    // Mirrors CATALOG_GET_TRANSCRIPT's id shape and CATEGORIZE_SET_CONSENT's
+    // boolean-echo response.
+    request: z.strictObject({ id: z.uuid(), favourite: z.boolean() }),
+    response: z.strictObject({ isFavourite: z.boolean() }),
+  },
   [IMPORT_START]: {
     request: z.strictObject({
       sourceType: sourceTypeSchema,
       inputPath: pathSchema,
     }),
-    response: z.strictObject({ jobId: z.uuid() }),
+    // `sourceId` is the stable `sources.id` this run writes against — echoed so the
+    // renderer can later offer an "undo this import" (catalog:undoImport, #429).
+    response: z.strictObject({ jobId: z.uuid(), sourceId: z.uuid() }),
+  },
+  [CATALOG_UNDO_IMPORT]: {
+    // Only the opaque source id (a uuid) — never a path, so a traversal string can
+    // never validate. Mirrors catalog:setFavourite's id-only request shape.
+    request: z.strictObject({ sourceId: z.uuid() }),
+    response: z.strictObject({
+      itemsRemoved: z.number().int().nonnegative(),
+      occurrencesRemoved: z.number().int().nonnegative(),
+    }),
   },
   [IMPORT_CANCEL]: {
     request: z.strictObject({ jobId: z.uuid() }),
@@ -358,6 +427,34 @@ export const ipcContract = {
       name: z.string().min(1).max(CATEGORY_NAME_MAX_LENGTH).optional(),
     }),
     response: suggestionsViewSchema,
+  },
+  // ── Collections browser view (#437) — a NEW, self-contained section, kept
+  // separate from every other channel group so it merges cleanly alongside
+  // concurrent contract changes elsewhere in this file.
+  [CATALOG_LIST_COLLECTIONS]: {
+    request: z.strictObject({}),
+    response: collectionsListSchema,
+  },
+  [CATALOG_GET_COLLECTION]: {
+    // An opaque collection id (never a path — mirrors catalog:getTranscript) plus
+    // a bounded page window; offset defaults to 0 so a first fetch can omit it.
+    request: z.strictObject({
+      id: z.uuid(),
+      limit: z.number().int().min(1).max(PAGE_LIMIT_MAX),
+      offset: z.number().int().nonnegative().default(0),
+    }),
+    response: collectionItemsPageSchema,
+  },
+  // ── App-wide UX settings (AC-13 / Journey G, #433) — a NEW, self-contained
+  // section, deliberately kept separate from every other channel group above so
+  // it merges cleanly alongside concurrent contract changes elsewhere in this file.
+  [SETTINGS_GET]: {
+    request: z.strictObject({}),
+    response: settingsSchema,
+  },
+  [SETTINGS_SET]: {
+    request: settingsPatchSchema,
+    response: settingsSchema,
   },
 } as const;
 

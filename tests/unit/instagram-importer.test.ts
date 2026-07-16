@@ -339,13 +339,18 @@ describe('instagramImporter (M3 — Instagram Meta DYI direct messages connector
     }
   });
 
-  it('caps one oversized message object and keeps later messages without unbounded buffering', async () => {
+  // De-flake (#454): shrink the oversized fixture to just OVER the cap
+  // (`MAX_MESSAGE_JSON_CHARS` = 1_000_000) instead of 2.5 MB — it proves the exact
+  // same cap behaviour with the minimal input the parser must scan, so the test no
+  // longer leans on a wall-clock timeout for a multi-MB parse. Generous timeout kept
+  // only as margin.
+  it('caps one oversized message object and keeps later messages without unbounded buffering', { timeout: 20_000 }, async () => {
     const dir = makeTmpDir('instagram-bounds-');
     try {
       const path = writeInstagramMessageFile(dir, 'huge_abcd', 'message_1.json', {
         participants: [{ name: 'Mamá' }],
         messages: [
-          { sender_name: 'Mamá', timestamp_ms: 1, content: 'A'.repeat(2_500_000) },
+          { sender_name: 'Mamá', timestamp_ms: 1, content: 'A'.repeat(1_000_001) },
           { sender_name: 'Mamá', timestamp_ms: 2, content: 'after huge' },
         ],
       });

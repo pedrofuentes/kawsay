@@ -393,11 +393,53 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(onlyWhatsapp.items.map((i) => i.source)).toEqual(['whatsapp']);
   });
 
+  it('undoImport removes THIS import\'s source but spares an item deduped into another (#429)', () => {
+    session.createLibrary({ path: root });
+    // Seed a pre-import source A and this import's source B, sharing ONE deduped item
+    // plus a B-only item, through a second connection (the session reads the commit).
+    const db = openCatalog(join(root, 'catalog.sqlite3'));
+    const repo = createCatalogRepo(db);
+    const sourceA = repo.registerSource({ sourceKey: 'A', type: 'google_takeout', label: 'A' });
+    const sourceB = repo.registerSource({ sourceKey: 'B', type: 'whatsapp', label: 'B' });
+    const shared = repo.insertItem({ mediaType: 'photo', contentHash: 'shared', originalExt: '.jpg' });
+    repo.addOccurrence({ itemId: shared, sourceId: sourceA, sourceRef: 'A/1', originalKind: 'none' });
+    repo.addOccurrence({ itemId: shared, sourceId: sourceB, sourceRef: 'B/1', originalKind: 'none' });
+    const onlyB = repo.insertItem({ mediaType: 'photo', contentHash: 'onlyB', originalExt: '.jpg' });
+    repo.addOccurrence({ itemId: onlyB, sourceId: sourceB, sourceRef: 'B/2', originalKind: 'none' });
+    db.close();
+
+    const result = session.undoImport({ sourceId: sourceB });
+
+    // Only B's contribution goes: the deduped item survives (its A occurrence remains);
+    // the B-only item is dropped. Two occurrences removed, one item removed.
+    expect(result).toEqual({ itemsRemoved: 1, occurrencesRemoved: 2 });
+    const after = openCatalog(join(root, 'catalog.sqlite3'));
+    expect(Number((after.prepare('SELECT COUNT(*) AS n FROM items').get() as { n: number }).n)).toBe(1);
+    expect(
+      Number((after.prepare('SELECT COUNT(*) AS n FROM item_occurrences').get() as { n: number }).n),
+    ).toBe(1);
+    after.close();
+  });
+
+  it('undoImport throws when no library is open', () => {
+    expect(() => session.undoImport({ sourceId: JOB_ID })).toThrow();
+  });
+
+  it('undoImport refuses while an import is still in flight (race guard, #429)', () => {
+    session.createLibrary({ path: root });
+    // Start an import so the coordinator reports an active job; undo must refuse rather
+    // than remove rows out from under a still-writing worker.
+    session.beginImport({ sourceType: 'folder', inputPath: root });
+    expect(coordinator.started.length).toBeGreaterThan(0);
+    expect(() => session.undoImport({ sourceId: JOB_ID })).toThrow(/in progress/i);
+  });
+
   it('beginImport registers a source and starts a well-formed off-thread job', () => {
     session.createLibrary({ path: root });
-    const { jobId } = session.beginImport({ sourceType: 'folder', inputPath: root });
+    const { jobId, sourceId } = session.beginImport({ sourceType: 'folder', inputPath: root });
 
     expect(jobId).toBe(JOB_ID);
+    expect(sourceId).toBeTruthy(); // echoed so the renderer can later undo this import (#429)
     expect(coordinator.started).toHaveLength(1);
     const job = coordinator.started[0];
     expect(job).toMatchObject({
@@ -440,18 +482,39 @@ describe('createCatalogSession (the IPC application service)', () => {
   });
 
   it('beginImport reaches every newly wired connector (Takeout, Facebook, LinkedIn, iMessage/SMS)', () => {
-    session.createLibrary({ path: root });
-    for (const sourceType of ['google_takeout', 'facebook', 'linkedin', 'imessage'] as const) {
-      const { jobId } = session.beginImport({ sourceType, inputPath: root });
-      expect(jobId).toBe(JOB_ID);
+    // One import runs at a time (the concurrent-job guard, #427), so each connector
+    // is exercised on its own fresh session rather than back-to-back on one.
+    const sourceTypes = ['google_takeout', 'facebook', 'linkedin', 'imessage'] as const;
+    for (const sourceType of sourceTypes) {
+      const localCoordinator = fakeCoordinator();
+      const s = createCatalogSession({
+        coordinator: localCoordinator.coordinator,
+        newId: () => JOB_ID,
+        resolveMediaBinaries,
+      });
+      try {
+        s.createLibrary({ path: join(parent, sourceType) });
+        const { jobId } = s.beginImport({ sourceType, inputPath: root });
+        expect(jobId).toBe(JOB_ID);
+        expect(localCoordinator.started).toHaveLength(1);
+        expect(localCoordinator.started[0].sourceType).toBe(sourceType);
+      } finally {
+        s.dispose();
+      }
     }
-    expect(coordinator.started).toHaveLength(4);
-    expect(coordinator.started.map((job) => job.sourceType)).toEqual([
-      'google_takeout',
-      'facebook',
-      'linkedin',
-      'imessage',
-    ]);
+  });
+
+  it('beginImport refuses a concurrent import while one is already running, starting nothing new (#427)', () => {
+    session.createLibrary({ path: root });
+    session.beginImport({ sourceType: 'folder', inputPath: root });
+    expect(coordinator.started).toHaveLength(1);
+
+    // A second start while the first job is still active (e.g. the user left the
+    // Add Memories view mid-import and returned) must be refused, not orphan-stacked.
+    expect(() => session.beginImport({ sourceType: 'folder', inputPath: root })).toThrow(
+      /already in progress/i,
+    );
+    expect(coordinator.started).toHaveLength(1);
   });
 
   it('beginImport rejects an unknown source type and starts nothing', () => {
@@ -514,6 +577,55 @@ describe('createCatalogSession (the IPC application service)', () => {
   it('getThumbnail refuses when no library is open', async () => {
     const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
     await expect(s.getThumbnail({ id: JOB_ID })).rejects.toThrow();
+  });
+
+  describe('setFavourite (#434 favourite-toggle write path)', () => {
+    it('marks a memory favourite and echoes the resolved state', () => {
+      session.createLibrary({ path: root });
+      seedItems(join(root, 'catalog.sqlite3'));
+      const page = session.getTimeline({ limit: 1 });
+      const id = page.items[0]?.id as string;
+      expect(page.items[0]?.isFavourite).toBe(false);
+
+      const result = session.setFavourite({ id, favourite: true });
+
+      expect(result).toEqual({ isFavourite: true });
+      // Persisted — a fresh timeline read reflects it, not just the echoed response.
+      const reread = session.getTimeline({ limit: 1 });
+      expect(reread.items[0]?.isFavourite).toBe(true);
+    });
+
+    it('unmarks a favourite memory back to false', () => {
+      session.createLibrary({ path: root });
+      seedItems(join(root, 'catalog.sqlite3'));
+      const id = session.getTimeline({ limit: 1 }).items[0]?.id as string;
+      session.setFavourite({ id, favourite: true });
+
+      const result = session.setFavourite({ id, favourite: false });
+
+      expect(result).toEqual({ isFavourite: false });
+    });
+
+    it('is idempotent — setting the same value twice is a no-op the second time', () => {
+      session.createLibrary({ path: root });
+      seedItems(join(root, 'catalog.sqlite3'));
+      const id = session.getTimeline({ limit: 1 }).items[0]?.id as string;
+
+      session.setFavourite({ id, favourite: true });
+      const second = session.setFavourite({ id, favourite: true });
+
+      expect(second).toEqual({ isFavourite: true });
+    });
+
+    it('rejects an unknown item id', () => {
+      session.createLibrary({ path: root });
+      expect(() => session.setFavourite({ id: JOB_ID, favourite: true })).toThrow();
+    });
+
+    it('refuses when no library is open', () => {
+      const s = createCatalogSession({ coordinator: coordinator.coordinator, resolveMediaBinaries });
+      expect(() => s.setFavourite({ id: JOB_ID, favourite: true })).toThrow();
+    });
   });
 
   it('exposes a transcription library port that enumerates the audio/video originals (#157)', () => {
