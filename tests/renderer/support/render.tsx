@@ -37,6 +37,15 @@ export function ViewProbe(): ReactElement {
   return <div data-testid="active-view">{view.name}</div>;
 }
 
+/** Renders the ordered sibling ids threaded into the active item view (comma
+ *  separated), so tests can assert that opening a memory carried the loaded list
+ *  along for ←/→ arrow-nav. Empty when not on an item view. */
+export function SiblingsProbe(): ReactElement {
+  const { view } = useNavigation();
+  const ids = view.name === 'item' ? (view.siblings ?? []).map((sibling) => sibling.id) : [];
+  return <div data-testid="siblings">{ids.join(',')}</div>;
+}
+
 export function wrapInProviders(children: ReactNode, api: FakeApi, initialView?: View): ReactElement {
   return (
     <KawsayApiProvider api={api}>

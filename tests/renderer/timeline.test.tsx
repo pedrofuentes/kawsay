@@ -8,7 +8,7 @@ import { Timeline } from '@renderer/views/Timeline';
 import type { ItemCardDTO, TimelinePageDTO } from '@shared/kawsay-api';
 import { makeFakeApi, makeItemCard } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
-import { ViewProbe, wrapInProviders } from './support/render';
+import { SiblingsProbe, ViewProbe, wrapInProviders } from './support/render';
 
 function page(over: Partial<TimelinePageDTO> = {}): TimelinePageDTO {
   return { items: [], nextCursor: null, ...over };
@@ -301,6 +301,34 @@ describe('Timeline — opening a memory', () => {
 
     await user.click(await screen.findByRole('button', { name: /open this one/i }));
     expect(screen.getByTestId('active-view')).toHaveTextContent('item');
+  });
+
+  it('threads the whole ordered (newest-first) loaded page along as arrow-nav siblings', async () => {
+    // The wiring that makes ItemView's ←/→ work at all: opening a memory must carry
+    // the timeline's loaded, in-order items along as `siblings`, so ItemView has
+    // neighbours to step through without re-fetching. Regressing this silently
+    // strips arrow-nav of its data, so assert it end-to-end from the real card.
+    const items = [
+      makeItemCard({ id: 'sib-a', title: 'Newest memory', captureDate: '2024-03-03T10:00:00.000Z' }),
+      makeItemCard({ id: 'sib-b', title: 'Middle memory', captureDate: '2024-02-02T10:00:00.000Z' }),
+      makeItemCard({ id: 'sib-c', title: 'Oldest memory', captureDate: '2024-01-01T10:00:00.000Z' }),
+    ];
+    const api = makeFakeApi({ getTimeline: vi.fn(() => Promise.resolve(page({ items }))) });
+    const user = userEvent.setup();
+    render(
+      wrapInProviders(
+        <>
+          <Timeline />
+          <SiblingsProbe />
+        </>,
+        api,
+      ),
+    );
+
+    await user.click(await screen.findByRole('button', { name: /middle memory/i }));
+
+    // The full page, in the newest-first order the timeline rendered it.
+    expect(screen.getByTestId('siblings')).toHaveTextContent('sib-a,sib-b,sib-c');
   });
 });
 

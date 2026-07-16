@@ -447,7 +447,7 @@ export function Search(): ReactElement {
       <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {visibleItems.map((item) => (
           <li key={item.id}>
-            <ResultCard item={item} term={query} />
+            <ResultCard item={item} term={query} siblings={visibleItems} />
           </li>
         ))}
       </ul>
@@ -455,7 +455,18 @@ export function Search(): ReactElement {
   }
 }
 
-function ResultCard({ item, term }: { item: ItemCardDTO; term: string }): ReactElement {
+// `siblings` is the current (already-filtered) result set — passed straight
+// through so ←/→ in ItemView can step to the previous/next result in the same
+// order shown here, without any re-fetch or new IPC channel (#434).
+function ResultCard({
+  item,
+  term,
+  siblings,
+}: {
+  item: ItemCardDTO;
+  term: string;
+  siblings: ItemCardDTO[];
+}): ReactElement {
   const { navigate, view } = useNavigation();
   const meta = TYPE_META[item.mediaType];
   const date = formatDate(item.captureDate);
@@ -468,7 +479,7 @@ function ResultCard({ item, term }: { item: ItemCardDTO; term: string }): ReactE
       {/* The whole result is one button that opens the memory on its own view. */}
       <button
         type="button"
-        onClick={() => navigate({ name: 'item', item, from: view })}
+        onClick={() => navigate({ name: 'item', item, from: view, siblings })}
         aria-label={`Open ${caption}`}
         className="flex flex-col gap-3 rounded-md text-left"
       >
