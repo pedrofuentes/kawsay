@@ -741,7 +741,12 @@ describe('ItemView — ←/→ keyboard navigation between memories (#434)', () 
     await screen.findByRole('heading', { level: 1, name: /second memory/i });
 
     const outside = screen.getByRole('button', { name: /outside the memory view/i });
-    outside.focus();
+    // Drive REAL Tab traversal from wherever focus currently sits, rather than
+    // jumping straight to the outside control with `.focus()` — a genuine focus
+    // trap would leave `outside` unreached instead of merely "focusable".
+    for (let i = 0; i < 20 && document.activeElement !== outside; i += 1) {
+      await user.tab();
+    }
     expect(outside).toHaveFocus();
   });
 
@@ -833,6 +838,104 @@ describe('ItemView — ←/→ nav must not fight the user (#458 review fixes)',
 
     expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('ItemView — ←/→ stands down for modifiers and focused controls (#491)', () => {
+  function renderWithSiblingsAndControl(
+    siblings: ItemCardDTO[],
+    current: ItemCardDTO,
+    api: FakeApi = makeFakeApi(),
+  ) {
+    const user = userEvent.setup();
+    const result = render(
+      wrapInProviders(
+        <>
+          <ItemView />
+          <input aria-label="a focused text control" />
+        </>,
+        api,
+        { name: 'item', item: current, from: { name: 'timeline' }, siblings },
+      ),
+    );
+    return { api, user, ...result };
+  }
+
+  it('Shift+ArrowRight does not navigate — Shift+Arrow is reserved for extending a text selection', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    renderWithSiblingsAndControl([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    fireEvent.keyDown(window, { key: 'ArrowRight', shiftKey: true });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+  });
+
+  it('Shift+ArrowLeft does not navigate either', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    renderWithSiblingsAndControl([a, b], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    fireEvent.keyDown(window, { key: 'ArrowLeft', shiftKey: true });
+
+    expect(screen.getByRole('heading', { level: 1, name: /second memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /first memory/i })).not.toBeInTheDocument();
+  });
+
+  it('Alt+ArrowRight does not navigate (an OS/browser history shortcut)', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    renderWithSiblingsAndControl([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    fireEvent.keyDown(window, { key: 'ArrowRight', altKey: true });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+  });
+
+  it('Ctrl+ArrowRight does not navigate', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    renderWithSiblingsAndControl([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    fireEvent.keyDown(window, { key: 'ArrowRight', ctrlKey: true });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+  });
+
+  it('Meta+ArrowRight does not navigate', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    renderWithSiblingsAndControl([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    fireEvent.keyDown(window, { key: 'ArrowRight', metaKey: true });
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /second memory/i })).not.toBeInTheDocument();
+  });
+
+  it('an arrow key fired from a focused text control does not navigate away from it', async () => {
+    // A focused <input>/<textarea>/<select>/contentEditable owns Left/Right itself
+    // (text-cursor movement) — the global listener must defer to it exactly as it
+    // defers to a live text selection.
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user } = renderWithSiblingsAndControl([a, b], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    const control = screen.getByLabelText(/a focused text control/i);
+    await user.click(control);
+    fireEvent.keyDown(control, { key: 'ArrowLeft' });
+
+    expect(screen.getByRole('heading', { level: 1, name: /second memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /first memory/i })).not.toBeInTheDocument();
   });
 });
 
