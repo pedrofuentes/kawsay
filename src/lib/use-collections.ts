@@ -7,10 +7,11 @@
 // `useTimeline` streams timeline pages, just keyed by offset instead of an
 // opaque cursor (a collection's membership is stable, unlike the ever-growing
 // timeline, so a plain running offset is enough).
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { CollectionItemsPageDTO, CollectionSummaryDTO, ItemCardDTO } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
 import { ipcErrorCopy } from './ipc-error-copy';
+import { useQuery } from './use-query';
 
 export type CollectionsStatus = 'unavailable' | 'loading' | 'ready' | 'error';
 
@@ -21,40 +22,50 @@ export interface UseCollectionsResult {
   reload: () => void;
 }
 
-/** Loads the full collections list (`catalog:listCollections`) once on mount. */
+/**
+ * Loads the full collections list (`catalog:listCollections`) on mount. The
+ * monotonic-request-id race guard this used to hand-roll (so a slow earlier read
+ * never clobbers a newer one) now lives in the shared {@link useQuery} primitive
+ * (#443); opting into its stale-while-revalidate cache means returning to the
+ * Collections view paints the last list instantly and revalidates in the
+ * background, rather than flashing a loading state on every visit.
+ */
 export function useCollections(): UseCollectionsResult {
   const api = useKawsayApi();
-  const [collections, setCollections] = useState<CollectionSummaryDTO[]>([]);
-  const [status, setStatus] = useState<CollectionsStatus>(api !== undefined ? 'loading' : 'unavailable');
-  // Monotonic request id so a slow earlier read can never clobber a newer one
-  // (e.g. a fast reload while the first fetch is still in flight).
-  const requestId = useRef(0);
+  const query = useQuery({
+    // `null` while the bridge is missing (browser preview) keeps the query idle —
+    // mapped to the calm `unavailable` state below, never a fetch.
+    key: api === undefined ? null : 'collections',
+    fetcher: () => {
+      // `key` is non-null exactly when `api` is defined, so this is only ever
+      // invoked with a live bridge.
+      if (api === undefined) {
+        return Promise.reject(new Error('bridge unavailable'));
+      }
+      return api.listCollections().then((view) => view.collections);
+    },
+    cache: true,
+  });
 
-  const load = useCallback((): void => {
-    if (api === undefined) {
-      setStatus('unavailable');
-      return;
-    }
-    const id = (requestId.current += 1);
-    setStatus('loading');
-    api
-      .listCollections()
-      .then((view) => {
-        if (id !== requestId.current) return;
-        setCollections(view.collections);
-        setStatus('ready');
-      })
-      .catch(() => {
-        if (id !== requestId.current) return;
-        setStatus('error');
-      });
-  }, [api]);
+  // Map the generic query status onto the view's calm vocabulary. `idle` only
+  // arises here when the bridge is missing, so it reads as `unavailable`.
+  const status: CollectionsStatus =
+    api === undefined
+      ? 'unavailable'
+      : query.status === 'success'
+        ? 'ready'
+        : query.status === 'error'
+          ? 'error'
+          : 'loading';
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { refetch } = query;
+  const reload = useCallback((): void => {
+    // Mirror the original reload: return to a visible loading state while the
+    // retry is in flight (a hard refresh, not a silent background revalidation).
+    refetch({ showLoading: true });
+  }, [refetch]);
 
-  return { collections, status, reload: load };
+  return { collections: query.data ?? [], status, reload };
 }
 
 /** A calm default page size — the same order of magnitude as the timeline's,
