@@ -440,18 +440,39 @@ describe('createCatalogSession (the IPC application service)', () => {
   });
 
   it('beginImport reaches every newly wired connector (Takeout, Facebook, LinkedIn, iMessage/SMS)', () => {
-    session.createLibrary({ path: root });
-    for (const sourceType of ['google_takeout', 'facebook', 'linkedin', 'imessage'] as const) {
-      const { jobId } = session.beginImport({ sourceType, inputPath: root });
-      expect(jobId).toBe(JOB_ID);
+    // One import runs at a time (the concurrent-job guard, #427), so each connector
+    // is exercised on its own fresh session rather than back-to-back on one.
+    const sourceTypes = ['google_takeout', 'facebook', 'linkedin', 'imessage'] as const;
+    for (const sourceType of sourceTypes) {
+      const localCoordinator = fakeCoordinator();
+      const s = createCatalogSession({
+        coordinator: localCoordinator.coordinator,
+        newId: () => JOB_ID,
+        resolveMediaBinaries,
+      });
+      try {
+        s.createLibrary({ path: join(parent, sourceType) });
+        const { jobId } = s.beginImport({ sourceType, inputPath: root });
+        expect(jobId).toBe(JOB_ID);
+        expect(localCoordinator.started).toHaveLength(1);
+        expect(localCoordinator.started[0].sourceType).toBe(sourceType);
+      } finally {
+        s.dispose();
+      }
     }
-    expect(coordinator.started).toHaveLength(4);
-    expect(coordinator.started.map((job) => job.sourceType)).toEqual([
-      'google_takeout',
-      'facebook',
-      'linkedin',
-      'imessage',
-    ]);
+  });
+
+  it('beginImport refuses a concurrent import while one is already running, starting nothing new (#427)', () => {
+    session.createLibrary({ path: root });
+    session.beginImport({ sourceType: 'folder', inputPath: root });
+    expect(coordinator.started).toHaveLength(1);
+
+    // A second start while the first job is still active (e.g. the user left the
+    // Add Memories view mid-import and returned) must be refused, not orphan-stacked.
+    expect(() => session.beginImport({ sourceType: 'folder', inputPath: root })).toThrow(
+      /already in progress/i,
+    );
+    expect(coordinator.started).toHaveLength(1);
   });
 
   it('beginImport rejects an unknown source type and starts nothing', () => {

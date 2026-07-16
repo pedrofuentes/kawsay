@@ -1,16 +1,12 @@
 // The main application shell after onboarding. It owns the sidebar + status bar and
-// routes the primary sections. The timeline (U1) and search (U2) are the real screens;
-// add-memories and settings stay light placeholders for now, all reading the open
-// library from LibraryContext and moving between sections via useNavigation.
+// routes the primary sections: the timeline (U1), search (U2), the Add Memories
+// re-entry (#427), and settings — all reading the open library from LibraryContext
+// and moving between sections via useNavigation.
 import type { ReactElement } from 'react';
 import { AppShell } from '@renderer/components/AppShell';
-import { Button } from '@renderer/components/Button';
-import { EmptyState } from '@renderer/components/EmptyState';
-import { Icon } from '@renderer/components/Icon';
-import type { IconName } from '@renderer/components/Icon';
-import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
+import { AddMemories } from '@renderer/views/AddMemories';
 import { Search } from '@renderer/views/Search';
 import { Settings } from '@renderer/views/Settings';
 import { Timeline } from '@renderer/views/Timeline';
@@ -18,7 +14,7 @@ import { ItemView } from '@renderer/views/ItemView';
 import { Sidebar } from './Sidebar';
 
 export function MainApp(): ReactElement {
-  const { view, navigate } = useNavigation();
+  const { view } = useNavigation();
   const { library } = useLibrary();
 
   return (
@@ -35,25 +31,11 @@ export function MainApp(): ReactElement {
     switch (view.name) {
       case 'search':
         return <Search />;
-      case 'add-memories': {
-        const description = library?.name
-          ? `Add another source to ${library.name}'s library whenever you're ready.`
-          : 'Add another source to this library whenever you\'re ready.';
-        return (
-          <InfoView
-            key="add-memories"
-            heading="Add memories"
-            icon="archive"
-            emptyTitle="Bring in more"
-            description={description}
-            action={
-              <Button variant="primary" onClick={() => navigate({ name: 'timeline' })}>
-                Back to the timeline
-              </Button>
-            }
-          />
-        );
-      }
+      case 'add-memories':
+        // Keyed so re-entering "Add memories" remounts the flow at its source
+        // chooser (the reused steps' <h1> auto-focus re-runs) rather than stranding
+        // the user mid-import from a previous visit.
+        return <AddMemories key="add-memories" />;
       case 'settings':
         return <Settings key="settings" />;
       case 'item':
@@ -70,40 +52,6 @@ export function MainApp(): ReactElement {
         return assertNever(view);
     }
   }
-}
-
-interface InfoViewProps {
-  heading: string;
-  icon: IconName;
-  emptyTitle: string;
-  description: string;
-  action?: ReactElement;
-}
-
-// The light placeholder sections (add-memories, settings). Like Timeline and Search,
-// each moves focus to its <h1> on mount so that switching sections lands the keyboard
-// and screen-reader cursor on the new view's name (WCAG 2.4.3, AC-13). The distinct
-// `key` per section in renderSection() remounts this on every switch so the effect
-// re-runs.
-function InfoView({ heading, icon, emptyTitle, description, action }: InfoViewProps): ReactElement {
-  const headingRef = useAutoFocusHeading<HTMLHeadingElement>();
-  return (
-    <section className="flex flex-col gap-6">
-      <h1
-        ref={headingRef}
-        tabIndex={-1}
-        className="font-display text-3xl font-semibold text-text-primary outline-none"
-      >
-        {heading}
-      </h1>
-      <EmptyState
-        icon={<Icon name={icon} className="h-8 w-8" />}
-        title={emptyTitle}
-        description={description}
-        action={action}
-      />
-    </section>
-  );
 }
 
 // Exhaustiveness guard for the typed view router (ADR-0015, issue #95): if a new

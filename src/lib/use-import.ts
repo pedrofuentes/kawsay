@@ -108,6 +108,31 @@ export function useImport(): UseImportResult {
   const jobIdRef = useRef<string | null>(null);
   const startingRef = useRef(false);
   const pendingProgressRef = useRef<ImportProgressEvent[]>([]);
+  // Live mirrors read by the unmount-only cleanup below (a cleanup closure can't
+  // see the latest state/props, so refs carry them across the component's life).
+  const statusRef = useRef<ImportStatus>(state.status);
+  statusRef.current = state.status;
+  const apiRef = useRef(api);
+  apiRef.current = api;
+
+  // Cancel a still-running import when the host unmounts, so leaving the view mid-
+  // import never orphans the backend job. This is only reachable now that the Add
+  // Memories re-entry (#427) hosts the import inside the persistent-nav shell — a
+  // user can click another sidebar section mid-import. Guarded on a live status ref
+  // so it NEVER fires once the import has settled (complete/cancelled/error), which
+  // is why onboarding is untouched: its import step only unmounts after the job has
+  // resolved (there is no sidebar to leave from mid-import). Empty deps → the
+  // cleanup runs exactly once, on unmount.
+  useEffect(() => {
+    return () => {
+      const jobId = jobIdRef.current;
+      const bridge = apiRef.current;
+      const status = statusRef.current;
+      if (bridge !== undefined && jobId !== null && (status === 'running' || status === 'starting')) {
+        void bridge.cancelImport({ jobId });
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (api === undefined) {

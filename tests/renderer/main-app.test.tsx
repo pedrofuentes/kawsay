@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { useEffect } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MainApp } from '@renderer/app/MainApp';
 import { useLibrary } from '@renderer/lib/library';
 import type { TimelinePageDTO } from '@shared/kawsay-api';
@@ -47,30 +48,27 @@ describe('MainApp routing', () => {
     expect(screen.queryByText(/search is on its way/i)).not.toBeInTheDocument();
   });
 
-  describe('add-memories view banned-phrase compliance (P2, #435)', () => {
+  describe('add-memories view banned-phrase compliance (P2, #435 · #427)', () => {
+    // #427 replaced the placeholder InfoView with the real guided Add Memories flow;
+    // the P2 banned-phrase invariant from #435 carries over onto the live view — no
+    // "your loved one" / "the deceased" / "the contact", and never a broken
+    // "undefined" interpolation, in any state.
     it('never renders banned phrases (your loved one, the deceased, the contact) when no library is open', () => {
-      // When no library is open (library === null), the copy must avoid all banned
-      // phrases that refer to the person. This test verifies the add-memories
-      // description never renders "your loved one", "the deceased", or "the contact"
-      // as fallback copy (P2 USER_FLOWS §1), and pins the exact neutral copy so a
-      // regression like an interpolated "undefined's library" would also fail it.
       const api = makeFakeApi();
       render(wrapInProviders(<MainApp />, api, { name: 'add-memories' }));
 
-      // Check the rendered content for banned phrases.
-      const container = screen.getByRole('heading', { level: 1, name: 'Add memories' }).parentElement;
-      expect(container).not.toHaveTextContent(/your loved one/i);
-      expect(container).not.toHaveTextContent(/the deceased/i);
-      expect(container).not.toHaveTextContent(/the contact/i);
-      // Positive oracle: pin the exact neutral copy, not just the absence of banned
-      // phrases — a broken fallback like "Add another source to undefined's library"
-      // would still pass the negative checks above but must fail this one.
-      expect(container).toHaveTextContent(
-        "Add another source to this library whenever you're ready.",
-      );
+      // The live view lands on its source chooser, titled "Add memories".
+      expect(screen.getByRole('heading', { level: 1, name: 'Add memories' })).toBeInTheDocument();
+      const main = screen.getByRole('main');
+      expect(main).not.toHaveTextContent(/your loved one/i);
+      expect(main).not.toHaveTextContent(/the deceased/i);
+      expect(main).not.toHaveTextContent(/the contact/i);
+      // A broken name interpolation must never leak, even with no library open.
+      expect(main).not.toHaveTextContent(/undefined/i);
     });
 
-    it('personalizes the add-memories copy with the library name when a library is open', async () => {
+    it('personalizes the guided copy with the library name when a library is open', async () => {
+      const user = userEvent.setup();
       const api = makeFakeApi({
         openLibrary: vi.fn(() =>
           Promise.resolve(makeLibrarySummary({ name: 'Grandma Rosa', root: '/lib/rosa' })),
@@ -86,9 +84,18 @@ describe('MainApp routing', () => {
         ),
       );
 
-      // openLibrary resolves asynchronously (LibraryProvider awaits the fake API
-      // call before storing the summary), so wait for the personalized copy.
-      expect(await screen.findByText(/Grandma Rosa's library/)).toBeInTheDocument();
+      // Picking a source enters the guided walkthrough, which interpolates the
+      // person's name into its copy (openLibrary resolves asynchronously, so this
+      // polls until the named copy lands). Pinning the exact possessive phrase makes
+      // the check discriminating: a broken `personName` (empty/fallback/undefined)
+      // or a reintroduced banned phrase would fail it, not silently pass.
+      await user.click(await screen.findByRole('button', { name: /whatsapp/i }));
+      await screen.findByText(/Grandma Rosa's WhatsApp/);
+      const main = screen.getByRole('main');
+      expect(main).toHaveTextContent("Grandma Rosa's WhatsApp");
+      expect(main).not.toHaveTextContent(/your loved one/i);
+      expect(main).not.toHaveTextContent(/the deceased/i);
+      expect(main).not.toHaveTextContent(/undefined/i);
     });
   });
 });

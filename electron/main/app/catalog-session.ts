@@ -493,6 +493,13 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       if (importer === undefined) {
         throw new CatalogSessionError(`no importer available for source type: ${input.sourceType}`);
       }
+      // One import at a time (defense-in-depth for the Add Memories re-entry, #427):
+      // if a user leaves mid-import and returns, the cooperative cancel may still be
+      // winding the first job down. Refuse a second start while any job is active so
+      // we never stack concurrent imports onto the same library.
+      if (coordinator.active().length > 0) {
+        throw new CatalogSessionError('an import is already in progress');
+      }
       const { ffmpegPath, ffprobePath } = resolveMediaBinaries();
       const sourceId = library.repo.registerSource({
         sourceKey: `${input.sourceType}:${input.inputPath}`,
