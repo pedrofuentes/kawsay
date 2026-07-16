@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from './Button';
 import { Icon } from './Icon';
+import { pluralize } from '@renderer/lib/pluralize';
 
 export interface UndoBannerProps {
   /** The loved one whose library this is — named, never "your loved one". */
@@ -37,7 +38,7 @@ export function UndoBanner({ personName, count, onUndo }: UndoBannerProps): Reac
     if (phase === 'failed') failedRef.current?.focus();
   }, [phase]);
 
-  const memories = count === 1 ? 'memory' : 'memories';
+  const memories = pluralize(count, 'memory', 'memories');
 
   // A rejected onUndo means the REMOVAL TRANSACTION rolled back — the memories are
   // untouched. Surface that honestly (never a silent revert to idle): reverent copy +

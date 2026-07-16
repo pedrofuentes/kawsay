@@ -18,15 +18,16 @@ import type { ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
 import { EmptyState } from '@renderer/components/EmptyState';
 import { ErrorBanner } from '@renderer/components/ErrorBanner';
+import { Heading } from '@renderer/components/Heading';
 import { Icon } from '@renderer/components/Icon';
-import type { IconName } from '@renderer/components/Icon';
 import { MediaThumbnail } from '@renderer/components/MediaThumbnail';
 import { cx } from '@renderer/lib/cx';
+import { MEDIA_META } from '@renderer/lib/media-meta';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
 import { useTimeline } from '@renderer/lib/use-timeline';
 import { computeVirtualWindow } from '@renderer/lib/virtual-window';
-import type { ItemCardDTO, MediaType } from '@shared/kawsay-api';
+import type { ItemCardDTO } from '@shared/kawsay-api';
 
 /** Every virtualized row shares one fixed height so the windowing maths stay
  *  layout-free (no per-row measurement). */
@@ -36,22 +37,6 @@ const OVERSCAN = 4;
 const DEFAULT_VIEWPORT = 720;
 /** Begin streaming the next page this many rows before the loaded list ends. */
 const LOAD_MORE_AHEAD = OVERSCAN + 2;
-
-const MEDIA_LABEL: Record<MediaType, string> = {
-  photo: 'Photo',
-  video: 'Video',
-  audio: 'Voice note',
-  document: 'Document',
-  message: 'Message',
-};
-
-const MEDIA_ICON: Record<MediaType, IconName> = {
-  photo: 'photos',
-  video: 'video',
-  audio: 'audio',
-  document: 'document',
-  message: 'messages',
-};
 
 const UNDATED_LABEL = 'Date unknown';
 // Format in UTC so month grouping is deterministic regardless of the machine's
@@ -257,13 +242,7 @@ export function Timeline({ active = true }: TimelineProps = {}): ReactElement {
     <div hidden={!active}>
       <div className="flex h-full flex-col gap-5">
         <header className="flex flex-col gap-1">
-          <h1
-            ref={headingRef}
-            tabIndex={-1}
-            className="font-display text-3xl font-semibold text-text-primary outline-none"
-          >
-            {headingTitle}
-          </h1>
+          <Heading headingRef={headingRef}>{headingTitle}</Heading>
           {status === 'ready' && items.length > 0 ? (
             <p className="font-body text-base text-text-secondary">Everything, newest first.</p>
           ) : null}
@@ -368,7 +347,7 @@ function MemoryCard({ item, siblings }: { item: ItemCardDTO; siblings: ItemCardD
   const { navigate, view } = useNavigation();
   const date = parseDate(item.captureDate);
   const dateText = date === null ? UNDATED_LABEL : DAY_FMT.format(date);
-  const typeLabel = MEDIA_LABEL[item.mediaType];
+  const typeLabel = MEDIA_META[item.mediaType].label;
   const caption = (item.title ?? item.description ?? '').trim();
   const durationText =
     item.durationSec !== null && item.durationSec > 0 ? formatDuration(item.durationSec) : null;
@@ -390,7 +369,7 @@ function MemoryCard({ item, siblings }: { item: ItemCardDTO; siblings: ItemCardD
       >
         <MediaThumbnail
           item={item}
-          icon={MEDIA_ICON[item.mediaType]}
+          icon={MEDIA_META[item.mediaType].icon}
           className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
           iconClassName="h-7 w-7"
         />

@@ -14,6 +14,7 @@ import { ProgressBar } from '@renderer/components/ProgressBar';
 import { ReassuranceNote } from '@renderer/components/ReassuranceNote';
 import { SkippedItemsDisclosure } from '@renderer/components/SkippedItemsDisclosure';
 import { UndoBanner } from '@renderer/components/UndoBanner';
+import { pluralize } from '@renderer/lib/pluralize';
 import type { ImportState } from '@renderer/lib/use-import';
 import { StepContainer } from '../StepContainer';
 
@@ -95,19 +96,19 @@ export function ImportStep({
           {face === 'cancelled' ? 'Stopped — and kept' : "They're here"}
         </h1>
         <p className="font-body text-lg leading-relaxed text-text-secondary">
-          {found} {found === 1 ? 'memory is' : 'memories are'} now in {personName}&apos;s library.
+          {found} {pluralize(found, 'memory is', 'memories are')} now in {personName}&apos;s library.
         </p>
         {unreadable.length > 0 ? (
           <ReassuranceNote>
-            We couldn&apos;t read {unreadable.length} {unreadable.length === 1 ? 'item' : 'items'} — every
+            We couldn&apos;t read {unreadable.length} {pluralize(unreadable.length, 'item', 'items')} — every
             other memory came through, and nothing was lost.
           </ReassuranceNote>
         ) : null}
         {partialMetadata > 0 ? (
           <ReassuranceNote>
             We couldn&apos;t read every detail for {partialMetadata}{' '}
-            {partialMetadata === 1 ? 'memory' : 'memories'}, but the{' '}
-            {partialMetadata === 1 ? 'memory was' : 'memories were'} still brought in.
+            {pluralize(partialMetadata, 'memory', 'memories')}, but the{' '}
+            {pluralize(partialMetadata, 'memory was', 'memories were')} still brought in.
           </ReassuranceNote>
         ) : null}
         <SkippedItemsDisclosure items={skipped} />

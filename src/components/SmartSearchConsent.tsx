@@ -18,10 +18,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from './Button';
+import { ConsentCardShell } from './ConsentCardShell';
 import { ErrorBanner } from './ErrorBanner';
 import { Icon } from './Icon';
 import { ProgressBar } from './ProgressBar';
-import { cx } from '@renderer/lib/cx';
 import { SMART_SEARCH_MODEL_SIZE_BYTES } from '@shared/smart-search';
 import { useSmartSearchModel } from '@renderer/lib/use-smart-search-model';
 import type { SmartSearchModelError } from '@renderer/lib/use-smart-search-model';
@@ -89,66 +89,21 @@ export function SmartSearchConsent(): ReactElement | null {
   }
 
   return (
-    <section
-      aria-labelledby={headingId}
-      className="flex flex-col gap-6 rounded-2xl border border-border-subtle bg-surface-raised p-6"
+    <ConsentCardShell
+      headingId={headingId}
+      icon="search"
+      title="Find memories by what they're about"
+      subtitle="On-device smart search — entirely optional, and off until you choose it."
+      switchLabelId={switchLabelId}
+      switchStatusId={switchStatusId}
+      switchLabel="Search by meaning"
+      switchStatus={switchStatus()}
+      on={on}
+      switchDisabled={!model.modelReady}
+      onToggle={() => setEnabled((value) => !value)}
     >
-      <div className="flex items-start gap-4">
-        <span
-          aria-hidden
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-sage-50 text-sage-600"
-        >
-          <Icon name="search" className="h-6 w-6" />
-        </span>
-        <div className="flex flex-col gap-1">
-          <h2
-            id={headingId}
-            className="font-display text-2xl font-semibold leading-tight text-text-primary"
-          >
-            Find memories by what they&apos;re about
-          </h2>
-          <p className="font-body text-base text-text-secondary">
-            On-device smart search — entirely optional, and off until you choose it.
-          </p>
-        </div>
-      </div>
-
-      {/* The single global toggle: the state is always visible, and it stays
-          disabled until the model is present + verified (the gate). */}
-      <div className="flex items-center justify-between gap-4 rounded-xl bg-surface-sunken px-4 py-3">
-        <div className="flex flex-col">
-          <span id={switchLabelId} className="font-body text-base font-medium text-text-primary">
-            Search by meaning
-          </span>
-          <span id={switchStatusId} className="font-body text-sm text-text-secondary">
-            {switchStatus()}
-          </span>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-labelledby={switchLabelId}
-          aria-describedby={switchStatusId}
-          disabled={!model.modelReady}
-          onClick={() => setEnabled((value) => !value)}
-          className={cx(
-            'relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-55',
-            on ? 'bg-sage-600' : 'bg-border-interactive',
-          )}
-        >
-          <span
-            aria-hidden
-            className={cx(
-              'inline-block h-5 w-5 rounded-full bg-surface-raised transition-transform duration-150',
-              on ? 'translate-x-6' : 'translate-x-1',
-            )}
-          />
-        </button>
-      </div>
-
       {renderFace()}
-    </section>
+    </ConsentCardShell>
   );
 
   function faceOf(): Face {

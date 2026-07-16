@@ -14,32 +14,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
 import { CategoryChips } from '@renderer/components/CategoryChips';
+import { Heading } from '@renderer/components/Heading';
 import { Icon } from '@renderer/components/Icon';
-import type { IconName } from '@renderer/components/Icon';
 import { ItemMedia } from '@renderer/components/ItemMedia';
 import { ItemTranscript } from '@renderer/components/ItemTranscript';
 import { MediaThumbnail } from '@renderer/components/MediaThumbnail';
 import { cx } from '@renderer/lib/cx';
+import { MEDIA_META } from '@renderer/lib/media-meta';
 import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 import { useFavourite } from '@renderer/lib/use-favourite';
 import { useNavigation } from '@renderer/lib/navigation';
-import type { ItemCardDTO, MediaType } from '@shared/kawsay-api';
-
-const TYPE_LABEL: Record<MediaType, string> = {
-  photo: 'Photo',
-  video: 'Video',
-  audio: 'Voice note',
-  document: 'Document',
-  message: 'Message',
-};
-
-const TYPE_ICON: Record<MediaType, IconName> = {
-  photo: 'photos',
-  video: 'video',
-  audio: 'audio',
-  document: 'document',
-  message: 'messages',
-};
+import type { ItemCardDTO } from '@shared/kawsay-api';
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
@@ -58,7 +43,7 @@ function formatDate(iso: string | null): string | null {
  *  shared by the heading and the ←/→ live-region announcement so both agree. */
 function headingOf(item: ItemCardDTO): string {
   const title = (item.title ?? '').trim();
-  return title.length > 0 ? title : TYPE_LABEL[item.mediaType];
+  return title.length > 0 ? title : MEDIA_META[item.mediaType].label;
 }
 
 /** Interactive elements that already own Left/Right themselves (text cursor
@@ -168,7 +153,7 @@ export function ItemView(): ReactElement | null {
     return null;
   }
 
-  const typeLabel = TYPE_LABEL[item.mediaType];
+  const typeLabel = MEDIA_META[item.mediaType].label;
   const heading = headingOf(item);
   const dateText = formatDate(item.captureDate);
   const transcribable = item.mediaType === 'audio' || item.mediaType === 'video';
@@ -204,19 +189,13 @@ export function ItemView(): ReactElement | null {
       <header className="flex items-start gap-4">
         <MediaThumbnail
           item={item}
-          icon={TYPE_ICON[item.mediaType]}
+          icon={MEDIA_META[item.mediaType].icon}
           className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-sunken text-sage-600"
           iconClassName="h-9 w-9"
         />
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex items-center gap-1">
-            <h1
-              ref={headingRef}
-              tabIndex={-1}
-              className="font-display text-3xl font-semibold text-text-primary outline-none"
-            >
-              {heading}
-            </h1>
+            <Heading headingRef={headingRef}>{heading}</Heading>
             <FavouriteToggle
               item={item}
               initialFavourite={seededFavourite}
