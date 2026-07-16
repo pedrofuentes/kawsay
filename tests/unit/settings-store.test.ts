@@ -57,6 +57,49 @@ describe('settings store — defaults (AC-13 / Journey G, #433)', () => {
 
     expect(store.get()).toEqual({ textSize: 'large', reducedMotion: false });
   });
+
+  // A syntactically-VALID but non-object top-level JSON (`null`, a number, a
+  // string, an array) parses without a SyntaxError, so it slips past the
+  // JSON.parse try/catch. Without an explicit shape guard, dereferencing a
+  // field on it throws a TypeError OUT of read() → get()/set() → the handler,
+  // rejecting the renderer invoke and breaking the "malformed ⇒ calm baseline,
+  // never a throw" invariant. Each of these must resolve to defaults, quietly.
+  it.each([
+    ['JSON null', 'null'],
+    ['a bare number', '42'],
+    ['a bare string', '"x"'],
+    ['a top-level array', '[]'],
+  ])('falls back to defaults for a valid-but-non-object settings.json (%s) — never throws', (_label, raw) => {
+    const store = createSettingsStore({
+      filePath: '/settings.json',
+      fs: fsDouble({ readFileSync: () => raw }),
+    });
+
+    expect(() => store.get()).not.toThrow();
+    expect(store.get()).toEqual({ textSize: 'default', reducedMotion: false });
+  });
+
+  it('recovers from a non-object settings.json on the very next set() — persists rather than throwing', () => {
+    let written: string | undefined;
+    const store = createSettingsStore({
+      filePath: '/settings.json',
+      fs: fsDouble({
+        // Starts as JSON `null` (the crashing shape); once a write lands, the
+        // fs double serves the written bytes back so the round trip is real.
+        readFileSync: () => written ?? 'null',
+        writeFileSync: (_path, data) => {
+          written = data as string;
+        },
+      }),
+    });
+
+    let resolved: unknown;
+    expect(() => {
+      resolved = store.set({ textSize: 'large' });
+    }).not.toThrow();
+    expect(resolved).toEqual({ textSize: 'large', reducedMotion: false });
+    expect(store.get()).toEqual({ textSize: 'large', reducedMotion: false });
+  });
 });
 
 describe('settings store — persistence round-trip', () => {
