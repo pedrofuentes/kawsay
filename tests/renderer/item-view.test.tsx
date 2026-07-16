@@ -42,7 +42,7 @@ function renderItem(item: ItemCardDTO, api: FakeApi = makeFakeApi()) {
 }
 
 describe('ItemView — the per-item transcript (read-only, #136)', () => {
-  it('shows the spoken words of a finished transcript, read-only (no media element, no editor)', async () => {
+  it('shows the spoken words of a finished transcript, read-only alongside a never-autoplay player', async () => {
     const item = makeItemCard({
       id: '00000000-0000-4000-8000-0000000000a1',
       mediaType: 'audio',
@@ -59,9 +59,14 @@ describe('ItemView — the per-item transcript (read-only, #136)', () => {
 
     expect(await screen.findByText(/once upon a time, by the sea/i)).toBeInTheDocument();
     expect(api.getTranscript).toHaveBeenCalledWith({ id: '00000000-0000-4000-8000-0000000000a1' });
-    // Read-only: nothing auto-plays and nothing is editable (R11 / AC-14 posture).
-    expect(container.querySelector('video, audio')).toBeNull();
+    // The words themselves stay read-only — no editor (R11 / AC-14 posture).
     expect(container.querySelector('textarea, input, [contenteditable="true"]')).toBeNull();
+    // A voice note IS now playable — but only on explicit intent: the player is
+    // present with controls and never autoplays (#428 / P6).
+    const audio = container.querySelector('audio');
+    expect(audio).not.toBeNull();
+    expect(audio).toHaveAttribute('controls');
+    expect(audio).not.toHaveAttribute('autoplay');
   });
 
   it('marks the words with the detected language so a screen reader pronounces them (lang)', async () => {
@@ -899,6 +904,47 @@ describe('ItemView — accessibility (WCAG 2.1 AA)', () => {
     });
     const { container } = renderItem(item, api);
     await screen.findByText(/transcribing/i);
+    await expectNoAxeViolations(container);
+  });
+});
+
+describe('ItemView — explicit-intent media playback (Journey F / #428)', () => {
+  it('offers a never-autoplay audio player for a voice note memory', async () => {
+    const item = makeItemCard({ mediaType: 'audio', title: 'A voice note' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /a voice note/i });
+
+    const audio = container.querySelector('audio');
+    expect(audio).not.toBeNull();
+    expect(audio).toHaveAttribute('controls');
+    expect(audio).not.toHaveAttribute('autoplay');
+  });
+
+  it('offers a never-autoplay video player for a video memory', async () => {
+    const item = makeItemCard({ mediaType: 'video', title: 'A home movie' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /a home movie/i });
+
+    const video = container.querySelector('video');
+    expect(video).not.toBeNull();
+    expect(video).toHaveAttribute('controls');
+    expect(video).not.toHaveAttribute('autoplay');
+  });
+
+  it('opens a photo full-size, and shows no player for a still image', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'Sunset over the bay' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /sunset over the bay/i });
+
+    const full = container.querySelector('img[src^="kawsay-media:"]');
+    expect(full).not.toBeNull();
+    expect(container.querySelector('audio, video')).toBeNull();
+  });
+
+  it('stays axe-clean with a video player present', async () => {
+    const item = makeItemCard({ mediaType: 'video', title: 'A quiet clip' });
+    const { container } = renderItem(item);
+    await screen.findByRole('heading', { level: 1, name: /a quiet clip/i });
     await expectNoAxeViolations(container);
   });
 });
