@@ -13,8 +13,10 @@
  * discriminate: it first asserts the packaged renderer actually loaded (a blank or
  * failed page trivially "makes no requests"), then asserts each egress attempt is
  * refused by the app's OWN Content-Security-Policy (`connect-src 'none'`,
- * `img-src 'self' data:`). If any control regressed so the renderer COULD egress,
- * these assertions fail.
+ * `img-src 'self' data: kawsay-media:`). The only local-media allowances (#428) are
+ * the non-networked `kawsay-media:` scheme on `img-src`/`media-src`; the egress floor
+ * (`default-src`/`connect-src 'none'`) is untouched, so an external fetch/img/ws is
+ * still refused. If any control regressed so the renderer COULD egress, these fail.
  *
  * Two properties keep it honest:
  *   - Boot-time coverage (#291): egress is observed at the BrowserContext level with

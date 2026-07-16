@@ -16,6 +16,7 @@ import { Button } from '@renderer/components/Button';
 import { CategoryChips } from '@renderer/components/CategoryChips';
 import { Icon } from '@renderer/components/Icon';
 import type { IconName } from '@renderer/components/Icon';
+import { ItemMedia } from '@renderer/components/ItemMedia';
 import { ItemTranscript } from '@renderer/components/ItemTranscript';
 import { MediaThumbnail } from '@renderer/components/MediaThumbnail';
 import { cx } from '@renderer/lib/cx';
@@ -234,6 +235,7 @@ export function ItemView(): ReactElement | null {
         </div>
       </header>
 
+      <ItemMedia item={item} />
       {transcribable ? <ItemTranscript item={item} /> : null}
       <CategoryChips item={item} />
     </section>

@@ -1,13 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  constants as fsConstants,
   copyFileSync,
   createReadStream,
   existsSync,
   closeSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
 } from 'node:fs';
@@ -282,6 +286,13 @@ interface OriginalRef {
   ext: string | null;
 }
 
+/** Same, plus the SOURCE roots a surviving `in_place` occurrence belongs to — the
+ *  allowlist a serve-time confinement check confines the file to (§2.4). */
+interface ServableOriginalRef extends OriginalRef {
+  sourceRoot: string | null;
+  sourceOrigin: string | null;
+}
+
 /**
  * Resolve a memory's original through a SURVIVING occurrence (never a single
  * `items.stored_path`, which deliberately does not exist — §4.4). Prefers an
@@ -310,6 +321,192 @@ export function resolveOriginal(
     assertSafeHash(row.hash);
     return assertWithinRoot(root, blobAbsPath(root, row.hash, row.ext));
   }
+  return null;
+}
+
+/** Realpath a path (symlinks resolved), or null if it cannot be resolved (missing,
+ *  broken symlink, permission). */
+function safeRealpath(p: string): string | null {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is `realTarget` (an ALREADY realpath-resolved path) contained within — equal to,
+ * or under — one of the servable roots? Each root is realpath-resolved here; an
+ * EMPTY or NON-ABSOLUTE root entry is refused by the primitive itself (never
+ * relying on the caller to pre-filter), so a `''`/`'.'` entry can never degrade to
+ * "allow anything under cwd".
+ */
+function realPathContainedIn(realTarget: string, servableRoots: readonly string[]): boolean {
+  for (const rootCandidate of servableRoots) {
+    if (typeof rootCandidate !== 'string' || rootCandidate.length === 0) continue;
+    if (!isAbsolute(rootCandidate)) continue;
+    const realRoot = safeRealpath(rootCandidate);
+    if (realRoot === null) continue;
+    if (realTarget === realRoot || realTarget.startsWith(realRoot + sep)) return true;
+  }
+  return false;
+}
+
+/**
+ * SERVE-TIME allowlist check (ARCHITECTURE §2.4). The file's REAL path (symlinks
+ * resolved) must be contained within one of the servable roots (each also
+ * realpath-resolved; empty/non-absolute entries refused). Returns false when the
+ * path cannot be resolved, or the real path escapes every root. This is the check
+ * that closes the import-time→serve-time TOCTOU for in-place originals: a later
+ * symlink swap at a recorded path resolves OUTSIDE the source root and is refused.
+ */
+export function isServablePath(absPath: string, servableRoots: readonly string[]): boolean {
+  const real = safeRealpath(absPath);
+  if (real === null) return false;
+  return realPathContainedIn(real, servableRoots);
+}
+
+/**
+ * A resolved original that is SAFE to stream to the renderer, PINNED by an open file
+ * descriptor. The `fd` is the authority — the caller streams FROM the fd and never
+ * re-opens by path, so a swap of the path after validation cannot redirect the read
+ * (TOCTOU). The caller OWNS the fd and MUST close it on every path.
+ */
+export interface ServableOriginal {
+  /** An open, read-only fd on the validated regular file. Caller must close it. */
+  fd: number;
+  /** The file size from `fstat` on the SAME fd (drives Content-Length / Range). */
+  size: number;
+  kind: OriginalKind;
+}
+
+/**
+ * Open a validated CANONICAL (realpath-resolved, symlink-free) path to a read-only
+ * fd, fstat it, and verify it is a regular file — the atomic "pin the file we just
+ * validated" step (§2.4). Exported as a testable seam. Closes the fd and THROWS if it
+ * is not a regular file; returns null if the file vanished — or a symlink was planted
+ * in the realpath→open window (refused by `O_NOFOLLOW` → `ELOOP`) — before the open.
+ */
+/**
+ * The complete hardened secure-open recipe every media original is opened with (§2.4):
+ * `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`.
+ *  - `O_NOFOLLOW` closes the realpath→open symlink race (CWE-367): if the FINAL path
+ *    component is a symlink at open time — one planted in the window after realpath
+ *    resolved a legitimate in-root path — the open fails with `ELOOP` instead of
+ *    following it out of the servable roots.
+ *  - `O_NONBLOCK` prevents a main-thread FREEZE (CWE-400): a synchronous open of a
+ *    writer-less FIFO (or certain devices) planted at the path would otherwise block
+ *    indefinitely, hanging every window + IPC. With it, the open returns immediately
+ *    and the fstat `isFile()` gate below rejects the non-regular file. It is a no-op
+ *    for a regular file (open succeeds; reads never return EAGAIN), so streaming a
+ *    real original is byte-for-byte unaffected.
+ * Both `O_NOFOLLOW`/`O_NONBLOCK` are absent on Windows and degrade to `0` (Windows
+ * symlink/FIFO creation is privileged, so the local surface there is minimal).
+ */
+export const MEDIA_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+
+export function pinRegularFile(canonicalPath: string, kind: OriginalKind): ServableOriginal | null {
+  // CROSS-PLATFORM symlink reject BEFORE the open (lstat does NOT follow the link).
+  // `canonicalPath` is realpath-resolved, so it is never a symlink under normal
+  // conditions — this catches one PLANTED at that exact path in the realpath→open
+  // window. It is the load-bearing defense on WINDOWS, where `O_NOFOLLOW` is
+  // unavailable (so `MEDIA_OPEN_FLAGS` drops it to 0 and the open would otherwise
+  // follow the link). On POSIX, `O_NOFOLLOW` below additionally makes the check
+  // ATOMIC (closes the lstat→open window); on Windows a narrow lstat→open residual
+  // remains, mitigated by Windows requiring PRIVILEGE to create a symlink (see the
+  // Windows residual note in the PR). A missing entry is likewise not servable.
+  const leaf = lstatSync(canonicalPath, { throwIfNoEntry: false });
+  if (leaf === undefined || leaf.isSymbolicLink()) return null;
+
+  let fd: number;
+  try {
+    // Open with the hardened {@link MEDIA_OPEN_FLAGS}. We stream from THIS fd, so no
+    // later re-open reintroduces a race; the fstat `isFile()` gate below rejects
+    // anything non-regular.
+    fd = openSync(canonicalPath, MEDIA_OPEN_FLAGS);
+  } catch {
+    // ELOOP (planted symlink) / ENOENT (vanished) / any open failure → not servable.
+    // Treated as the existing not-found reject: null → 404 with zero bytes, no leak.
+    return null;
+  }
+  let stats: ReturnType<typeof fstatSync>;
+  try {
+    stats = fstatSync(fd);
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+  if (!stats.isFile()) {
+    closeSync(fd);
+    rejectPath('resolved media is not a regular file');
+  }
+  return { fd, size: stats.size, kind };
+}
+
+/**
+ * Resolve a memory's original, enforce SERVE-TIME path confinement (§2.4), and PIN
+ * it by an open fd — the boundary the `kawsay-media:` protocol streams through.
+ *
+ * The realpath + containment check runs exactly ONCE, then the CANONICAL path is
+ * opened to an fd and fstat-verified; the fd (not a path) is returned, so the file
+ * that was validated is the exact file that is streamed. Content-addressed originals
+ * are confined to the library root; in-place originals (the user's OWN files outside
+ * the library) must realpath INSIDE a registered SOURCE root the user chose — so a
+ * later symlink/inode swap at a recorded path can never redirect the read. Returns
+ * null for a missing/unresolvable/absent file (a plain not-found); THROWS
+ * `ERR_ORIGINAL_PATH_ESCAPE` when a real path escapes its servable roots or is not a
+ * regular file. The caller OWNS and MUST close the returned fd.
+ */
+export function resolveServableOriginal(
+  db: CatalogDatabase,
+  root: string,
+  itemId: string,
+): ServableOriginal | null {
+  const row = db
+    .prepare(
+      `SELECT o.original_kind AS kind, o.original_path AS path,
+              i.content_hash AS hash, i.original_ext AS ext,
+              s.root_path AS sourceRoot, s.origin_path AS sourceOrigin
+       FROM item_occurrences o
+       JOIN items i ON i.id = o.item_id
+       JOIN sources s ON s.id = o.source_id
+       WHERE o.item_id = @itemId AND o.original_kind <> 'none'
+       ORDER BY CASE o.original_kind WHEN 'in_place' THEN 0 ELSE 1 END, o.created_at, o.id
+       LIMIT 1`,
+    )
+    .get<ServableOriginalRef>({ itemId });
+  if (!row) return null;
+
+  if (row.kind === 'content_addressed' && row.hash) {
+    assertSafeHash(row.hash);
+    // Confined to the library root by construction. Realpath ONCE, confine, then pin.
+    const target = assertWithinRoot(root, blobAbsPath(root, row.hash, row.ext));
+    const real = safeRealpath(target);
+    if (real === null) return null; // blob not on disk → nothing to serve
+    if (!realPathContainedIn(real, [root])) {
+      rejectPath('content-addressed original escapes the library root');
+    }
+    return pinRegularFile(real, 'content_addressed');
+  }
+
+  if (row.kind === 'in_place') {
+    if (row.path === null) return null;
+    // The allowlist for an in-place original: the SOURCE root(s) the user chose.
+    // (An in-place file legitimately lives outside the library, so the library root
+    // does NOT apply here.) A single realpath of the untrusted path, then containment.
+    const servableRoots = [row.sourceRoot, row.sourceOrigin].filter(
+      (candidate): candidate is string => typeof candidate === 'string',
+    );
+    const real = safeRealpath(row.path);
+    if (real === null) return null; // missing/unresolvable → a plain not-found
+    if (!realPathContainedIn(real, servableRoots)) {
+      rejectPath('in-place original escapes its source root(s)');
+    }
+    // Pin the CANONICAL, symlink-free path — the exact file we just validated.
+    return pinRegularFile(real, 'in_place');
+  }
+
   return null;
 }
 
