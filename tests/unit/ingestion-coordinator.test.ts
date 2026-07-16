@@ -134,8 +134,46 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
     worker.emit({ type: 'ready' });
     worker.emit({ type: 'error', message: 'unsupported source' });
 
-    expect(events.at(-1)).toMatchObject({ jobId: UUID, phase: 'done', summary: null, error: 'unsupported source' });
+    expect(events.at(-1)).toMatchObject({
+      jobId: UUID,
+      phase: 'done',
+      summary: null,
+      error: 'ingestion worker crashed before completing',
+    });
     expect(importProgressEventSchema.safeParse(events.at(-1)).success).toBe(true);
+    expect(worker.terminations).toBe(1);
+    expect(coordinator.active()).toEqual([]);
+  });
+
+  it('NEVER forwards a raw worker error message to the renderer; only to the local logger (#440)', () => {
+    const worker = fakeHandle();
+    const events: ImportProgressEvent[] = [];
+    const faultLog: Error[] = [];
+    const coordinator = createIngestionCoordinator({
+      spawn: () => worker.handle,
+      emitProgress: (e) => events.push(e),
+      logWorkerFault: (error) => faultLog.push(error),
+    });
+
+    coordinator.start(job());
+    worker.emit({ type: 'ready' });
+    // A worker `error` protocol message whose text embeds a filesystem path + a
+    // "secret" filename — the kind of raw detail that must NOT reach the renderer.
+    const raw = 'parse failed at /Users/alice/private/secret.json';
+    worker.emit({ type: 'error', message: raw });
+
+    // The renderer-facing event carries ONLY the safe fixed copy — no path, no
+    // filename, no parse detail (the sibling worker-fault path already does this).
+    const terminal = events.at(-1);
+    expect(terminal?.error).toBe('ingestion worker crashed before completing');
+    expect(terminal?.error).not.toContain('/Users/alice');
+    expect(terminal?.error).not.toContain('secret.json');
+    expect(importProgressEventSchema.safeParse(terminal).success).toBe(true);
+
+    // ...but the RAW message DID reach the local diagnostic sink (never the boundary).
+    expect(faultLog).toHaveLength(1);
+    expect(faultLog[0]?.message).toContain('/Users/alice/private/secret.json');
+
     expect(worker.terminations).toBe(1);
     expect(coordinator.active()).toEqual([]);
   });
