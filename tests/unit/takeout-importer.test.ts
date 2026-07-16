@@ -269,6 +269,17 @@ function plainEmail(opts: {
   return `${headers.join('\r\n')}\r\n\r\n${opts.body ?? ''}`;
 }
 
+function plainEmailWithTo(opts: { from: string; to: string; subject: string }): string {
+  const headers = [
+    `From: ${opts.from}`,
+    `To: ${opts.to}`,
+    `Subject: ${opts.subject}`,
+    'Date: Mon, 01 Jan 2024 00:00:00 +0000',
+    'Content-Type: text/plain; charset=utf-8',
+  ];
+  return `${headers.join('\r\n')}\r\n\r\nbody`;
+}
+
 function emailWithJpeg(opts: {
   from: string;
   subject: string;
@@ -300,6 +311,46 @@ function emailWithJpeg(opts: {
 
 function sidecar(obj: Record<string, unknown>): string {
   return JSON.stringify(obj);
+}
+
+/** A multipart email with full control over To/Message-ID/attachment filename +
+ *  content-type, for edge cases plainEmail/emailWithJpeg don't cover. */
+function emailWithAttachment(opts: {
+  from: string;
+  to?: string;
+  subject: string;
+  date: string;
+  messageId?: string;
+  body: string;
+  filename?: string;
+  contentType: string;
+  bytes: string;
+}): string {
+  const headers = [`From: ${opts.from}`];
+  if (opts.to !== undefined) headers.push(`To: ${opts.to}`);
+  headers.push(`Subject: ${opts.subject}`);
+  headers.push(`Date: ${opts.date}`);
+  if (opts.messageId !== undefined) headers.push(`Message-ID: ${opts.messageId}`);
+  headers.push('MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="b1"');
+  const disposition =
+    opts.filename !== undefined
+      ? `Content-Disposition: attachment; filename="${opts.filename}"`
+      : 'Content-Disposition: attachment';
+  return [
+    ...headers,
+    '',
+    '--b1',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    opts.body,
+    '--b1',
+    `Content-Type: ${opts.contentType}`,
+    disposition,
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(opts.bytes, 'utf8').toString('base64'),
+    '--b1--',
+  ].join('\r\n');
 }
 
 const EMAIL_0 = plainEmail({
@@ -925,6 +976,585 @@ describe('takeoutImporter (card C4 — Google Takeout importer, AC-11)', () => {
       if (next.done) {
         expect(next.value.recordCount).toBeGreaterThanOrEqual(1);
       }
+    });
+  });
+
+  describe('canHandle — each folder marker evaluated in isolation', () => {
+    // The existing "Takeout directory" test satisfies archive_browser.html
+    // AND Mail AND Google Photos simultaneously, so the `||` chain's later
+    // arms are never actually reached (short-circuit). Each condition here
+    // is the ONLY truthy marker present, forcing that specific arm.
+    it('accepts a folder containing only a Mail/ subdirectory', async () => {
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(EMAIL_0) } });
+      expect(await takeoutImporter.canHandle(ROOT, makeDeps(f))).toBe(true);
+    });
+
+    it('accepts a folder containing only a Google Photos/ subdirectory', async () => {
+      const f = buildFs({ 'Google Photos/Trip/photo.jpg': { content: 'jpeg' } });
+      expect(await takeoutImporter.canHandle(ROOT, makeDeps(f))).toBe(true);
+    });
+
+    it('accepts a folder literally named "Takeout" with none of the other markers', async () => {
+      const f = buildFs({ 'random.txt': { content: 'x' } });
+      expect(await takeoutImporter.canHandle(join('/drop', 'Takeout'), makeDeps(f))).toBe(false);
+      // Re-root the fake fs under a path whose basename is "Takeout".
+      const takeoutRoot = '/drop/Takeout';
+      const f2 = buildFs({});
+      f2.fs.readDir = async (path: string) =>
+        path === takeoutRoot ? ['random.txt'] : await f.fs.readDir(path);
+      f2.fs.stat = async (path: string) =>
+        path === takeoutRoot
+          ? dirStat()
+          : path === join(takeoutRoot, 'random.txt')
+            ? fileStat({ content: 'x' })
+            : await f.fs.stat(path);
+      expect(await takeoutImporter.canHandle(takeoutRoot, makeDeps(f2))).toBe(true);
+    });
+
+    it('accepts a folder containing a bare .mbox file with none of the other markers', async () => {
+      const f = buildFs({ 'export.mbox': { content: mbox(EMAIL_0) } });
+      expect(await takeoutImporter.canHandle(ROOT, makeDeps(f))).toBe(true);
+    });
+
+    it('rejects a folder with only JSON files and no classifiable media (hasJson without hasMedia)', async () => {
+      const f = buildFs({ 'notes.json': { content: '{}' } });
+      expect(await takeoutImporter.canHandle(ROOT, makeDeps(f))).toBe(false);
+    });
+
+    it('rejects a folder with only media and no JSON sidecars (hasMedia without hasJson)', async () => {
+      const f = buildFs({ 'photo.jpg': { content: 'jpeg' } });
+      expect(await takeoutImporter.canHandle(ROOT, makeDeps(f))).toBe(false);
+    });
+
+    it('returns false when readDir throws inside the folder marker scan', async () => {
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(EMAIL_0) } }, {});
+      f.fs.readDir = async () => {
+        throw new Error('EACCES: permission denied');
+      };
+      expect(await takeoutImporter.canHandle(ROOT, makeDeps(f))).toBe(false);
+    });
+  });
+
+  describe('discover() over a bare single file / unreadable input path', () => {
+    it('imports a single media file passed directly as inputPath (not a folder, not a zip)', async () => {
+      const filePath = abs('lone-photo.jpg');
+      const f = buildFs({ 'lone-photo.jpg': { content: 'jpeg', mtimeMs: utc(2020, 0, 1, 0, 0, 0) } });
+
+      const { records, skips } = await run(filePath, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      expect(records).toHaveLength(1);
+      expect(records[0]?.sourceRef).toBe('lone-photo.jpg');
+      expect(records[0]?.mediaType).toBe('photo');
+    });
+
+    it('reports E_STAT and returns an empty result when the input path itself cannot be statted', async () => {
+      const f = buildFs({});
+      f.fs.stat = async () => {
+        throw new Error('ENOENT: no such file or directory');
+      };
+
+      const { records, result, skips } = await run(ROOT, makeDeps(f));
+
+      expect(records).toEqual([]);
+      expect(result.recordCount).toBe(0);
+      expect(skips).toContainEqual(expect.objectContaining({ ref: ROOT, code: 'E_STAT' }));
+    });
+  });
+
+  describe('folder discovery E_READDIR', () => {
+    it('reports E_READDIR for an unreadable subdirectory and keeps importing the rest', async () => {
+      const f = buildFs(
+        {
+          'Google Photos/A/good.jpg': { content: 'jpeg', mtimeMs: utc(2020, 0, 1, 0, 0, 0) },
+          'Google Photos/B/also-good.jpg': { content: 'jpeg', mtimeMs: utc(2020, 0, 1, 0, 0, 0) },
+        },
+        { readDirErrors: ['Google Photos/A'] },
+      );
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(records.some((r) => r.sourceRef.endsWith('also-good.jpg'))).toBe(true);
+      expect(records.some((r) => r.sourceRef.endsWith('good.jpg') && !r.sourceRef.includes('also'))).toBe(
+        false,
+      );
+      expect(skips).toContainEqual(
+        expect.objectContaining({ ref: 'Google Photos/A', code: 'E_READDIR' }),
+      );
+    });
+  });
+
+  describe('sidecar edge cases beyond corrupt JSON', () => {
+    it('reports E_SIDECAR when the sidecar file itself cannot be read', async () => {
+      const f = buildFs(
+        {
+          'Google Photos/Locked/photo.jpg': { content: 'jpeg', mtimeMs: utc(2019, 0, 1, 0, 0, 0) },
+          'Google Photos/Locked/photo.jpg.json': { content: sidecar({}) },
+        },
+        { readFileErrors: ['Google Photos/Locked/photo.jpg.json'] },
+      );
+
+      const { byRef, skips } = await run(ROOT, makeDeps(f));
+
+      expect(byRef.get('Google Photos/Locked/photo.jpg')).toBeDefined();
+      expect(byRef.get('Google Photos/Locked/photo.jpg')?.date?.source).toBe('mtime');
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          ref: 'Google Photos/Locked/photo.jpg',
+          code: 'E_SIDECAR',
+          reason: expect.stringContaining('unreadable'),
+        }),
+      );
+    });
+
+    it('falls back cleanly when the sidecar JSON parses but is not an object (e.g. a bare array)', async () => {
+      const f = buildFs({
+        'Google Photos/Weird/photo.jpg': { content: 'jpeg', mtimeMs: utc(2018, 0, 1, 0, 0, 0) },
+        'Google Photos/Weird/photo.jpg.json': { content: '[1,2,3]' },
+      });
+
+      const { byRef, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      expect(byRef.get('Google Photos/Weird/photo.jpg')?.date?.source).toBe('mtime');
+    });
+
+    it('treats a numeric (not string) sidecar timestamp the same as a string one', async () => {
+      const f = buildFs({
+        'Google Photos/Num/photo.jpg': { content: 'jpeg' },
+        'Google Photos/Num/photo.jpg.json': {
+          content: sidecar({ photoTakenTime: { timestamp: 1609459200 } }),
+        },
+      });
+
+      const { byRef } = await run(ROOT, makeDeps(f));
+
+      expect(byRef.get('Google Photos/Num/photo.jpg')?.date?.value.getTime()).toBe(
+        1609459200 * 1000,
+      );
+    });
+
+    it('degrades a non-numeric sidecar timestamp string to no sidecar date', async () => {
+      const f = buildFs({
+        'Google Photos/Bad2/photo.jpg': { content: 'jpeg', mtimeMs: utc(2014, 0, 1, 0, 0, 0) },
+        'Google Photos/Bad2/photo.jpg.json': {
+          content: sidecar({ photoTakenTime: { timestamp: 'not-a-timestamp' } }),
+        },
+      });
+
+      const { byRef, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      expect(byRef.get('Google Photos/Bad2/photo.jpg')?.date?.source).toBe('mtime');
+    });
+
+    it('degrades non-numeric sidecar lat/lon to no gps and treats a zero altitude the same as absent', async () => {
+      const f = buildFs({
+        'Google Photos/GeoEdge/bad-latlon.jpg': { content: 'jpeg' },
+        'Google Photos/GeoEdge/bad-latlon.jpg.json': {
+          content: sidecar({ geoData: { latitude: 'north', longitude: -122 } }),
+        },
+        'Google Photos/GeoEdge/zero-alt.jpg': { content: 'jpeg' },
+        'Google Photos/GeoEdge/zero-alt.jpg.json': {
+          content: sidecar({ geoData: { latitude: 10, longitude: 20, altitude: 0 } }),
+        },
+      });
+
+      const { byRef } = await run(ROOT, makeDeps(f));
+
+      expect(byRef.get('Google Photos/GeoEdge/bad-latlon.jpg')?.gps).toBeNull();
+      expect(byRef.get('Google Photos/GeoEdge/zero-alt.jpg')?.gps).toEqual({ lat: 10, lon: 20 });
+    });
+  });
+
+  describe('EXIF GPS with a non-zero altitude and camera meta', () => {
+    it('includes altitude in EXIF-derived GPS when present, and records cameraMake/cameraModel', async () => {
+      const photoPath = abs('Google Photos/Cam/photo.jpg');
+      const f = buildFs({ 'Google Photos/Cam/photo.jpg': { content: 'jpeg' } });
+      const exif: ExifData = {
+        gps: { lat: 10, lon: 20, alt: 55 },
+        cameraMake: 'Canon',
+        cameraModel: 'EOS R5',
+      };
+
+      const { byRef } = await run(ROOT, makeDeps(f, { exif: { byPath: { [photoPath]: exif } } }));
+      const photo = byRef.get('Google Photos/Cam/photo.jpg');
+
+      expect(photo?.gps).toEqual({ lat: 10, lon: 20, alt: 55 });
+      expect(photo?.sourceMeta).toMatchObject({ cameraMake: 'Canon', cameraModel: 'EOS R5' });
+    });
+
+    it('reports no crash (returns null gps/exif) when readExif throws', async () => {
+      const photoPath = abs('Google Photos/Broken/photo.jpg');
+      const f = buildFs({
+        'Google Photos/Broken/photo.jpg': { content: 'jpeg', mtimeMs: utc(2013, 0, 1, 0, 0, 0) },
+      });
+
+      const { byRef, skips } = await run(
+        ROOT,
+        makeDeps(f, { exif: { throwsFor: [photoPath] } }),
+      );
+      const photo = byRef.get('Google Photos/Broken/photo.jpg');
+
+      expect(skips).toEqual([]);
+      expect(photo?.gps).toBeNull();
+      expect(photo?.date?.source).toBe('mtime');
+    });
+
+    it('falls back to the extension-derived mime when probeMedia throws for a video', async () => {
+      const f = buildFs({ 'Google Photos/BrokenProbe/clip.mp4': { content: 'mp4bytes' } });
+      const deps = makeDeps(f);
+      deps.probeMedia = async () => {
+        throw new Error('ffprobe crashed');
+      };
+
+      const { byRef } = await run(ROOT, deps);
+      const clip = byRef.get('Google Photos/BrokenProbe/clip.mp4');
+
+      expect(clip?.mimeType).toBe('video/mp4');
+      expect(clip?.durationSec).toBeNull();
+    });
+  });
+
+  describe('a media file directly at the export root has no album', () => {
+    it('omits sourceMeta.album for a Google Photos file with no parent album folder', async () => {
+      const f = buildFs({ 'root-level.jpg': { content: 'jpeg' } });
+      f.fs.readDir = async (path: string) => (path === ROOT ? ['root-level.jpg'] : []);
+
+      const { byRef } = await run(ROOT, makeDeps(f));
+
+      expect(byRef.get('root-level.jpg')?.sourceMeta.album).toBeUndefined();
+    });
+  });
+
+  describe('email To:/Message-ID headers and non-Error failure formatting', () => {
+    it('records sourceMeta.to for a single recipient and for multiple recipients', async () => {
+      const single = plainEmailWithTo({ from: 'A <a@x.com>', to: 'B <b@x.com>', subject: 'S1' });
+      const multi = plainEmailWithTo({
+        from: 'A <a@x.com>',
+        to: 'B <b@x.com>, C <c@x.com>',
+        subject: 'S2',
+      });
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(single, multi) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      const r1 = records.find((r) => r.sourceMeta.subject === 'S1');
+      const r2 = records.find((r) => r.sourceMeta.subject === 'S2');
+      expect(r1?.sourceMeta.to).toContain('b@x.com');
+      expect(r2?.sourceMeta.to).toContain('b@x.com');
+      expect(r2?.sourceMeta.to).toContain('c@x.com');
+      // Multiple recipients are joined into one string (the array branch of
+      // addressText), distinct from the single-AddressObject branch above.
+      expect(String(r2?.sourceMeta.to)).toContain(', ');
+    });
+
+    it('records sourceMeta.messageId when the header is present', async () => {
+      const withId = emailWithAttachment({
+        from: 'A <a@x.com>',
+        subject: 'Has an ID',
+        date: 'Mon, 01 Jan 2024 00:00:00 +0000',
+        messageId: '<unique-id-123@mail.example.com>',
+        body: 'hi',
+        contentType: 'image/jpeg',
+        filename: 'pic.jpg',
+        bytes: 'jpeg-bytes',
+      });
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(withId) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      const email = records.find((r) => r.mediaType === 'message');
+      expect(email?.sourceMeta.messageId).toContain('unique-id-123');
+    });
+
+    it('generates a fallback attachment name when the part has no filename, and classifies it by Content-Type', async () => {
+      const noFilename = emailWithAttachment({
+        from: 'A <a@x.com>',
+        subject: 'No filename',
+        date: 'Mon, 01 Jan 2024 00:00:00 +0000',
+        body: 'attached',
+        contentType: 'image/png',
+        bytes: 'png-bytes',
+        // filename intentionally omitted
+      });
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(noFilename) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      const attachment = records.find((r) => r.mediaType === 'photo');
+      expect(attachment).toBeDefined();
+      expect(attachment?.sourceMeta.attachmentFileName).toMatch(/^attachment-0-0/);
+      expect(attachment?.mimeType).toBe('image/png');
+    });
+
+    it('classifies an mbox attachment by Content-Type when its filename extension is unrecognized', async () => {
+      const oddExt = emailWithAttachment({
+        from: 'A <a@x.com>',
+        subject: 'Odd extension',
+        date: 'Mon, 01 Jan 2024 00:00:00 +0000',
+        body: 'attached',
+        contentType: 'audio/mpeg',
+        filename: 'voice.xyz123',
+        bytes: 'audio-bytes',
+      });
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(oddExt) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      const attachment = records.find((r) => r.mediaType === 'audio');
+      expect(attachment).toBeDefined();
+      expect(attachment?.mimeType).toBe('audio/mpeg');
+    });
+
+    it('reports E_WRITE_ATTACH when the writeFile seam is entirely unavailable (not just failing)', async () => {
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(EMAIL_2) } });
+      const deps = makeDeps(f);
+      delete deps.fs.writeFile;
+
+      const { records, skips } = await run(ROOT, deps);
+
+      expect(records.some((r) => r.mediaType === 'message')).toBe(true);
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          code: 'E_WRITE_ATTACH',
+          reason: expect.stringContaining('writeFile seam unavailable'),
+        }),
+      );
+    });
+
+    it('formats a thrown non-Error value with String() when reporting E_STAT during discovery', async () => {
+      const f = buildFs({});
+      f.fs.stat = async () => {
+        throw 'ENOENT: raw string failure';
+      };
+
+      const { skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          code: 'E_STAT',
+          reason: expect.stringContaining('ENOENT: raw string failure'),
+        }),
+      );
+    });
+  });
+
+  describe('classifyMime fallback across all media families', () => {
+    it('classifies video/audio/document mbox attachments by Content-Type and falls back to octet-stream when both extension and Content-Type are unusable', async () => {
+      const video = emailWithAttachment({
+        from: 'A <a@x.com>',
+        subject: 'Video',
+        date: 'Mon, 01 Jan 2024 00:00:00 +0000',
+        body: 'v',
+        contentType: 'video/mp4',
+        filename: 'clip.oddext',
+        bytes: 'video-bytes',
+      });
+      const doc = emailWithAttachment({
+        from: 'A <a@x.com>',
+        subject: 'Doc',
+        date: 'Mon, 01 Jan 2024 00:01:00 +0000',
+        body: 'd',
+        contentType: 'application/x-custom-format',
+        filename: 'file.oddext',
+        bytes: 'doc-bytes',
+      });
+      const noType = emailWithAttachment({
+        from: 'A <a@x.com>',
+        subject: 'NoType',
+        date: 'Mon, 01 Jan 2024 00:02:00 +0000',
+        body: 'n',
+        contentType: '',
+        filename: 'file.oddext',
+        bytes: 'unknown-bytes',
+      });
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(video, doc, noType) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      const videoAtt = records.find((r) => r.mediaType === 'video');
+      expect(videoAtt?.mimeType).toBe('video/mp4');
+      const docAtt = records.find(
+        (r) => r.mediaType === 'document' && r.sourceMeta.mbox === 'Mail/All mail.mbox',
+      );
+      expect(docAtt).toBeDefined();
+      const fallbackAtt = records.find((r) => r.mimeType === 'application/octet-stream');
+      expect(fallbackAtt?.mediaType).toBe('document');
+    });
+  });
+
+  describe('addressText array branch (repeated To: headers)', () => {
+    it('joins multiple To header lines (an AddressObject array, not one object) into one string', async () => {
+      const raw = [
+        'From: A <a@x.com>',
+        'To: B <b@x.com>',
+        'To: C <c@x.com>',
+        'Subject: dual-to',
+        'Date: Mon, 01 Jan 2024 00:00:00 +0000',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'body',
+      ].join('\r\n');
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(raw) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      const email = records.find((r) => r.sourceMeta.subject === 'dual-to');
+      expect(email).toBeDefined();
+      // Whichever shape mailparser produces for duplicate To: headers, both
+      // recipients must be present in the flattened sourceMeta.to string.
+      expect(String(email?.sourceMeta.to)).toContain('b@x.com');
+    });
+  });
+
+  describe('sidecar geoData: longitude type + missing altitude field', () => {
+    it('degrades a non-numeric longitude to no gps, and treats a wholly absent altitude field like zero', async () => {
+      const f = buildFs({
+        'Google Photos/GeoEdge2/bad-lon.jpg': { content: 'jpeg' },
+        'Google Photos/GeoEdge2/bad-lon.jpg.json': {
+          content: sidecar({ geoData: { latitude: 12, longitude: 'east' } }),
+        },
+        'Google Photos/GeoEdge2/no-alt.jpg': { content: 'jpeg' },
+        'Google Photos/GeoEdge2/no-alt.jpg.json': {
+          content: sidecar({ geoData: { latitude: 5, longitude: 6 } }),
+        },
+      });
+
+      const { byRef } = await run(ROOT, makeDeps(f));
+
+      expect(byRef.get('Google Photos/GeoEdge2/bad-lon.jpg')?.gps).toBeNull();
+      expect(byRef.get('Google Photos/GeoEdge2/no-alt.jpg')?.gps).toEqual({ lat: 5, lon: 6 });
+    });
+  });
+
+  describe('findSidecarName ignores non-.json keys during the truncation fallback scan', () => {
+    it('skips a map key that does not end in .json while searching for a prefix match', () => {
+      const jsons = new Map<string, string>([
+        ['not-a-sidecar', '/abs/not-a-sidecar'],
+        ['averylongphotoname.json', '/abs/averylongphotoname.json'],
+      ]);
+      const match = findSidecarName('averylongphotonameextra.jpg', jsons);
+      expect(match).toBe('averylongphotoname.json');
+    });
+  });
+
+  describe('E_READDIR on the export root itself', () => {
+    it('uses "." as the ref when the unreadable directory IS the root', async () => {
+      const f = buildFs({});
+      f.fs.readDir = async () => {
+        throw new Error('EACCES: permission denied');
+      };
+
+      const { skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toContainEqual(expect.objectContaining({ ref: '.', code: 'E_READDIR' }));
+    });
+  });
+
+  describe('discover(): a path that is neither a file nor a directory', () => {
+    it('returns an empty, non-failed discovery for a special (non-file, non-dir) stat result', async () => {
+      const f = buildFs({});
+      f.fs.stat = async () =>
+        ({ size: 0, mtimeMs: 0, isFile: () => false, isDirectory: () => false }) as FileStat;
+
+      const { records, result, skips } = await run(ROOT, makeDeps(f));
+
+      expect(records).toEqual([]);
+      expect(result.recordCount).toBe(0);
+      expect(skips).toEqual([]);
+    });
+  });
+
+  describe('sidecar JSON parses to a bare object with no title (falls back to fallback path fields)', () => {
+    it('reports E_STAT gracefully-none required here — sidecar with no usable fields still yields the media', async () => {
+      const f = buildFs({
+        'Google Photos/Bare/photo.jpg': { content: 'jpeg', mtimeMs: utc(2011, 0, 1, 0, 0, 0) },
+        'Google Photos/Bare/photo.jpg.json': { content: sidecar({ description: '' }) },
+      });
+
+      const { byRef } = await run(ROOT, makeDeps(f));
+      const photo = byRef.get('Google Photos/Bare/photo.jpg');
+
+      expect(photo?.body).toBeNull();
+      expect(photo?.date?.source).toBe('mtime');
+    });
+  });
+
+  describe('emails missing From/Date headers entirely', () => {
+    it('keeps a message with a Subject but no From/Date header as author:null, date:null', async () => {
+      const raw = ['Subject: only a subject', 'Content-Type: text/plain', '', 'body only'].join(
+        '\r\n',
+      );
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(raw) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toEqual([]);
+      const email = records.find((r) => r.sourceMeta.subject === 'only a subject');
+      expect(email).toBeDefined();
+      expect(email?.author).toBeNull();
+      expect(email?.date).toBeNull();
+    });
+  });
+
+  describe('mbox streaming without an openReadStream seam (one-shot readFile fallback)', () => {
+    it('falls back to a one-shot readFile when openReadStream is unavailable', async () => {
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(EMAIL_0) } });
+      const deps = makeDeps(f);
+      delete deps.fs.openReadStream;
+
+      const { records, skips } = await run(ROOT, deps);
+
+      expect(skips).toEqual([]);
+      expect(records.some((r) => r.sourceMeta.subject === 'Hello there')).toBe(true);
+      expect(f.readFileReads).toContain(abs('Mail/All mail.mbox'));
+    });
+
+    it('reports E_READ_MBOX via the readFile fallback path when the read itself fails', async () => {
+      const f = buildFs(
+        { 'Mail/All mail.mbox': { content: mbox(EMAIL_0) } },
+        { readFileErrors: ['Mail/All mail.mbox'] },
+      );
+      const deps = makeDeps(f);
+      delete deps.fs.openReadStream;
+
+      const { records, skips } = await run(ROOT, deps);
+
+      expect(records).toEqual([]);
+      expect(skips).toContainEqual(
+        expect.objectContaining({ ref: 'Mail/All mail.mbox', code: 'E_READ_MBOX' }),
+      );
+    });
+  });
+
+  describe('an oversized message followed by a subsequent separator (not just EOF)', () => {
+    it('reports E_MBOX_MESSAGE_TOO_LARGE at the next "From " boundary and still parses the following message', async () => {
+      const giant = `Subject: adversarial\r\n\r\n${'x'.repeat(5 * 1024 * 1024)}`;
+      const f = buildFs({ 'Mail/All mail.mbox': { content: mbox(giant, EMAIL_0) } });
+
+      const { records, skips } = await run(ROOT, makeDeps(f));
+
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          ref: 'Mail/All mail.mbox#0',
+          code: 'E_MBOX_MESSAGE_TOO_LARGE',
+        }),
+      );
+      expect(records.some((r) => r.sourceMeta.subject === 'Hello there')).toBe(true);
+    });
+  });
+
+  describe('canHandle: a plain file path that is neither .mbox nor .zip', () => {
+    it('returns false for an existing non-directory, non-mbox, non-zip file', async () => {
+      const f = buildFs({ 'notes.txt': { content: 'hello' } });
+      expect(await takeoutImporter.canHandle(abs('notes.txt'), makeDeps(f))).toBe(false);
     });
   });
 });

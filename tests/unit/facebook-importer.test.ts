@@ -565,5 +565,574 @@ describe('facebookImporter (card C5 — Facebook "Download Your Information", AC
       expect(progress[0]?.phase).toBe('discover');
       expect(progress.filter((p) => p.phase === 'emit')).toHaveLength(records.length);
     });
+
+    it('stops before starting the next file in the same stage once aborted after a single-record file completes', async () => {
+      // Each thread yields exactly one record, so the abort (raised while
+      // emitting file A's lone record) is only observed once the outer
+      // per-file loop is about to move on to file B — never mid-stream
+      // within a single file's own record loop.
+      const controller = new AbortController();
+      const entries: ArchiveEntry[] = [
+        {
+          entryPath: 'messages/inbox/alpha_thread/message_1.json',
+          content: JSON.stringify({
+            participants: [{ name: 'A' }],
+            messages: [{ sender_name: 'A', timestamp_ms: 1, content: 'alpha' }],
+          }),
+        },
+        {
+          entryPath: 'messages/inbox/zeta_thread/message_1.json',
+          content: JSON.stringify({
+            participants: [{ name: 'Z' }],
+            messages: [{ sender_name: 'Z', timestamp_ms: 1, content: 'zeta' }],
+          }),
+        },
+      ];
+      const deps = makeZipDeps(entries).deps;
+      const ctx: ImportContext = {
+        sourceId: 'src-facebook',
+        workDir: WORK,
+        signal: controller.signal,
+        deps,
+        onSkip: () => {},
+        onProgress: (update) => {
+          if (update.phase === 'emit' && update.processed === 1) controller.abort();
+        },
+      };
+      const records: CatalogRecord[] = [];
+      const result = await drainImporter(facebookImporter, ZIP, ctx, (r) => records.push(r));
+
+      expect(records.map((r) => r.body)).toEqual(['alpha']);
+      expect(result.recordCount).toBe(1);
+    });
+  });
+
+  describe('BOM stripping and non-Error failure formatting', () => {
+    it('strips a UTF-8 BOM before parsing the posts JSON', async () => {
+      const content = '﻿' + JSON.stringify([{ timestamp: 1, data: [{ post: 'bom ok' }] }]);
+      const entries: ArchiveEntry[] = [{ entryPath: 'posts/your_posts_1.json', content }];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.map((r) => r.body)).toEqual(['bom ok']);
+    });
+
+    it('formats a thrown non-Error value with String() when reporting E_READ', async () => {
+      const { deps } = makeZipDeps(FULL_ENTRIES);
+      const realReadFile = deps.fs.readFile;
+      deps.fs.readFile = (path: string) =>
+        ps(path).endsWith('your_posts_1.json')
+          ? Promise.reject('EIO: raw string failure')
+          : realReadFile(path);
+
+      const { skips } = await run(ZIP, deps);
+
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          code: 'E_READ',
+          reason: expect.stringContaining('EIO: raw string failure'),
+        }),
+      );
+    });
+  });
+
+  describe('timestamps missing entirely (asFiniteNumber/secondsDate null path)', () => {
+    it('keeps a post with no timestamp field at all as date:null', async () => {
+      const content = JSON.stringify([{ data: [{ post: 'undated post' }] }]);
+      const entries: ArchiveEntry[] = [{ entryPath: 'posts/your_posts_1.json', content }];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.find((r) => r.body === 'undated post')?.date).toBeNull();
+    });
+  });
+
+  describe('video/audio media probing (probeSafe)', () => {
+    it('probes a video attachment and prefers the probed mimeType/durationSec over the extension fallback', async () => {
+      const content = JSON.stringify({
+        participants: [{ name: 'Ana' }],
+        messages: [
+          {
+            sender_name: 'Ana',
+            timestamp_ms: 1,
+            videos: [{ uri: 'messages/inbox/ana_xyz/videos/clip.mp4' }],
+          },
+        ],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+        { entryPath: 'messages/inbox/ana_xyz/videos/clip.mp4', content: 'video-bytes' },
+      ];
+      const { deps } = makeZipDeps(entries);
+      deps.probeMedia = async () => ({
+        durationSec: 12.5,
+        width: 640,
+        height: 480,
+        mimeType: 'video/mp4; codecs=avc1',
+      });
+
+      const { records, skips } = await run(ZIP, deps);
+
+      expect(skips).toEqual([]);
+      const video = records.find((r) => r.mediaType === 'video');
+      expect(video?.mimeType).toBe('video/mp4; codecs=avc1');
+      expect(video?.durationSec).toBe(12.5);
+    });
+
+    it('falls back to the extension-derived mime/null duration when probing throws', async () => {
+      const content = JSON.stringify({
+        participants: [{ name: 'Ana' }],
+        messages: [
+          {
+            sender_name: 'Ana',
+            timestamp_ms: 1,
+            audio_files: [{ uri: 'messages/inbox/ana_xyz/audio/voice.m4a' }],
+          },
+        ],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+        { entryPath: 'messages/inbox/ana_xyz/audio/voice.m4a', content: 'audio-bytes' },
+      ];
+      const { deps } = makeZipDeps(entries);
+      deps.probeMedia = async () => {
+        throw new Error('ffprobe not found');
+      };
+
+      const { records, skips } = await run(ZIP, deps);
+
+      expect(skips).toEqual([]);
+      const audio = records.find((r) => r.mediaType === 'audio');
+      expect(audio?.mimeType).toBe('audio/mp4');
+      expect(audio?.durationSec).toBeNull();
+    });
+  });
+
+  describe('media path resolution — suffix matching and ambiguity', () => {
+    it('resolves a uri via a unique path suffix that is not a direct or basename match', async () => {
+      const content = JSON.stringify([
+        {
+          timestamp: 1,
+          attachments: [
+            {
+              data: [
+                {
+                  media: {
+                    // References a shorter suffix of the real entry path — not
+                    // the full entryPath and not just the basename.
+                    uri: 'media/nested/deep.jpg',
+                    description: 'suffix match',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ]);
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'posts/your_posts_1.json', content },
+        { entryPath: 'posts/media/nested/deep.jpg', content: 'jpeg-bytes' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      const photo = records.find((r) => r.body === 'suffix match');
+      expect(ps(photo?.originalPath)).toContain('posts/media/nested/deep.jpg');
+    });
+
+    it('reports E_MISSING_MEDIA for an ambiguous suffix shared by two different files', async () => {
+      const content = JSON.stringify([
+        {
+          timestamp: 1,
+          attachments: [
+            { data: [{ media: { uri: 'nested/dup.jpg', description: 'ambiguous' } }] },
+          ],
+        },
+      ]);
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'posts/your_posts_1.json', content },
+        { entryPath: 'posts/a/nested/dup.jpg', content: 'jpeg-bytes-a' },
+        { entryPath: 'posts/b/nested/dup.jpg', content: 'jpeg-bytes-b' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(records.find((r) => r.body === 'ambiguous')).toBeUndefined();
+      expect(skips).toContainEqual(
+        expect.objectContaining({ ref: 'nested/dup.jpg', code: 'E_MISSING_MEDIA' }),
+      );
+    });
+  });
+
+  describe('folder discovery failures (walkFolder)', () => {
+    it('reports E_READDIR for an unreadable subdirectory but keeps importing the rest', async () => {
+      const root = '/export/fb-readdir';
+      const deps = makeFolderDeps(root, {
+        'posts/your_posts_1.json': POSTS_1,
+        'messages/inbox/jose_abc/message_1.json': '{}',
+      });
+      const badDir = join(root, 'messages', 'inbox');
+      const realReadDir = deps.fs.readDir;
+      deps.fs.readDir = async (path: string) => {
+        if (path === badDir) throw new Error('EACCES: permission denied');
+        return await realReadDir(path);
+      };
+
+      const { records, skips } = await run(root, deps);
+
+      expect(skips).toContainEqual(expect.objectContaining({ ref: badDir, code: 'E_READDIR' }));
+      expect(records.find((r) => r.body === POST0_TEXT)).toBeDefined();
+    });
+
+    it('reports E_STAT for an entry that cannot be statted during folder discovery', async () => {
+      const root = '/export/fb-stat';
+      const deps = makeFolderDeps(root, { 'posts/your_posts_1.json': POSTS_1 });
+      const ghost = join(root, 'posts', 'ghost.json');
+      const realReadDir = deps.fs.readDir;
+      const realStat = deps.fs.stat;
+      deps.fs.readDir = async (path: string) => {
+        const names = await realReadDir(path);
+        return path === join(root, 'posts') ? [...names, 'ghost.json'] : names;
+      };
+      deps.fs.stat = async (path: string) => {
+        if (path === ghost) throw new Error('ENOENT: vanished mid-scan');
+        return await realStat(path);
+      };
+
+      const { records, skips } = await run(root, deps);
+
+      expect(skips).toContainEqual(expect.objectContaining({ ref: ghost, code: 'E_STAT' }));
+      expect(records.find((r) => r.body === POST0_TEXT)).toBeDefined();
+    });
+
+    it('stops folder discovery without crashing when the signal aborts mid-walk', async () => {
+      const root = '/export/fb-walkabort';
+      const deps = makeFolderDeps(root, {
+        'posts/your_posts_1.json': POSTS_1,
+        'photos_and_videos/album/0.json': ALBUM_0,
+      });
+      const controller = new AbortController();
+      const realReadDir = deps.fs.readDir;
+      deps.fs.readDir = async (path: string) => {
+        const names = await realReadDir(path);
+        if (path === root) controller.abort();
+        return names;
+      };
+
+      const { records, result } = await run(root, deps, controller.signal);
+
+      expect(result.recordCount).toBe(records.length);
+    });
+  });
+
+  describe('canHandle over a folder — non-directory path and stat failure', () => {
+    it('rejects a plain file path (not a directory)', async () => {
+      const root = '/export/fb-file';
+      const deps = makeFolderDeps(root, { 'a.txt': 'x' });
+      expect(await facebookImporter.canHandle(join(root, 'a.txt'), deps)).toBe(false);
+    });
+
+    it('returns false when the path cannot be statted at all', async () => {
+      const deps = makeFolderDeps('/export/fb-missing', {});
+      expect(await facebookImporter.canHandle('/export/fb-missing/does-not-exist', deps)).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('posts file wrapped under a single object key (asPostArray fallback)', () => {
+    it('finds the posts array nested under an arbitrary top-level key', async () => {
+      const content = JSON.stringify({
+        some_export_key: [{ timestamp: 1, data: [{ post: 'wrapped post' }] }],
+      });
+      const entries: ArchiveEntry[] = [{ entryPath: 'posts/your_posts_1.json', content }];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.map((r) => r.body)).toEqual(['wrapped post']);
+    });
+
+    it('yields nothing (without crashing) when the posts file has no array anywhere', async () => {
+      const content = JSON.stringify({ nothing_useful: 'just a string' });
+      const entries: ArchiveEntry[] = [{ entryPath: 'posts/your_posts_1.json', content }];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(records).toEqual([]);
+      expect(skips).toEqual([]);
+    });
+  });
+
+  describe('malformed array entries filtered by isObject guards', () => {
+    it('skips a non-object attachment and still collects media from the top-level data[].media shape', async () => {
+      const content = JSON.stringify([
+        {
+          timestamp: 1,
+          attachments: ['not-an-object'],
+          data: [{ media: { uri: 'posts/media/direct.jpg', description: 'direct data media' } }],
+        },
+      ]);
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'posts/your_posts_1.json', content },
+        { entryPath: 'posts/media/direct.jpg', content: 'jpeg-bytes' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.find((r) => r.body === 'direct data media')).toBeDefined();
+    });
+
+    it('filters out a non-object participant entry from a message thread', async () => {
+      const content = JSON.stringify({
+        participants: ['stray-string', { name: 'Ana' }],
+        messages: [{ sender_name: 'Ana', timestamp_ms: 1, content: 'hi' }],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records[0]?.sourceMeta).toMatchObject({ participants: ['Ana'] });
+    });
+
+    it('links a message sticker as its own media record', async () => {
+      const content = JSON.stringify({
+        participants: [{ name: 'Ana' }],
+        messages: [
+          {
+            sender_name: 'Ana',
+            timestamp_ms: 1,
+            sticker: { uri: 'messages/inbox/ana_xyz/stickers/wave.png' },
+          },
+        ],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+        { entryPath: 'messages/inbox/ana_xyz/stickers/wave.png', content: 'png-bytes' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      const sticker = records.find((r) => r.sourceMeta.attachment === 'sticker');
+      expect(sticker?.mediaType).toBe('photo');
+    });
+
+    it('skips a non-object entry within a message media array', async () => {
+      const content = JSON.stringify({
+        participants: [{ name: 'Ana' }],
+        messages: [
+          { sender_name: 'Ana', timestamp_ms: 1, content: 'ok', photos: [null, 'not-an-object'] },
+        ],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.map((r) => r.body)).toEqual(['ok']);
+    });
+
+    it('skips a non-object album entry but keeps the rest of the album', async () => {
+      const content = JSON.stringify({
+        name: 'Mixed album',
+        photos: ['not-an-object', { uri: 'photos_and_videos/album/media/ok.jpg' }],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'photos_and_videos/album/0.json', content },
+        { entryPath: 'photos_and_videos/album/media/ok.jpg', content: 'jpeg-bytes' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toContainEqual(
+        expect.objectContaining({ ref: 'photos_and_videos/album/0.json#0', code: 'E_PARSE' }),
+      );
+      expect(records.find((r) => ps(r.originalPath).endsWith('album/media/ok.jpg'))).toBeDefined();
+    });
+
+    it('reads a bare-array album file (no wrapping object) directly', async () => {
+      const content = JSON.stringify([{ uri: 'photos_and_videos/album/media/bare.jpg' }]);
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'photos_and_videos/album/0.json', content },
+        { entryPath: 'photos_and_videos/album/media/bare.jpg', content: 'jpeg-bytes' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.find((r) => ps(r.originalPath).endsWith('album/media/bare.jpg'))).toBeDefined();
+    });
+
+    it('yields nothing (without crashing) for an album file whose top level is neither an array nor an object', async () => {
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'photos_and_videos/album/0.json', content: JSON.stringify('just a string') },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(records).toEqual([]);
+      expect(skips).toEqual([]);
+    });
+
+    it('skips a non-object entry in post.data while still collecting text from the valid entries', async () => {
+      const content = JSON.stringify([
+        { timestamp: 1, data: ['not-an-object', { post: 'valid text' }] },
+      ]);
+      const entries: ArchiveEntry[] = [{ entryPath: 'posts/your_posts_1.json', content }];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.map((r) => r.body)).toEqual(['valid text']);
+    });
+
+    it('reports E_PARSE when the message thread top level is not an object', async () => {
+      const entries: ArchiveEntry[] = [
+        {
+          entryPath: 'messages/inbox/ana_xyz/message_1.json',
+          content: JSON.stringify(['not', 'an', 'object']),
+        },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(records).toEqual([]);
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          ref: 'messages/inbox/ana_xyz/message_1.json',
+          code: 'E_PARSE',
+          reason: expect.stringContaining('not an object'),
+        }),
+      );
+    });
+
+    it('skips a non-object message entry but keeps the other messages in the thread', async () => {
+      const content = JSON.stringify({
+        participants: [{ name: 'Ana' }],
+        messages: [42, { sender_name: 'Ana', timestamp_ms: 1, content: 'still fine' }],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(records.map((r) => r.body)).toEqual(['still fine']);
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          ref: 'messages/inbox/ana_xyz/message_1.json#0',
+          code: 'E_PARSE',
+        }),
+      );
+    });
+
+    it("propagates a message file's unreadable/malformed failure the same way as posts/albums", async () => {
+      const { deps } = makeZipDeps(FULL_ENTRIES);
+      const realReadFile = deps.fs.readFile;
+      deps.fs.readFile = (path: string) =>
+        ps(path).endsWith('jose_abc/message_1.json')
+          ? Promise.reject(new Error('EACCES: permission denied'))
+          : realReadFile(path);
+
+      const { skips } = await run(ZIP, deps);
+
+      expect(skips).toContainEqual(
+        expect.objectContaining({
+          ref: 'messages/inbox/jose_abc/message_1.json',
+          code: 'E_READ',
+        }),
+      );
+    });
+  });
+
+  describe('media entry edge cases', () => {
+    it('reports E_PARSE for a media object with no uri and an empty/whitespace-only uri', async () => {
+      const content = JSON.stringify({
+        participants: [{ name: 'Ana' }],
+        messages: [{ sender_name: 'Ana', timestamp_ms: 1, photos: [{}, { uri: '   ' }] }],
+      });
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'messages/inbox/ana_xyz/message_1.json', content },
+      ];
+
+      const { skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips.filter((s) => s.code === 'E_PARSE')).toHaveLength(2);
+    });
+
+    it('classifies an unrecognized media extension with the octet-stream fallback kind', async () => {
+      const content = JSON.stringify([
+        {
+          timestamp: 1,
+          attachments: [{ data: [{ media: { uri: 'posts/media/archive.xyz' } }] }],
+        },
+      ]);
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'posts/your_posts_1.json', content },
+        { entryPath: 'posts/media/archive.xyz', content: 'unknown-bytes' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      const record = records.find((r) => ps(r.originalPath).endsWith('archive.xyz'));
+      expect(record).toMatchObject({ mediaType: 'document', mimeType: 'application/octet-stream' });
+    });
+
+    it('degrades an empty-string caption to a null body', async () => {
+      const content = JSON.stringify([
+        {
+          timestamp: 1,
+          attachments: [{ data: [{ media: { uri: 'posts/media/playa.jpg', description: '' } }] }],
+        },
+      ]);
+      const entries: ArchiveEntry[] = [
+        { entryPath: 'posts/your_posts_1.json', content },
+        { entryPath: 'posts/media/playa.jpg', content: 'jpeg-bytes' },
+      ];
+
+      const { records, skips } = await run(ZIP, makeZipDeps(entries).deps);
+
+      expect(skips).toEqual([]);
+      expect(records.find((r) => r.mediaType === 'photo')?.body).toBeNull();
+    });
+  });
+
+  describe('folder discovery: recursive sibling abort', () => {
+    it('stops a sibling directory walk before it starts once aborted while statting an earlier entry', async () => {
+      const root = '/export/fb-siblingabort';
+      const deps = makeFolderDeps(root, {
+        'messages/inbox/alpha_thread/message_1.json': JSON.stringify({
+          participants: [{ name: 'A' }],
+          messages: [{ sender_name: 'A', timestamp_ms: 1, content: 'alpha' }],
+        }),
+        'messages/inbox/zeta_thread/message_1.json': JSON.stringify({
+          participants: [{ name: 'Z' }],
+          messages: [{ sender_name: 'Z', timestamp_ms: 1, content: 'zeta' }],
+        }),
+      });
+      const controller = new AbortController();
+      const alphaDir = join(root, 'messages', 'inbox', 'alpha_thread');
+      const realStat = deps.fs.stat;
+      deps.fs.stat = async (path: string) => {
+        const result = await realStat(path);
+        if (path === alphaDir) controller.abort();
+        return result;
+      };
+
+      const { records } = await run(root, deps, controller.signal);
+
+      expect(records.some((r) => r.body === 'zeta')).toBe(false);
+    });
   });
 });
