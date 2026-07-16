@@ -1,0 +1,116 @@
+import { describe, expect, it, vi } from 'vitest';
+import { APP_GET_VERSION, type IpcChannel } from '@shared/ipc/contract';
+import {
+  IPC_ERROR_ENVELOPE_MARKER,
+  IpcError,
+  isIpcError,
+  isIpcErrorEnvelope,
+} from '@shared/ipc/error-envelope';
+import {
+  registerIpcHandlers,
+  type IpcHandleListener,
+  type IpcHandlerMap,
+} from '../../electron/main/ipc/register';
+import { createValidatedInvoke } from '../../electron/preload/invoke';
+
+// A filesystem path + item id baked into a thrown error's message, so the test can
+// PROVE neither ever reaches the renderer nor the logger's projected output.
+const PII_PATH = '/Users/alice/Memories/private.sqlite';
+const PII_ID = 'item-7f3c-secret';
+const PII_MESSAGE = `no such item: ${PII_ID} at ${PII_PATH}`;
+
+const trustedSenderOptions = {
+  rendererEntryPath: '/app/out/renderer/index.html',
+  platform: 'darwin' as const,
+};
+const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
+
+/** A handler map whose app:getVersion throws a PII-laden error; every other channel
+ *  is an unused no-op (this test only drives app:getVersion). */
+function boomHandlers(): IpcHandlerMap {
+  return new Proxy(
+    {},
+    {
+      get(_t, channel: string) {
+        if (channel === APP_GET_VERSION) {
+          return () => {
+            throw new Error(PII_MESSAGE);
+          };
+        }
+        return () => ({});
+      },
+    },
+  ) as unknown as IpcHandlerMap;
+}
+
+function wire() {
+  const listeners = new Map<string, IpcHandleListener>();
+  const ipcMain = {
+    handle(channel: string, listener: IpcHandleListener) {
+      listeners.set(channel, listener);
+    },
+  };
+  registerIpcHandlers(ipcMain, boomHandlers(), trustedSenderOptions);
+  const listener = listeners.get(APP_GET_VERSION);
+  if (listener === undefined) throw new Error('listener not registered');
+
+  // What actually crossed the boundary (the value ipcRenderer.invoke would reject
+  // with — Electron passes a thrown plain object through unchanged).
+  let crossed: unknown;
+  const rawInvoke = async (channel: string, payload: unknown): Promise<unknown> => {
+    try {
+      return await listener(trustedEvent, payload);
+    } catch (rejected) {
+      crossed = rejected;
+      throw rejected;
+    }
+  };
+  const invoke = createValidatedInvoke(rawInvoke);
+  return { invoke, getCrossed: () => crossed };
+}
+
+describe('THE INVARIANT (#440): no raw message/stack crosses IPC to the renderer', () => {
+  it('a PII-laden handler throw reaches the renderer as ONLY {marker,code,name}', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { invoke, getCrossed } = wire();
+
+      const rejection = await invoke(APP_GET_VERSION as IpcChannel, {} as never).then(
+        () => {
+          throw new Error('expected the invoke to reject');
+        },
+        (e: unknown) => e,
+      );
+
+      // 1) What CROSSED the boundary is the redacted envelope — no message/stack.
+      const crossed = getCrossed();
+      expect(isIpcErrorEnvelope(crossed)).toBe(true);
+      expect(Object.keys(crossed as object).sort()).toEqual(
+        [IPC_ERROR_ENVELOPE_MARKER, 'code', 'name'].sort(),
+      );
+      const crossedSerialized = JSON.stringify(crossed);
+      expect(crossedSerialized).not.toContain(PII_ID);
+      expect(crossedSerialized).not.toContain(PII_PATH);
+      expect(crossedSerialized).not.toContain('no such item');
+      expect(crossedSerialized).not.toContain('stack');
+
+      // 2) The renderer receives a typed IpcError (code + origin name), NOT raw text.
+      expect(isIpcError(rejection)).toBe(true);
+      const ipcError = rejection as IpcError;
+      expect(ipcError.code).toBe('ERR_IPC_HANDLER_FAULT');
+      expect(ipcError.originName).toBe('Error');
+      const rendererSerialized = `${ipcError.message}\n${ipcError.stack ?? ''}`;
+      expect(rendererSerialized).not.toContain(PII_ID);
+      expect(rendererSerialized).not.toContain(PII_PATH);
+      expect(rendererSerialized).not.toContain('no such item');
+
+      // 3) The logger's local diagnostic also carries no message/stack.
+      const loggerSerialized = JSON.stringify(errorSpy.mock.calls);
+      expect(loggerSerialized).not.toContain(PII_ID);
+      expect(loggerSerialized).not.toContain(PII_PATH);
+      expect(loggerSerialized).not.toContain('no such item');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
