@@ -6,6 +6,7 @@ import {
   existsSync,
   closeSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readSync,
@@ -406,6 +407,18 @@ export const MEDIA_OPEN_FLAGS =
   fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
 
 export function pinRegularFile(canonicalPath: string, kind: OriginalKind): ServableOriginal | null {
+  // CROSS-PLATFORM symlink reject BEFORE the open (lstat does NOT follow the link).
+  // `canonicalPath` is realpath-resolved, so it is never a symlink under normal
+  // conditions — this catches one PLANTED at that exact path in the realpath→open
+  // window. It is the load-bearing defense on WINDOWS, where `O_NOFOLLOW` is
+  // unavailable (so `MEDIA_OPEN_FLAGS` drops it to 0 and the open would otherwise
+  // follow the link). On POSIX, `O_NOFOLLOW` below additionally makes the check
+  // ATOMIC (closes the lstat→open window); on Windows a narrow lstat→open residual
+  // remains, mitigated by Windows requiring PRIVILEGE to create a symlink (see the
+  // Windows residual note in the PR). A missing entry is likewise not servable.
+  const leaf = lstatSync(canonicalPath, { throwIfNoEntry: false });
+  if (leaf === undefined || leaf.isSymbolicLink()) return null;
+
   let fd: number;
   try {
     // Open with the hardened {@link MEDIA_OPEN_FLAGS}. We stream from THIS fd, so no
