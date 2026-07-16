@@ -24,6 +24,7 @@ import {
   blobAbsPath,
   ERR_ORIGINAL_PATH_ESCAPE,
   isServablePath,
+  pinRegularFile,
 } from '../../electron/main/library/originals-store';
 import {
   createMediaFileService,
@@ -513,5 +514,43 @@ describe('isServablePath — realpath allowlist (§2.4)', () => {
     const file = join(second, 'clip.mp4');
     writeFileSync(file, Buffer.from('x'));
     expect(isServablePath(file, [first, second])).toBe(true);
+  });
+});
+
+describe('pinRegularFile — O_NOFOLLOW refuses a symlink planted in the realpath→open window (CWE-367)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpDir('pin-nofollow');
+  });
+  afterEach(() => {
+    removeTmpDir(root);
+  });
+
+  it('REFUSES to follow a symlink at the canonical path (the realpath→open race must not leak an out-of-root file)', () => {
+    const outside = join(root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    const secret = join(outside, 'secret');
+    writeFileSync(secret, Buffer.from('SECRET-OUT-OF-ROOT'));
+    // Simulate the race: between realpath resolving the canonical path and the open,
+    // an attacker replaced that exact path with a symlink to a file outside the roots.
+    const canonical = join(root, 'canonical.mp4');
+    symlinkSync(secret, canonical);
+
+    const result = pinRegularFile(canonical, 'in_place');
+    // With O_NOFOLLOW the open fails (ELOOP) → null; the secret fd is NEVER pinned.
+    if (result !== null) closeSync(result.fd); // never leak, even on the vulnerable path
+    expect(result).toBeNull();
+  });
+
+  it('still pins a legit regular file (serveable) and reports its fstat size', () => {
+    const file = join(root, 'clip.mp4');
+    writeFileSync(file, Buffer.from('twelve bytes'));
+
+    const result = pinRegularFile(file, 'in_place');
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('in_place');
+    expect(result?.size).toBe('twelve bytes'.length);
+    expect(fstatSync(result?.fd ?? -1).isFile()).toBe(true);
+    if (result !== null) closeSync(result.fd);
   });
 });

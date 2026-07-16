@@ -381,10 +381,11 @@ export interface ServableOriginal {
 /**
  * Open a validated CANONICAL (realpath-resolved, symlink-free) path to a read-only
  * fd, fstat it, and verify it is a regular file — the atomic "pin the file we just
- * validated" step (§2.4). Closes the fd and THROWS if it is not a regular file;
- * returns null if the file vanished in the tiny gap before the open.
+ * validated" step (§2.4). Exported as a testable seam. Closes the fd and THROWS if it
+ * is not a regular file; returns null if the file vanished — or a symlink was planted
+ * in the realpath→open window (refused by `O_NOFOLLOW` → `ELOOP`) — before the open.
  */
-function pinRegularFile(canonicalPath: string, kind: OriginalKind): ServableOriginal | null {
+export function pinRegularFile(canonicalPath: string, kind: OriginalKind): ServableOriginal | null {
   let fd: number;
   try {
     // The canonical path contains no symlinks, so this open cannot follow a newly
