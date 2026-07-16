@@ -16,9 +16,10 @@ import { SourcePickerStep } from './steps/SourcePickerStep';
 import { WalkthroughStep } from './steps/WalkthroughStep';
 import { ImportLocateStep } from './steps/ImportLocateStep';
 import { ImportStep } from './steps/ImportStep';
+import { TourStep } from './steps/TourStep';
 import type { SourceMeta } from './sources';
 
-type Step = 'welcome' | 'name' | 'location' | 'source' | 'walkthrough' | 'locate' | 'import';
+type Step = 'welcome' | 'tour' | 'name' | 'location' | 'source' | 'walkthrough' | 'locate' | 'import';
 
 export function OnboardingFlow(): ReactElement {
   const { navigate } = useNavigation();
@@ -65,7 +66,12 @@ export function OnboardingFlow(): ReactElement {
 
     switch (step) {
       case 'welcome':
-        return <WelcomeStep onStart={() => setStep('name')} onTour={enterApp} />;
+        return <WelcomeStep onStart={() => setStep('name')} onTour={() => setStep('tour')} />;
+      case 'tour':
+        // A real, skippable 3-card preview (#434) — replaces the old fake
+        // `onTour` that just called `enterApp()` and dumped the visitor on an
+        // empty timeline. Both finishing and skipping land on the timeline.
+        return <TourStep onDone={enterApp} onSkip={enterApp} />;
       case 'name':
         return (
           <NameStep

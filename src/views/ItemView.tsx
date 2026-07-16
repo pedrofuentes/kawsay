@@ -5,6 +5,12 @@
 // "Back" returns to wherever the user came from (timeline or search). Everything
 // shown is the renderer-safe DTO + the transcript view; no path or media byte is
 // ever handled here (AC-4).
+//
+// ←/→ moves to the previous/next memory in timeline order (#434, the rest of
+// #434 — see USER_FLOWS Journey F). The neighbours are derived entirely from
+// `view.siblings` — the ordered page Timeline/Search already had loaded when the
+// user opened this memory — so this needs no re-fetch and no new IPC channel.
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
 import { CategoryChips } from '@renderer/components/CategoryChips';
@@ -47,31 +53,121 @@ function formatDate(iso: string | null): string | null {
   return DATE_FORMAT.format(new Date(time));
 }
 
+/** Title if present, else the calm type label ("Photo", "Voice note", …) —
+ *  shared by the heading and the ←/→ live-region announcement so both agree. */
+function headingOf(item: ItemCardDTO): string {
+  const title = (item.title ?? '').trim();
+  return title.length > 0 ? title : TYPE_LABEL[item.mediaType];
+}
+
+/** Interactive elements that already own Left/Right themselves (text cursor
+ *  movement, native <select> option cycling, …) — the global arrow-nav listener
+ *  defers to them rather than hijacking the keystroke. None exist on ItemView
+ *  today, but the guard keeps the listener honest if one is ever added. */
+function ownsArrowKeys(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
+}
+
 export function ItemView(): ReactElement | null {
   const { view, navigate } = useNavigation();
   const headingRef = useAutoFocusHeading<HTMLHeadingElement>();
 
+  const isItemView = view.name === 'item';
+  const item = isItemView ? view.item : null;
+  const from = isItemView ? view.from : undefined;
+  // The ordered page this memory was opened FROM (Timeline's newest-first load,
+  // or Search's current result set) — already in hand, so no re-fetch and no new
+  // IPC channel are needed to find the previous/next memory (#434).
+  const siblings = isItemView ? (view.siblings ?? []) : [];
+  const via = isItemView ? view.via : undefined;
+
+  const currentIndex = item !== null ? siblings.findIndex((sibling) => sibling.id === item.id) : -1;
+  const prevItem = currentIndex > 0 ? siblings[currentIndex - 1] : null;
+  const nextItem =
+    currentIndex >= 0 && currentIndex < siblings.length - 1 ? siblings[currentIndex + 1] : null;
+
+  const goTo = useCallback(
+    (target: ItemCardDTO, direction: 'prev' | 'next'): void => {
+      navigate({ name: 'item', item: target, from, siblings, via: direction });
+    },
+    [navigate, from, siblings],
+  );
+
+  // Global ←/→ handling — not scoped to a focused element, so it never traps
+  // focus (Tab, Shift+Tab, and every other key keep working exactly as before;
+  // nothing here calls preventDefault). Ignored with a modifier held (Alt/Ctrl/
+  // Cmd+Arrow are OS/browser shortcuts, e.g. history back/forward) and deferred
+  // to any element that owns arrow keys itself.
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.altKey || event.ctrlKey || event.metaKey || ownsArrowKeys(event.target)) {
+        return;
+      }
+      if (event.key === 'ArrowLeft' && prevItem !== null) {
+        goTo(prevItem, 'prev');
+      } else if (event.key === 'ArrowRight' && nextItem !== null) {
+        goTo(nextItem, 'next');
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [prevItem, nextItem, goTo]);
+
+  // A polite announcement for the memory ←/→ just landed on. `via` is a
+  // transient hint set only by `goTo` above (never by a fresh open from
+  // Timeline/Search), so opening a memory normally stays quiet here — its
+  // focused <h1> already introduces it (WCAG 2.4.3), the same as every other
+  // view transition in this app.
+  const [announcement, setAnnouncement] = useState('');
+  useEffect(() => {
+    if (item === null || via === undefined) {
+      setAnnouncement('');
+      return;
+    }
+    const direction = via === 'prev' ? 'previous' : 'next';
+    setAnnouncement(`Now showing the ${direction} memory: ${headingOf(item)}.`);
+  }, [item, via]);
+
   // ItemView is only routed for the 'item' view; this narrows the type and keeps
   // the component safe if it is ever mounted without one.
-  if (view.name !== 'item') {
+  if (!isItemView || item === null) {
     return null;
   }
 
-  const { item, from } = view;
   const typeLabel = TYPE_LABEL[item.mediaType];
-  const title = (item.title ?? '').trim();
-  const heading = title.length > 0 ? title : typeLabel;
+  const heading = headingOf(item);
   const dateText = formatDate(item.captureDate);
   const transcribable = item.mediaType === 'audio' || item.mediaType === 'video';
 
   return (
     <section className="flex flex-col gap-6">
-      <div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Button variant="ghost" onClick={() => navigate(from ?? { name: 'timeline' })}>
           <Icon name="arrow-right" className="h-5 w-5 rotate-180" />
           Back
         </Button>
+        {prevItem !== null || nextItem !== null ? (
+          <div className="flex items-center gap-2">
+            {prevItem !== null ? (
+              <Button variant="ghost" onClick={() => goTo(prevItem, 'prev')}>
+                <Icon name="arrow-right" className="h-5 w-5 rotate-180" />
+                Previous
+              </Button>
+            ) : null}
+            {nextItem !== null ? (
+              <Button variant="ghost" onClick={() => goTo(nextItem, 'next')}>
+                Next
+                <Icon name="arrow-right" className="h-5 w-5" />
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
+      <span aria-live="polite" className="sr-only">
+        {announcement}
+      </span>
 
       <header className="flex items-start gap-4">
         <MediaThumbnail

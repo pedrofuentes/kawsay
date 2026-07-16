@@ -15,7 +15,21 @@ export type View =
   | { name: 'settings' }
   // One memory opened on its own (#136) — carries the tile the user activated so
   // the view needs no re-fetch, plus where they came from so "back" returns there.
-  | { name: 'item'; item: ItemCardDTO; from?: View };
+  //
+  // `siblings` (#434) is the ordered list of memories the item was opened FROM
+  // (Timeline's newest-first page, or Search's current result set) — it lets
+  // ItemView derive the previous/next memory for ←/→ navigation entirely from
+  // data the renderer already has in hand, with no new IPC channel. `via` is a
+  // transient hint set only when arrow-key/Prev/Next navigation produced this
+  // view, so ItemView can announce the move politely without announcing a
+  // freshly-OPENED item too (which its own focused heading already covers).
+  | {
+      name: 'item';
+      item: ItemCardDTO;
+      from?: View;
+      siblings?: ItemCardDTO[];
+      via?: 'prev' | 'next';
+    };
 
 export interface NavigationValue {
   view: View;

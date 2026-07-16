@@ -238,7 +238,7 @@ export function Timeline(): ReactElement {
               style={{ transform: `translateY(${windowed.topPad}px)` }}
               className="absolute inset-x-0 top-0 m-0 list-none p-0"
             >
-              {rows.slice(windowed.startIndex, windowed.endIndex).map(renderRow)}
+              {rows.slice(windowed.startIndex, windowed.endIndex).map((row) => renderRow(row, items))}
             </ol>
           </div>
         </section>
@@ -257,7 +257,7 @@ export function Timeline(): ReactElement {
   }
 }
 
-function renderRow(row: Row): ReactElement {
+function renderRow(row: Row, items: ItemCardDTO[]): ReactElement {
   if (row.kind === 'header') {
     return (
       <li key={row.key} style={{ height: ROW_HEIGHT }} className="flex items-end pb-2">
@@ -267,12 +267,15 @@ function renderRow(row: Row): ReactElement {
   }
   return (
     <li key={row.key} style={{ height: ROW_HEIGHT }} className="pb-3">
-      <MemoryCard item={row.item} />
+      <MemoryCard item={row.item} siblings={items} />
     </li>
   );
 }
 
-function MemoryCard({ item }: { item: ItemCardDTO }): ReactElement {
+/** `siblings` is the whole (already newest-first) loaded page — passed straight
+ *  through to ItemView so ←/→ there can step to the previous/next memory in
+ *  timeline order without any re-fetch or new IPC channel (#434). */
+function MemoryCard({ item, siblings }: { item: ItemCardDTO; siblings: ItemCardDTO[] }): ReactElement {
   const { navigate, view } = useNavigation();
   const date = parseDate(item.captureDate);
   const dateText = date === null ? UNDATED_LABEL : DAY_FMT.format(date);
@@ -292,7 +295,7 @@ function MemoryCard({ item }: { item: ItemCardDTO }): ReactElement {
           (axe nested-interactive); the global :focus-visible ring covers focus. */}
       <button
         type="button"
-        onClick={() => navigate({ name: 'item', item, from: view })}
+        onClick={() => navigate({ name: 'item', item, from: view, siblings })}
         aria-label={`Open ${caption.length > 0 ? caption : typeLabel}`}
         className="flex min-w-0 flex-1 items-center gap-4 rounded-md text-left"
       >
