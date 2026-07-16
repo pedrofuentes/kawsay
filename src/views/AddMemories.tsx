@@ -24,7 +24,7 @@ import type { SourceMeta } from '@renderer/onboarding/sources';
 type Step = 'source' | 'walkthrough' | 'locate' | 'import';
 
 export function AddMemories(): ReactElement {
-  const { navigate } = useNavigation();
+  const { navigate, invalidateTimeline } = useNavigation();
   const { library } = useLibrary();
   const importJob = useImport();
 
@@ -37,6 +37,18 @@ export function AddMemories(): ReactElement {
   const [source, setSource] = useState<SourceMeta | null>(null);
 
   const goToTimeline = (): void => navigate({ name: 'timeline' });
+
+  // Leaving a finished import for the timeline: the catalog now holds memories
+  // it didn't before, so invalidate the mounted-but-cached timeline (#432
+  // review regression B) — otherwise the freshly imported memories stay
+  // invisible until the app is relaunched. This is the single point every
+  // completed/cancelled import passes through (the "See everything" button), and
+  // it is NOT the plain source-picker "back" (goToTimeline), so a user who backs
+  // out without importing never triggers a needless refetch.
+  const seeEverything = (): void => {
+    invalidateTimeline();
+    goToTimeline();
+  };
 
   const startImport = (inputPath: string): void => {
     if (source === null) {
@@ -97,7 +109,7 @@ export function AddMemories(): ReactElement {
             void importJob.cancel();
           }}
           onRetry={retryImport}
-          onSeeEverything={goToTimeline}
+          onSeeEverything={seeEverything}
         />
       );
     default:

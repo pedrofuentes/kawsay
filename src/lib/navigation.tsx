@@ -51,6 +51,24 @@ export interface NavigationValue {
    *  callers must never reconcile a failed/unpersisted save). Safe to call from an
    *  unmounted child's async settlement: it targets this always-mounted provider. */
   reconcileFavourite: (id: string, isFavourite: boolean) => void;
+  /**
+   * A monotonic counter bumped whenever catalog data the timeline reads has
+   * CHANGED beneath it — today only a completed import (#432 review). MainApp
+   * now keeps Timeline mounted across navigation so its loaded pages/scroll
+   * survive a round trip (#432), which also removed the remount that used to
+   * refetch on return. `useTimeline` takes this as a refetch dependency, so a
+   * real data mutation refreshes the cached, mounted timeline — while a pure
+   * navigation round trip (unchanged data) never bumps it and so still
+   * preserves scroll + loaded pages. Owned here, ABOVE MainApp, so the signal
+   * outlives the view that triggered it (e.g. the Add Memories view unmounts as
+   * the user returns to the timeline).
+   */
+  dataVersion: number;
+  /** Signal that timeline-backing catalog data changed, so the mounted timeline
+   *  refetches page 1 on its next render. Call ONLY on a real mutation (a
+   *  completed import now; undo/delete later) — never on plain navigation, which
+   *  must keep preserving scroll + loaded pages (#432 AC). */
+  invalidateTimeline: () => void;
 }
 
 const NavigationContext = createContext<NavigationValue | null>(null);
@@ -66,6 +84,7 @@ export function NavigationProvider({
 }): ReactElement {
   const [view, setView] = useState<View>(initialView ?? DEFAULT_VIEW);
   const [favouriteOverrides, setFavouriteOverrides] = useState<FavouriteOverrides>({});
+  const [dataVersion, setDataVersion] = useState(0);
 
   const reconcileFavourite = useCallback((id: string, isFavourite: boolean): void => {
     setFavouriteOverrides((prev) =>
@@ -73,9 +92,20 @@ export function NavigationProvider({
     );
   }, []);
 
+  const invalidateTimeline = useCallback((): void => {
+    setDataVersion((version) => version + 1);
+  }, []);
+
   const value = useMemo<NavigationValue>(
-    () => ({ view, navigate: (next: View) => setView(next), favouriteOverrides, reconcileFavourite }),
-    [view, favouriteOverrides, reconcileFavourite],
+    () => ({
+      view,
+      navigate: (next: View) => setView(next),
+      favouriteOverrides,
+      reconcileFavourite,
+      dataVersion,
+      invalidateTimeline,
+    }),
+    [view, favouriteOverrides, reconcileFavourite, dataVersion, invalidateTimeline],
   );
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
 }

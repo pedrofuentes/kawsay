@@ -25,7 +25,6 @@ import { cx } from '@renderer/lib/cx';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
 import { useTimeline } from '@renderer/lib/use-timeline';
-import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 import { computeVirtualWindow } from '@renderer/lib/virtual-window';
 import type { ItemCardDTO, MediaType } from '@shared/kawsay-api';
 
@@ -109,16 +108,80 @@ function buildRows(items: ItemCardDTO[]): Row[] {
   return rows;
 }
 
-export function Timeline(): ReactElement {
-  const { navigate } = useNavigation();
+/**
+ * Overlay the navigation-owned favourite overrides onto a loaded page, cloning
+ * ONLY the cards an override actually changes. Returns the SAME `rawItems`
+ * reference whenever nothing on this page changes — an empty override map, or a
+ * toggle whose item isn't loaded here, or one that already matches the cached
+ * state. That reference stability matters: MainApp keeps this timeline mounted
+ * even while hidden, so a favourite toggle ANYWHERE ticks `favouriteOverrides`;
+ * a blind full remap would reallocate the whole list on every such toggle and
+ * cascade into the row-building and virtualization memos (#432 review 🟡). Here
+ * an unrelated toggle costs one O(n) scan and no allocation.
+ */
+export function applyFavouriteOverrides(
+  rawItems: ItemCardDTO[],
+  favouriteOverrides: Record<string, boolean>,
+): ItemCardDTO[] {
+  // Cheapest possible bail-out: no overrides at all means nothing to overlay.
+  if (Object.keys(favouriteOverrides).length === 0) {
+    return rawItems;
+  }
+  // Does any override actually differ from a loaded card? If not, keep the exact
+  // same list — no reallocation, so downstream memos stay warm.
+  const changesSomething = rawItems.some((item) => {
+    const override = favouriteOverrides[item.id];
+    return override !== undefined && override !== item.isFavourite;
+  });
+  if (!changesSomething) {
+    return rawItems;
+  }
+  return rawItems.map((item) => {
+    const override = favouriteOverrides[item.id];
+    return override !== undefined && override !== item.isFavourite
+      ? { ...item, isFavourite: override }
+      : item;
+  });
+}
+
+export interface TimelineProps {
+  /**
+   * Is Timeline the CURRENTLY VISIBLE view? Defaults to `true` for every
+   * existing caller that renders Timeline as the sole active view.
+   *
+   * MainApp keeps Timeline mounted (rather than swapping it for Search/ItemView
+   * and back) once the person has visited it, so its loaded pages, scroll
+   * offset, and virtualization window survive a "Back" or a trip to Search
+   * without a page-1 refetch (#432). While `active` is false the root is
+   * marked `hidden` — natively out of the accessibility tree, unfocusable, and
+   * not tabbable, with zero visual footprint — and the scroll/resize/streaming
+   * side effects below pause so a backgrounded Timeline never measures a
+   * collapsed (display:none) layout or fires an IPC call no one can see.
+   */
+  active?: boolean;
+}
+
+export function Timeline({ active = true }: TimelineProps = {}): ReactElement {
+  const { navigate, favouriteOverrides, dataVersion } = useNavigation();
   const { library } = useLibrary();
-  const { items, status, hasMore, loadMore, reload } = useTimeline();
+  const { items: rawItems, status, hasMore, loadMore, reload } = useTimeline({ dataVersion });
 
   const who = library?.name?.trim() ?? '';
   const headingTitle = who.length > 0 ? `${who}'s timeline` : 'Timeline';
   const memoriesLabel = `${who.length > 0 ? `${who}'s` : 'Your'} memories`;
 
-  const headingRef = useAutoFocusHeading<HTMLHeadingElement>();
+  // Overlay the navigation-owned favourite OVERRIDES on top of the (possibly
+  // stale) cached page, exactly as ItemView does (#432 review regression A):
+  // MainApp keeps this timeline mounted across a round trip, so a heart marked
+  // on the item view would otherwise never show here (the cached `isFavourite`
+  // is frozen at fetch time). The override map is the single source of settled
+  // truth, so reading it here keeps the card honest without any refetch.
+  const items = useMemo<ItemCardDTO[]>(
+    () => applyFavouriteOverrides(rawItems, favouriteOverrides),
+    [rawItems, favouriteOverrides],
+  );
+
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(DEFAULT_VIEWPORT);
@@ -132,9 +195,26 @@ export function Timeline(): ReactElement {
     overscan: OVERSCAN,
   });
 
-  // Keep the viewport height in sync with the real scroll container once it is
-  // mounted; fall back to a sensible default when layout is unmeasured.
+  // Re-orient keyboard/screen-reader users to the heading (WCAG 2.4.3) whenever
+  // Timeline BECOMES the active view — on first mount, same as every other
+  // view, and again whenever it reappears after being hidden behind an opened
+  // memory or Search (#432), since staying mounted means it never remounts to
+  // re-run a mount-only autofocus effect.
   useEffect(() => {
+    if (active) {
+      headingRef.current?.focus();
+    }
+  }, [active]);
+
+  // Keep the viewport height in sync with the real scroll container once it is
+  // mounted; fall back to a sensible default when layout is unmeasured. Paused
+  // while inactive: a `hidden` (display:none) container reports a 0 height, so
+  // measuring then would poison the virtual window — re-measure instead as
+  // soon as `active` flips back to true.
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
     const element = scrollRef.current;
     if (element === null) {
       return undefined;
@@ -145,14 +225,16 @@ export function Timeline(): ReactElement {
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [status]);
+  }, [status, active]);
 
   // Stream the next page as the window approaches the end of what's loaded.
+  // Paused while inactive so a backgrounded Timeline never fires an IPC call
+  // no one can see (#432).
   useEffect(() => {
-    if (status === 'ready' && hasMore && windowed.endIndex >= rows.length - LOAD_MORE_AHEAD) {
+    if (active && status === 'ready' && hasMore && windowed.endIndex >= rows.length - LOAD_MORE_AHEAD) {
       loadMore();
     }
-  }, [status, hasMore, windowed.endIndex, rows.length, loadMore]);
+  }, [active, status, hasMore, windowed.endIndex, rows.length, loadMore]);
 
   const handleScroll = useCallback((event: React.UIEvent<HTMLElement>): void => {
     setScrollTop(event.currentTarget.scrollTop);
@@ -167,20 +249,27 @@ export function Timeline(): ReactElement {
   );
 
   return (
-    <div className="flex h-full flex-col gap-5">
-      <header className="flex flex-col gap-1">
-        <h1
-          ref={headingRef}
-          tabIndex={-1}
-          className="font-display text-3xl font-semibold text-text-primary outline-none"
-        >
-          {headingTitle}
-        </h1>
-        {status === 'ready' && items.length > 0 ? (
-          <p className="font-body text-base text-text-secondary">Everything, newest first.</p>
-        ) : null}
-      </header>
-      {renderBody()}
+    // A bare wrapper carrying only `hidden` — no sibling layout classes here,
+    // so nothing in the author stylesheet (e.g. a `flex`/`block` utility) can
+    // out-cascade the UA `[hidden] { display: none }` rule and defeat it.
+    // `hidden` alone removes the whole subtree from the accessibility tree,
+    // from the tab order, and from view — no separate `aria-hidden` needed.
+    <div hidden={!active}>
+      <div className="flex h-full flex-col gap-5">
+        <header className="flex flex-col gap-1">
+          <h1
+            ref={headingRef}
+            tabIndex={-1}
+            className="font-display text-3xl font-semibold text-text-primary outline-none"
+          >
+            {headingTitle}
+          </h1>
+          {status === 'ready' && items.length > 0 ? (
+            <p className="font-body text-base text-text-secondary">Everything, newest first.</p>
+          ) : null}
+        </header>
+        {renderBody()}
+      </div>
     </div>
   );
 

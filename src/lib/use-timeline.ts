@@ -15,6 +15,14 @@ export const DEFAULT_TIMELINE_PAGE_SIZE = 60;
 
 export interface UseTimelineOptions {
   pageSize?: number;
+  /**
+   * A monotonic "catalog data changed" signal (owned by NavigationProvider).
+   * When it changes, the hook discards its pages and refetches page 1 — the
+   * mounted-timeline (#432) needs this because it no longer remounts to pick up
+   * a completed import. Left at its default (0) it never triggers a refetch, so
+   * a hook used without it behaves exactly as before.
+   */
+  dataVersion?: number;
 }
 
 export interface UseTimelineResult {
@@ -82,6 +90,7 @@ function reducer(state: TimelineState, action: Action): TimelineState {
 
 export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult {
   const pageSize = options.pageSize ?? DEFAULT_TIMELINE_PAGE_SIZE;
+  const dataVersion = options.dataVersion ?? 0;
   const api = useKawsayApi();
   const [state, dispatch] = useReducer(reducer, api !== undefined, initialState);
 
@@ -90,10 +99,35 @@ export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult
   const stateRef = useRef(state);
   stateRef.current = state;
   const inFlight = useRef(false);
+  // A page-1 refetch (`dataVersion` bump, or `reload`) requested WHILE a fetch is
+  // already in flight must not be lost to the `inFlight` mutex: remember it and
+  // run it once the in-flight fetch settles (#432 race). Without this the
+  // just-imported memories stay invisible until an app relaunch.
+  const pendingRefetch = useRef(false);
+  // Monotonic fetch generation, bumped the moment a refetch SUPERSEDES an
+  // in-flight fetch. Each fetch captures its generation when it starts; a result
+  // whose generation is no longer current is dropped on settle, so a stale
+  // in-flight page (e.g. a background `loadMore`) can never clobber the newer
+  // refetch's result (the seq-guard idiom from use-favourite/use-categorization).
+  const generation = useRef(0);
+  // A stable indirection so `fetchPage` can re-invoke itself from its own
+  // `finally` (to run a pending refetch) without listing itself as a dep.
+  const fetchPageRef = useRef<(mode: 'initial' | 'more') => Promise<void>>();
 
   const fetchPage = useCallback(
     async (mode: 'initial' | 'more'): Promise<void> => {
-      if (api === undefined || inFlight.current) {
+      if (api === undefined) {
+        return;
+      }
+      if (inFlight.current) {
+        // A fetch is already running. A page-1 refetch can't be dropped: remember
+        // it and invalidate the in-flight fetch's generation so its (now stale)
+        // result won't clobber the reload we run once it settles. A `more` during
+        // flight is still an inert no-op — the initial fetch owns page 1.
+        if (mode === 'initial') {
+          pendingRefetch.current = true;
+          generation.current += 1;
+        }
         return;
       }
       const current = stateRef.current;
@@ -110,6 +144,7 @@ export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult
       }
 
       inFlight.current = true;
+      const myGeneration = generation.current;
       dispatch(mode === 'initial' ? { type: 'load-start' } : { type: 'load-more-start' });
       try {
         const request =
@@ -117,26 +152,47 @@ export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult
             ? { limit: pageSize, cursor: current.cursor }
             : { limit: pageSize };
         const result = await api.getTimeline(request);
-        dispatch({
-          type: 'page',
-          items: result.items,
-          nextCursor: result.nextCursor,
-          append: mode === 'more',
-        });
+        // Drop a superseded fetch's result entirely: a refetch requested while we
+        // were in flight already bumped the generation, so applying this page
+        // would clobber the newer reload with stale data.
+        if (myGeneration === generation.current) {
+          dispatch({
+            type: 'page',
+            items: result.items,
+            nextCursor: result.nextCursor,
+            append: mode === 'more',
+          });
+        }
       } catch (cause) {
-        dispatch({ type: 'fail', error: cause instanceof Error ? cause.message : String(cause) });
+        if (myGeneration === generation.current) {
+          dispatch({ type: 'fail', error: cause instanceof Error ? cause.message : String(cause) });
+        }
       } finally {
         inFlight.current = false;
+        // A refetch that arrived mid-flight was remembered, not run — run it now
+        // that the mutex is clear. It starts a fresh page-1 fetch at the current
+        // (already-bumped) generation, so it strictly succeeds the stale one.
+        if (pendingRefetch.current) {
+          pendingRefetch.current = false;
+          void fetchPageRef.current?.('initial');
+        }
       }
     },
     [api, pageSize],
   );
+  fetchPageRef.current = fetchPage;
 
+  // Fetch page 1 on mount, and again whenever `dataVersion` changes — a real
+  // catalog mutation (a completed import; #432 review). `fetchPage` is stable
+  // across `dataVersion` ticks (its deps are only api + pageSize), so this
+  // fires exactly once per genuine change, never on an incidental re-render. A
+  // consumer that passes no `dataVersion` pins it at 0, so this reduces to the
+  // original mount-only fetch.
   useEffect(() => {
     if (api !== undefined) {
       void fetchPage('initial');
     }
-  }, [api, fetchPage]);
+  }, [api, fetchPage, dataVersion]);
 
   const loadMore = useCallback(() => {
     void fetchPage('more');
