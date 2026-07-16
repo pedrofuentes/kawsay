@@ -6,10 +6,11 @@ import { OnboardingFlow } from '@renderer/onboarding/OnboardingFlow';
 import { makeFakeApi, makeImportSummary, makeProgressEvent } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
 import { ViewProbe, wrapInProviders } from './support/render';
+import { expectNoAxeViolations } from './support/axe';
 
-function setup(api: FakeApi = makeFakeApi()): { api: FakeApi; user: UserEvent } {
+function setup(api: FakeApi = makeFakeApi()): { api: FakeApi; user: UserEvent; unmount: () => void } {
   const user = userEvent.setup();
-  render(
+  const { unmount } = render(
     wrapInProviders(
       <>
         <OnboardingFlow />
@@ -18,7 +19,7 @@ function setup(api: FakeApi = makeFakeApi()): { api: FakeApi; user: UserEvent } 
       api,
     ),
   );
-  return { api, user };
+  return { api, user, unmount };
 }
 
 async function reachLibraryStep(user: UserEvent): Promise<void> {
@@ -58,6 +59,93 @@ describe('Onboarding — Step 0: welcome (privacy you can feel)', () => {
     setup();
     expect(screen.getByRole('main')).toBeInTheDocument();
     expect(screen.getAllByText(/computer/i).length).toBeGreaterThan(0);
+  });
+});
+
+describe('Onboarding — "Show me around first": a real, skippable 3-card tour (#434)', () => {
+  it('opens a 3-card tour instead of dumping the visitor straight on an empty timeline', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: /show me around first/i }));
+
+    expect(screen.getByText(/step 1 of 3/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+    // Not on the timeline yet — the tour is a real screen, not a silent redirect.
+    expect(screen.queryByTestId('active-view')).toHaveTextContent('onboarding');
+  });
+
+  it('moves focus to each card heading as the tour advances (§6 focus management)', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: /show me around first/i }));
+    const firstHeading = screen.getByRole('heading', { level: 1 });
+    await waitFor(() => expect(firstHeading).toHaveFocus());
+    const firstHeadingText = firstHeading.textContent;
+
+    await user.click(screen.getByRole('button', { name: /^next/i }));
+    await waitFor(() => expect(screen.getByText(/step 2 of 3/i)).toBeInTheDocument());
+    const secondHeading = screen.getByRole('heading', { level: 1 });
+    expect(secondHeading.textContent).not.toBe(firstHeadingText);
+    await waitFor(() => expect(secondHeading).toHaveFocus());
+  });
+
+  it('offers Skip on every one of the 3 cards, and skipping lands on the timeline', async () => {
+    for (let skipAt = 1; skipAt <= 3; skipAt += 1) {
+      const { user, unmount } = setup();
+      await user.click(screen.getByRole('button', { name: /show me around first/i }));
+      for (let i = 1; i < skipAt; i += 1) {
+        await user.click(screen.getByRole('button', { name: /^next/i }));
+        await screen.findByText(new RegExp(`step ${i + 1} of 3`, 'i'));
+      }
+      expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /skip/i }));
+      expect(screen.getByTestId('active-view')).toHaveTextContent('timeline');
+      unmount();
+    }
+  });
+
+  it('the 3rd card is reached via Next, covers the timeline / add memories / privacy beats, and finishing lands on the timeline', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: /show me around first/i }));
+
+    // Card 1 — the timeline.
+    expect(screen.getByRole('heading', { level: 1, name: /timeline/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^next/i }));
+
+    // Card 2 — adding memories.
+    await screen.findByText(/step 2 of 3/i);
+    expect(screen.getByRole('heading', { level: 1, name: /add memories/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^next/i }));
+
+    // Card 3 — privacy, using the exact reassurance copy (also echoed in the
+    // ever-present StepContainer footer, so at least one match is enough).
+    await screen.findByText(/step 3 of 3/i);
+    expect(screen.getAllByText(/your memories never leave this computer/i).length).toBeGreaterThan(0);
+
+    // No more "Next" — the only ways forward are Skip or finishing.
+    expect(screen.queryByRole('button', { name: /^next/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /(timeline|done|start)/i }));
+    expect(screen.getByTestId('active-view')).toHaveTextContent('timeline');
+  });
+
+  it('has no axe violations on any of the 3 cards', async () => {
+    for (const cardIndex of [1, 2, 3]) {
+      const user = userEvent.setup();
+      const { container, unmount } = render(
+        wrapInProviders(
+          <>
+            <OnboardingFlow />
+            <ViewProbe />
+          </>,
+          makeFakeApi(),
+        ),
+      );
+      await user.click(screen.getByRole('button', { name: /show me around first/i }));
+      for (let i = 1; i < cardIndex; i += 1) {
+        await user.click(screen.getByRole('button', { name: /^next/i }));
+        await screen.findByText(new RegExp(`step ${i + 1} of 3`, 'i'));
+      }
+      await expectNoAxeViolations(container);
+      unmount();
+    }
   });
 });
 

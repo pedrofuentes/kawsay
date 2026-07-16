@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, renderHook, screen } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ItemView } from '@renderer/views/ItemView';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
@@ -444,6 +444,154 @@ describe('ItemView — favourite toggle race + lifecycle guards (#434)', () => {
 
     // Once settled it is interactive again.
     expect(screen.getByRole('button', { name: /remove from favourites/i })).not.toBeDisabled();
+  });
+});
+
+describe('ItemView — ←/→ keyboard navigation between memories (#434)', () => {
+  function renderWithSiblings(
+    siblings: ItemCardDTO[],
+    current: ItemCardDTO,
+    api: FakeApi = makeFakeApi(),
+  ) {
+    const user = userEvent.setup();
+    const result = render(
+      wrapInProviders(
+        <>
+          <ItemView />
+          <button type="button">outside the memory view</button>
+        </>,
+        api,
+        { name: 'item', item: current, from: { name: 'timeline' }, siblings },
+      ),
+    );
+    return { api, user, ...result };
+  }
+
+  it('ArrowRight moves to the next memory in timeline order', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { user } = renderWithSiblings([a, b, c], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowRight}');
+
+    expect(await screen.findByRole('heading', { level: 1, name: /second memory/i })).toBeInTheDocument();
+  });
+
+  it('ArrowLeft moves to the previous memory in timeline order', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { user } = renderWithSiblings([a, b, c], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await user.keyboard('{ArrowLeft}');
+
+    expect(await screen.findByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+  });
+
+  it('does not wrap past the last memory — ArrowRight is a graceful no-op at the end', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user } = renderWithSiblings([a, b], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await user.keyboard('{ArrowRight}');
+
+    // Still on the last memory — nothing broke, nothing wrapped to the first.
+    expect(screen.getByRole('heading', { level: 1, name: /second memory/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /first memory/i })).not.toBeInTheDocument();
+  });
+
+  it('does not wrap past the first memory — ArrowLeft is a graceful no-op at the start', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user } = renderWithSiblings([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowLeft}');
+
+    expect(screen.getByRole('heading', { level: 1, name: /first memory/i })).toBeInTheDocument();
+  });
+
+  it('is a graceful no-op with no timeline context at all (opened without siblings)', async () => {
+    const item = makeItemCard({ mediaType: 'photo', title: 'A lone memory' });
+    const user = userEvent.setup();
+    render(wrapInProviders(<ItemView />, makeFakeApi(), { name: 'item', item }));
+
+    await screen.findByRole('heading', { level: 1, name: /a lone memory/i });
+    await user.keyboard('{ArrowRight}');
+    await user.keyboard('{ArrowLeft}');
+
+    expect(screen.getByRole('heading', { level: 1, name: /a lone memory/i })).toBeInTheDocument();
+  });
+
+  it('offers visible Previous/Next controls too — not keyboard-only', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { user } = renderWithSiblings([a, b, c], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    // The middle memory has both directions available.
+    expect(screen.getByRole('button', { name: /previous/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^next/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^next/i }));
+    expect(await screen.findByRole('heading', { level: 1, name: /third memory/i })).toBeInTheDocument();
+  });
+
+  it('hides the Previous control at the start and the Next control at the end', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    renderWithSiblings([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    expect(screen.queryByRole('button', { name: /previous/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^next/i })).toBeInTheDocument();
+  });
+
+  it('does not trap focus — Tab still reaches a control outside the memory view', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user } = renderWithSiblings([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+
+    const outside = screen.getByRole('button', { name: /outside the memory view/i });
+    outside.focus();
+    expect(outside).toHaveFocus();
+  });
+
+  it('politely announces the move so a screen-reader user hears which memory is now showing', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const { user, container } = renderWithSiblings([a, b], a);
+
+    await screen.findByRole('heading', { level: 1, name: /first memory/i });
+    await user.keyboard('{ArrowRight}');
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+
+    const liveRegions = container.querySelectorAll('[aria-live="polite"]');
+    expect(liveRegions.length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(Array.from(liveRegions).some((el) => /second memory/i.test(el.textContent ?? ''))).toBe(
+        true,
+      ),
+    );
+  });
+
+  it('has no axe violations with Previous/Next controls visible', async () => {
+    const a = makeItemCard({ mediaType: 'photo', title: 'First memory' });
+    const b = makeItemCard({ mediaType: 'photo', title: 'Second memory' });
+    const c = makeItemCard({ mediaType: 'photo', title: 'Third memory' });
+    const { container } = renderWithSiblings([a, b, c], b);
+
+    await screen.findByRole('heading', { level: 1, name: /second memory/i });
+    await expectNoAxeViolations(container);
   });
 });
 
