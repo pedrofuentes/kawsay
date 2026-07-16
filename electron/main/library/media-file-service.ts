@@ -17,7 +17,6 @@
 //
 // Pure Node (no Electron), so the resolve→confine path unit-tests under Vitest
 // exactly as in production — mirroring the thumbnail service.
-import { extname } from 'node:path';
 import { resolveServableOriginal } from './originals-store';
 import type { CatalogDatabase } from '../db/connection';
 import type { MediaType } from '@shared/catalog';
@@ -25,10 +24,13 @@ import type { MediaType } from '@shared/catalog';
 /** The media kinds that can be served as bytes for playback / full-size viewing. */
 const PLAYABLE_MEDIA: ReadonlySet<MediaType> = new Set<MediaType>(['photo', 'audio', 'video']);
 
-/** A resolved, confined media file ready to stream. */
+/** A resolved, confined media file ready to stream — PINNED by an open fd (never a
+ *  path), so the file that was validated is the exact file that is streamed. */
 export interface MediaFileDescriptor {
-  /** Absolute path INSIDE the library the service resolved + confined itself. */
-  absPath: string;
+  /** An open, read-only fd on the confined regular file. The CALLER must close it. */
+  fd: number;
+  /** The file size from `fstat` on the same fd (drives Content-Length / Range). */
+  size: number;
   /** The content-type to serve (stored mime, else derived from the extension). */
   mimeType: string;
   mediaType: MediaType;
@@ -42,11 +44,13 @@ export interface MediaFileServiceOptions {
 
 export interface MediaFileService {
   /**
-   * Resolve one memory's confined original + content-type by opaque id, or null
-   * (unknown id, non-playable media, or no surviving/servable original). THROWS —
-   * exactly like {@link resolveServableOriginal} — if the resolved path would escape
-   * its servable roots (a bad content-address, or an in-place symlink swap), so a
-   * hostile row can never yield a servable path.
+   * Resolve one memory's confined original by opaque id, PINNED by an open fd, plus
+   * its size + content-type — or null (unknown id, non-playable media, or no
+   * surviving/servable/on-disk original). THROWS — exactly like {@link
+   * resolveServableOriginal} — if the resolved path would escape its servable roots
+   * or is not a regular file (a bad content-address, or an in-place symlink swap), so
+   * a hostile row can never yield a servable file. The CALLER owns and must close the
+   * returned fd.
    */
   resolve(id: string): MediaFileDescriptor | null;
 }
@@ -82,37 +86,48 @@ const EXT_MIME: Readonly<Record<string, string>> = {
   '.bmp': 'image/bmp',
 };
 
-function contentTypeFor(storedMime: string | null, absPath: string): string {
+/** Content-type from the stored mime, else the catalog's `original_ext` — derived
+ *  from the DB, NOT the filesystem path, so no path is touched after validation. */
+function contentTypeFor(storedMime: string | null, ext: string | null): string {
   const trimmed = storedMime?.trim();
   if (trimmed) return trimmed;
-  const byExt = EXT_MIME[extname(absPath).toLowerCase()];
-  return byExt ?? 'application/octet-stream';
+  if (ext) {
+    const dotted = (ext.startsWith('.') ? ext : `.${ext}`).toLowerCase();
+    const byExt = EXT_MIME[dotted];
+    if (byExt) return byExt;
+  }
+  return 'application/octet-stream';
 }
 
 export function createMediaFileService(options: MediaFileServiceOptions): MediaFileService {
   const { db, root } = options;
   const rowStmt = db.prepare(
-    'SELECT media_type AS mediaType, mime_type AS mimeType FROM items WHERE id = @id',
+    'SELECT media_type AS mediaType, mime_type AS mimeType, original_ext AS ext FROM items WHERE id = @id',
   );
 
   return {
     resolve(id) {
-      const row = rowStmt.get<{ mediaType: MediaType; mimeType: string | null }>({ id });
+      const row = rowStmt.get<{ mediaType: MediaType; mimeType: string | null; ext: string | null }>(
+        { id },
+      );
       if (row === undefined) return null;
       // Non-playable media is decided from the catalog alone — no original is ever
       // resolved or read.
       if (!PLAYABLE_MEDIA.has(row.mediaType)) return null;
 
-      // resolveServableOriginal is the SERVE-TIME confinement boundary: it THROWS on
-      // an escaping path (a bad content-address, or an in-place file whose realpath
-      // escapes its source root) rather than returning one, and that throw
-      // deliberately propagates (the handler turns it into a 404, no read).
+      // resolveServableOriginal is the SERVE-TIME confinement boundary: it realpaths +
+      // confines ONCE, then PINS the validated file by an open fd. It THROWS on an
+      // escaping path / non-regular file (a bad content-address, or an in-place file
+      // whose realpath escapes its source root) rather than returning one — the throw
+      // deliberately propagates (the handler turns it into a 404, no bytes). The
+      // returned fd is owned by the caller (the protocol handler), which closes it.
       const servable = resolveServableOriginal(db, root, id);
       if (servable === null) return null;
 
       return {
-        absPath: servable.absPath,
-        mimeType: contentTypeFor(row.mimeType, servable.absPath),
+        fd: servable.fd,
+        size: servable.size,
+        mimeType: contentTypeFor(row.mimeType, row.ext),
         mediaType: row.mediaType,
       };
     },

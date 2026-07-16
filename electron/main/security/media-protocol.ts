@@ -4,19 +4,22 @@
 //   • A URL carries EXACTLY one opaque catalog id (`z.uuid()`). A path, a traversal
 //     string, an extra segment, a query, or the wrong host/scheme never validates —
 //     so the renderer can never name (or smuggle) a filesystem path.
-//   • The id is resolved SERVER-SIDE to a confined originals-store file (via the
-//     injected resolver, which throws on an escaping content-address). A resolve
-//     that yields nothing — or throws — answers a 4xx and streams NOT ONE byte.
-//   • A resolvable memory streams its LOCAL file with the right content-type,
-//     `Accept-Ranges: bytes`, and HTTP range support (206) for video seeking. The
-//     handler reads a local file only; it opens no socket (AC-4).
+//   • The id is resolved SERVER-SIDE to a confined originals-store file, PINNED by an
+//     open fd (via the injected resolver, which realpath-confines then opens once and
+//     throws on an escaping path). A resolve that yields nothing — or throws —
+//     answers a 4xx and streams NOT ONE byte.
+//   • A resolvable memory streams FROM THE PINNED FD — the exact file that was
+//     validated — with the right content-type, `Accept-Ranges: bytes`, and HTTP range
+//     support (206) for video seeking. The handler NEVER re-opens a path (so a swap of
+//     the path after validation cannot redirect the read — TOCTOU), and it owns the
+//     fd: it is closed on EVERY path (empty file, error, and normal end via
+//     `autoClose`). The handler reads a local file only; it opens no socket (AC-4).
 //
 // Pure Web + Node primitives (Request-shape in, `Response` out, `node:fs` streams),
 // no Electron import — so the whole serving path unit-tests under Vitest. The tiny
 // Electron-specific wiring (registerSchemesAsPrivileged + protocol.handle) lives in
 // the composition root (`electron/main/index.ts`).
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { closeSync, createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { MEDIA_PROTOCOL_SCHEME, MEDIA_URL_HOST } from '@shared/media';
@@ -38,9 +41,13 @@ export const MEDIA_PROTOCOL_PRIVILEGES = {
  *  string can never validate (mirrors the `catalog:*` channels' `z.uuid()`). */
 const mediaIdSchema = z.uuid();
 
-/** A resolved, confined media file ready to stream (the handler needs only these). */
+/** A resolved, confined media file PINNED by an open fd (the handler streams FROM the
+ *  fd and never re-opens a path). The handler OWNS the fd and closes it on every path. */
 export interface ResolvedMedia {
-  absPath: string;
+  /** An open, read-only fd on the validated regular file. */
+  fd: number;
+  /** The file size from `fstat` on the same fd (drives Content-Length / Range). */
+  size: number;
   mimeType: string;
 }
 
@@ -52,8 +59,9 @@ export interface MediaRequestLike {
 }
 
 export interface MediaProtocolHandlerOptions {
-  /** Resolve an opaque id → a confined file, or null. May THROW on a confinement
-   *  rejection; the handler turns that into a 404 (never reads outside the store). */
+  /** Resolve an opaque id → a confined file PINNED by an open fd, or null. May THROW
+   *  on a confinement rejection; the handler turns that into a 404 (never reads outside
+   *  the store) and OWNS the returned fd (closing it on every path). */
   resolve: (id: string) => ResolvedMedia | null;
   /**
    * Privacy-preserving sink for a REJECTED serve (a confinement throw or a mid-stream
@@ -162,43 +170,53 @@ export function createMediaProtocolHandler(
     }
     if (media === null) return emptyResponse(404);
 
-    let size: number;
+    // From here we OWN media.fd. It MUST be closed on every path: the stream's
+    // `autoClose` closes it on end/error; a size-0 short-circuit and any failure
+    // BEFORE the stream is handed off close it explicitly. The size comes from the
+    // resolver's `fstat` on THIS fd — no path is ever re-opened (TOCTOU-safe).
+    const { fd, size, mimeType } = media;
     try {
-      const stats = await stat(media.absPath);
-      if (!stats.isFile()) return emptyResponse(404);
-      size = stats.size;
-    } catch {
-      return emptyResponse(404);
-    }
+      const range = parseRangeHeader(request.headers.get('range'), size);
+      const start = range?.start ?? 0;
+      const end = range?.end ?? Math.max(size - 1, 0);
+      const length = size === 0 ? 0 : end - start + 1;
 
-    const range = parseRangeHeader(request.headers.get('range'), size);
-    const start = range?.start ?? 0;
-    const end = range?.end ?? Math.max(size - 1, 0);
-    const length = size === 0 ? 0 : end - start + 1;
+      const headers = new Headers({
+        'Content-Type': mimeType,
+        'Content-Length': String(length),
+        'Accept-Ranges': 'bytes',
+        // The id→bytes mapping is stable and local; a private cache is safe (no egress).
+        'Cache-Control': 'no-cache',
+      });
+      if (range !== null) headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+      const status = range !== null ? 206 : 200;
 
-    let body: ReadableStream<Uint8Array> | null = null;
-    if (length > 0) {
-      const nodeStream = createReadStream(media.absPath, { start, end });
-      // A mid-stream read failure (file truncated/removed while streaming) must be
-      // HANDLED, not crash the process: log a privacy-preserving diagnostic and let
-      // the web stream surface the error to the media element (a graceful load fail).
+      if (length <= 0) {
+        // Nothing to stream (empty original): close the pinned fd ourselves, no body.
+        closeSync(fd);
+        return new Response(null, { status, headers });
+      }
+
+      // Stream FROM THE PINNED FD (the '' path is ignored when `fd` is set). `autoClose`
+      // closes the fd when the stream ends or errors — so it is freed on every outcome.
+      const nodeStream = createReadStream('', { fd, start, end, autoClose: true });
+      // A mid-stream read failure (file truncated while streaming) must be HANDLED, not
+      // crash: log a privacy-preserving diagnostic; the web stream surfaces the error to
+      // the media element (a graceful load fail), and autoClose still frees the fd.
       nodeStream.on('error', (error) => {
         options.onRejected?.(diagnosticError(error));
       });
-      body = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
+      const body = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
+      return new Response(body, { status, headers });
+    } catch (error) {
+      // Any failure building the response must NEVER leak the pinned fd.
+      try {
+        closeSync(fd);
+      } catch {
+        /* already closed */
+      }
+      options.onRejected?.(diagnosticError(error));
+      return emptyResponse(404);
     }
-
-    const headers = new Headers({
-      'Content-Type': media.mimeType,
-      'Content-Length': String(length),
-      'Accept-Ranges': 'bytes',
-      // The id→bytes mapping is stable and local; a private cache is safe (no egress).
-      'Cache-Control': 'no-cache',
-    });
-    if (range !== null) {
-      headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
-      return new Response(body, { status: 206, headers });
-    }
-    return new Response(body, { status: 200, headers });
   };
 }
