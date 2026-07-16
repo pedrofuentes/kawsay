@@ -267,9 +267,27 @@ function resolveMediaBinaries(): { ffmpegPath: string; ffprobePath: string } {
     resourcesPath: process.resourcesPath,
     projectRoot: app.getAppPath(),
   };
+  // E2E-ONLY escape hatch (#445): the packaged app ships ffmpeg/ffprobe only for
+  // macOS + Windows, and resolution HARD-throws on an unshipped platform (Linux
+  // CI) or an unstaged dev checkout — which would abort even a media-free import
+  // (e.g. a WhatsApp text chat that never probes a byte) at `beginImport`. When —
+  // and ONLY when — the harness sets `KAWSAY_E2E`, degrade a failed resolution to
+  // an empty path (mirroring the video-thumbnailer's existing try/catch degrade)
+  // so the user-journey e2e suite can drive a real, offline import end-to-end.
+  // Production never sets this env var, so its behaviour is byte-identical (the
+  // throw is preserved); a media file under the flag simply skips its probe.
+  const e2e = process.env['KAWSAY_E2E'] === '1';
+  const resolveOrDegrade = (resolve: (opts: typeof base) => string): string => {
+    try {
+      return resolve(base);
+    } catch (error) {
+      if (e2e) return '';
+      throw error;
+    }
+  };
   return {
-    ffmpegPath: resolveFfmpegPath(base),
-    ffprobePath: resolveFfprobePath(base),
+    ffmpegPath: resolveOrDegrade(resolveFfmpegPath),
+    ffprobePath: resolveOrDegrade(resolveFfprobePath),
   };
 }
 
