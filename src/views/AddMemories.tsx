@@ -110,6 +110,7 @@ export function AddMemories(): ReactElement {
           }}
           onRetry={retryImport}
           onSeeEverything={seeEverything}
+          onUndo={() => importJob.undo()}
         />
       );
     default:

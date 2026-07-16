@@ -60,6 +60,17 @@ export const CATALOG_GET_TRANSCRIPT = 'catalog:getTranscript';
 export const CATALOG_SET_FAVOURITE = 'catalog:setFavourite';
 /** IPC channel: start an off-thread import; resolves with the new job id. */
 export const IMPORT_START = 'import:start';
+/**
+ * IPC channel: undo an import (#429, AC-14 / P4b). Removes EXACTLY the occurrences
+ * one source contributed, drops the items left with no other occurrence (cascading
+ * their derived rows) and reclaims only those orphans' copied originals/thumbnails —
+ * an item deduped into another source (and its file) SURVIVES. Scoped to the
+ * `sources.id` this import wrote against (the EXISTING dedup-with-provenance schema,
+ * ADR-0003 — no migration), so for a fresh post-import undo the source IS this run.
+ * The request carries only that opaque source id (a uuid — never a path); the
+ * response echoes the counts removed. All-or-nothing (one transaction).
+ */
+export const CATALOG_UNDO_IMPORT = 'catalog:undoImport';
 /** IPC channel: cooperatively cancel an in-flight import by job id. */
 export const IMPORT_CANCEL = 'import:cancel';
 
@@ -252,7 +263,18 @@ export const ipcContract = {
       sourceType: sourceTypeSchema,
       inputPath: pathSchema,
     }),
-    response: z.strictObject({ jobId: z.uuid() }),
+    // `sourceId` is the stable `sources.id` this run writes against — echoed so the
+    // renderer can later offer an "undo this import" (catalog:undoImport, #429).
+    response: z.strictObject({ jobId: z.uuid(), sourceId: z.uuid() }),
+  },
+  [CATALOG_UNDO_IMPORT]: {
+    // Only the opaque source id (a uuid) — never a path, so a traversal string can
+    // never validate. Mirrors catalog:setFavourite's id-only request shape.
+    request: z.strictObject({ sourceId: z.uuid() }),
+    response: z.strictObject({
+      itemsRemoved: z.number().int().nonnegative(),
+      occurrencesRemoved: z.number().int().nonnegative(),
+    }),
   },
   [IMPORT_CANCEL]: {
     request: z.strictObject({ jobId: z.uuid() }),

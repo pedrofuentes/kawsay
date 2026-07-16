@@ -73,10 +73,28 @@ export interface KawsayAPI {
    */
   setFavourite(input: { id: string; favourite: boolean }): Promise<{ isFavourite: boolean }>;
 
-  /** Start an off-thread import; resolves with the new job id. */
-  startImport(input: { sourceType: SourceType; inputPath: string }): Promise<{ jobId: string }>;
+  /**
+   * Start an off-thread import; resolves with the new job id AND the `sourceId` this
+   * run writes against, so the renderer can later offer an "undo this import" (#429).
+   */
+  startImport(input: {
+    sourceType: SourceType;
+    inputPath: string;
+  }): Promise<{ jobId: string; sourceId: string }>;
   /** Cooperatively cancel an in-flight import. */
   cancelImport(input: { jobId: string }): Promise<{ cancelled: boolean }>;
+
+  /**
+   * Undo an import (#429, AC-14 / P4b): remove EXACTLY what one import added and
+   * nothing else. The renderer passes only that import's opaque `sourceId` (never a
+   * path); the main process removes that source's occurrences, drops the memories
+   * left with no other source, and reclaims only those orphans' copied files — a
+   * memory that also came from another source (and its file) survives. Resolves the
+   * counts removed. CALLER-INITIATED from the confirm-gated post-import UndoBanner.
+   */
+  undoImport(input: {
+    sourceId: string;
+  }): Promise<{ itemsRemoved: number; occurrencesRemoved: number }>;
 
   /**
    * Open a native folder picker (W2). Resolves with the absolute path the user

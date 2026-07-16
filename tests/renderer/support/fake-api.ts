@@ -20,6 +20,8 @@ import type {
 
 /** A stable, valid-looking job id used across import tests. */
 export const FAKE_JOB_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+/** A stable, valid-looking source id an import writes against (undo handle, #429). */
+export const FAKE_SOURCE_ID = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
 
 let itemCardSeq = 0;
 let itemCategorySeq = 0;
@@ -213,6 +215,7 @@ export interface FakeApiOptions {
   searchCatalog?: KawsayAPI['searchCatalog'];
   startImport?: KawsayAPI['startImport'];
   cancelImport?: KawsayAPI['cancelImport'];
+  undoImport?: KawsayAPI['undoImport'];
   openDirectory?: KawsayAPI['openDirectory'];
   openFile?: KawsayAPI['openFile'];
   getThumbnail?: KawsayAPI['getThumbnail'];
@@ -277,8 +280,11 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       vi.fn((input: { path: string }) => Promise.resolve(makeLibrarySummary({ root: input.path }))),
     getTimeline: opts.getTimeline ?? vi.fn(() => Promise.resolve({ items: [], nextCursor: null })),
     searchCatalog: opts.searchCatalog ?? vi.fn(() => Promise.resolve({ items: [], total: 0 })),
-    startImport: opts.startImport ?? vi.fn(() => Promise.resolve({ jobId })),
+    startImport:
+      opts.startImport ?? vi.fn(() => Promise.resolve({ jobId, sourceId: FAKE_SOURCE_ID })),
     cancelImport: opts.cancelImport ?? vi.fn(() => Promise.resolve({ cancelled: true })),
+    undoImport:
+      opts.undoImport ?? vi.fn(() => Promise.resolve({ itemsRemoved: 0, occurrencesRemoved: 0 })),
     // Default to "cancelled" (null) so existing flows that never click Browse are
     // unaffected; tests that exercise the picker pass their own resolved path.
     openDirectory: opts.openDirectory ?? vi.fn(() => Promise.resolve(null)),

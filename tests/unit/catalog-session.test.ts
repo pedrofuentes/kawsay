@@ -393,11 +393,53 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(onlyWhatsapp.items.map((i) => i.source)).toEqual(['whatsapp']);
   });
 
+  it('undoImport removes THIS import\'s source but spares an item deduped into another (#429)', () => {
+    session.createLibrary({ path: root });
+    // Seed a pre-import source A and this import's source B, sharing ONE deduped item
+    // plus a B-only item, through a second connection (the session reads the commit).
+    const db = openCatalog(join(root, 'catalog.sqlite3'));
+    const repo = createCatalogRepo(db);
+    const sourceA = repo.registerSource({ sourceKey: 'A', type: 'google_takeout', label: 'A' });
+    const sourceB = repo.registerSource({ sourceKey: 'B', type: 'whatsapp', label: 'B' });
+    const shared = repo.insertItem({ mediaType: 'photo', contentHash: 'shared', originalExt: '.jpg' });
+    repo.addOccurrence({ itemId: shared, sourceId: sourceA, sourceRef: 'A/1', originalKind: 'none' });
+    repo.addOccurrence({ itemId: shared, sourceId: sourceB, sourceRef: 'B/1', originalKind: 'none' });
+    const onlyB = repo.insertItem({ mediaType: 'photo', contentHash: 'onlyB', originalExt: '.jpg' });
+    repo.addOccurrence({ itemId: onlyB, sourceId: sourceB, sourceRef: 'B/2', originalKind: 'none' });
+    db.close();
+
+    const result = session.undoImport({ sourceId: sourceB });
+
+    // Only B's contribution goes: the deduped item survives (its A occurrence remains);
+    // the B-only item is dropped. Two occurrences removed, one item removed.
+    expect(result).toEqual({ itemsRemoved: 1, occurrencesRemoved: 2 });
+    const after = openCatalog(join(root, 'catalog.sqlite3'));
+    expect(Number((after.prepare('SELECT COUNT(*) AS n FROM items').get() as { n: number }).n)).toBe(1);
+    expect(
+      Number((after.prepare('SELECT COUNT(*) AS n FROM item_occurrences').get() as { n: number }).n),
+    ).toBe(1);
+    after.close();
+  });
+
+  it('undoImport throws when no library is open', () => {
+    expect(() => session.undoImport({ sourceId: JOB_ID })).toThrow();
+  });
+
+  it('undoImport refuses while an import is still in flight (race guard, #429)', () => {
+    session.createLibrary({ path: root });
+    // Start an import so the coordinator reports an active job; undo must refuse rather
+    // than remove rows out from under a still-writing worker.
+    session.beginImport({ sourceType: 'folder', inputPath: root });
+    expect(coordinator.started.length).toBeGreaterThan(0);
+    expect(() => session.undoImport({ sourceId: JOB_ID })).toThrow(/in progress/i);
+  });
+
   it('beginImport registers a source and starts a well-formed off-thread job', () => {
     session.createLibrary({ path: root });
-    const { jobId } = session.beginImport({ sourceType: 'folder', inputPath: root });
+    const { jobId, sourceId } = session.beginImport({ sourceType: 'folder', inputPath: root });
 
     expect(jobId).toBe(JOB_ID);
+    expect(sourceId).toBeTruthy(); // echoed so the renderer can later undo this import (#429)
     expect(coordinator.started).toHaveLength(1);
     const job = coordinator.started[0];
     expect(job).toMatchObject({

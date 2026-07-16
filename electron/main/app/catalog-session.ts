@@ -28,6 +28,7 @@ import {
   type LibrarySummary,
 } from '../library/library-service';
 import { openCatalog, type CatalogDatabase } from '../db/connection';
+import { removeSource } from '../library/originals-store';
 import {
   createCatalogRepo,
   type CatalogRepo,
@@ -155,8 +156,19 @@ export interface CatalogSession {
    * id names no item (an unknown id is never silently ignored).
    */
   setFavourite(input: { id: string; favourite: boolean }): { isFavourite: boolean };
-  beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
+  beginImport(input: { sourceType: SourceType; inputPath: string }): {
+    jobId: string;
+    sourceId: string;
+  };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
+  /**
+   * Undo an import (#429, AC-14): remove exactly the named source's occurrences,
+   * drop the items left with no other occurrence (cascading their derived rows), and
+   * reclaim only those orphans' copied originals/thumbnails — a memory deduped into
+   * another source (and its file) survives. One transaction (all-or-nothing). Throws
+   * {@link CatalogSessionError} when no library is open. Echoes the counts removed.
+   */
+  undoImport(input: { sourceId: string }): { itemsRemoved: number; occurrencesRemoved: number };
   /** The host-side transcription library port for the OPEN library (#157). */
   transcription(): TranscriptionLibraryPort;
   /**
@@ -521,10 +533,27 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         ffprobePath,
       };
       coordinator.start(job);
-      return { jobId };
+      return { jobId, sourceId };
     },
     cancelImport(input) {
       return { cancelled: coordinator.cancel(input.jobId) };
+    },
+    undoImport(input) {
+      const { db, summary } = requireOpen();
+      // Never undo while ANY import is still in flight: the worker thread may still be
+      // writing occurrences/originals for a source, and removing rows out from under it
+      // could corrupt state. Imports are one-at-a-time (see beginImport), and a settled
+      // import's worker is torn down before its summary/UndoBanner appears — so in the
+      // normal post-import flow this is empty. Surfaced as a rejected invoke the UI
+      // shows as a reverent "still here" (the memories are untouched).
+      if (coordinator.active().length > 0) {
+        throw new CatalogSessionError('an import is in progress');
+      }
+      const result = removeSource(db, summary.root, input.sourceId);
+      return {
+        itemsRemoved: result.itemsRemoved,
+        occurrencesRemoved: result.occurrencesRemoved,
+      };
     },
     transcription() {
       return requireOpen().transcription;

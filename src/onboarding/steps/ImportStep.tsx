@@ -13,6 +13,7 @@ import { Icon } from '@renderer/components/Icon';
 import { ProgressBar } from '@renderer/components/ProgressBar';
 import { ReassuranceNote } from '@renderer/components/ReassuranceNote';
 import { SkippedItemsDisclosure } from '@renderer/components/SkippedItemsDisclosure';
+import { UndoBanner } from '@renderer/components/UndoBanner';
 import type { ImportState } from '@renderer/lib/use-import';
 import { StepContainer } from '../StepContainer';
 
@@ -22,6 +23,12 @@ export interface ImportStepProps {
   onCancel: () => void;
   onRetry: () => void;
   onSeeEverything: () => void;
+  /**
+   * Undo THIS import (#429, AC-14): called with the import's `sourceId` from the
+   * post-import UndoBanner. Optional — a host that has no undo path (e.g. a preview)
+   * simply omits it and the banner is not shown.
+   */
+  onUndo?: (sourceId: string) => Promise<void>;
 }
 
 type Face = 'progress' | 'complete' | 'cancelled' | 'error';
@@ -48,6 +55,7 @@ export function ImportStep({
   onCancel,
   onRetry,
   onSeeEverything,
+  onUndo,
 }: ImportStepProps): ReactElement {
   const face = faceOf(state);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -103,6 +111,13 @@ export function ImportStep({
           </ReassuranceNote>
         ) : null}
         <SkippedItemsDisclosure items={skipped} />
+        {onUndo && state.sourceId !== null ? (
+          <UndoBanner
+            personName={personName}
+            count={found}
+            onUndo={() => onUndo(state.sourceId as string)}
+          />
+        ) : null}
         <div>
           <Button variant="primary" onClick={onSeeEverything}>
             See everything

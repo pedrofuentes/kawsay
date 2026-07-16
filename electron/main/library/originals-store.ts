@@ -404,6 +404,218 @@ export function removeOccurrence(
   return { removed: true, blobDeleted, itemRemoved: plan.itemRemoved };
 }
 
+export interface RemoveSourceResult {
+  /** The source contributed at least one occurrence, so an undo actually happened. */
+  removed: boolean;
+  /** Occurrences deleted for this source (its whole provenance footprint). */
+  occurrencesRemoved: number;
+  /** Items left with NO other occurrence, dropped along with their derived rows. */
+  itemsRemoved: number;
+  /** Content-addressed blobs whose LAST reference was this source (deleted on disk). */
+  blobsDeleted: number;
+  /** Orphaned derived renditions (thumbnails/posters/waveforms) removed on disk. */
+  assetsDeleted: number;
+  /**
+   * Files the OS refused to delete post-commit (EPERM/EACCES on a locked or
+   * cloud-synced original). The catalog removal still succeeded — these are now
+   * unreferenced orphans that {@link garbageCollectOrphanedOriginals} reclaims later.
+   */
+  filesOrphaned: number;
+}
+
+interface SourceRemovalPlan {
+  blobsToDelete: string[];
+  derivedToDelete: string[];
+  occurrencesRemoved: number;
+  itemsRemoved: number;
+}
+
+/** Injectable seams for {@link removeSource}, so failure-injection tests are
+ *  deterministic and cross-platform (no reliance on real filesystem permissions). */
+export interface RemoveSourceDeps {
+  /**
+   * Delete ONE already-confined absolute path, or throw an errno-tagged error the
+   * best-effort loop catches. Defaults to a forced `rmSync`. Injected in tests to
+   * synthesise an EPERM/EACCES for a specific blob without touching real fs perms.
+   */
+  removeFile?: (absPath: string) => void;
+}
+
+/** The production deleter: a forced unlink (suppresses ENOENT; surfaces EPERM/EACCES). */
+function defaultRemoveFile(absPath: string): void {
+  rmSync(absPath, { force: true });
+}
+
+/**
+ * Undo an import by removing EXACTLY one source's contribution (undo, §4.4 / AC-14 /
+ * #429). Undo is scoped to the `sources.id` this import wrote against — the EXISTING
+ * dedup-with-provenance schema (ADR-0003), so no migration is needed; for a fresh
+ * post-import undo the source IS this import run. All DB mutations run in ONE
+ * transaction (all-or-nothing — a fault mid-plan rolls everything back, leaving no
+ * partial state); disk cleanup follows commit:
+ *  - delete this source's occurrences, leaving every OTHER source's provenance intact
+ *    (so an item deduped into another source SURVIVES — the highest-risk invariant);
+ *  - an item with no remaining occurrence is dropped, cascading its FTS row (trigger),
+ *    embeddings/transcripts/categories/assets/tags (FK ON DELETE CASCADE);
+ *  - a content_addressed blob is deleted ONLY when no content_addressed occurrence
+ *    references its bytes any more (a deduped survivor keeps its file);
+ *  - in_place (folder) originals are the user's own files and are NEVER touched;
+ *  - the now-empty source row is dropped, so a later idempotent re-import brings the
+ *    very same memories back.
+ */
+export function removeSource(
+  db: CatalogDatabase,
+  root: string,
+  sourceId: string,
+  deps: RemoveSourceDeps = {},
+): RemoveSourceResult {
+  const removeFile = deps.removeFile ?? defaultRemoveFile;
+  const plan = db.transaction((id: string): SourceRemovalPlan => {
+    // Every occurrence this source contributed, with the item it points at and the
+    // content-addressing needed to reference-count its blob after deletion.
+    const occurrences = db
+      .prepare(
+        `SELECT o.item_id AS itemId, o.original_kind AS kind,
+                i.content_hash AS hash, i.original_ext AS ext
+         FROM item_occurrences o
+         JOIN items i ON i.id = o.item_id
+         WHERE o.source_id = @id`,
+      )
+      .all<{ itemId: string; kind: OriginalKind; hash: string | null; ext: string | null }>({ id });
+
+    // The distinct items this source touched (each re-checked for survival below) and
+    // the distinct content-addressed blobs it referenced (each reference-counted, so a
+    // blob still held by a surviving source is never removed).
+    const affectedItemIds = new Set<string>();
+    const blobs = new Map<string, { hash: string; ext: string | null }>();
+    for (const occ of occurrences) {
+      affectedItemIds.add(occ.itemId);
+      if (occ.kind === 'content_addressed' && occ.hash) {
+        blobs.set(`${occ.hash}\t${occ.ext ?? ''}`, { hash: occ.hash, ext: occ.ext });
+      }
+    }
+
+    // Remove exactly this source's occurrences — every other source's provenance stays
+    // (the dedup-survivor guarantee, ADR-0003 / AC-14).
+    db.prepare('DELETE FROM item_occurrences WHERE source_id = @id').run({ id });
+
+    // An item with NO remaining occurrence is now orphaned: gather its derived
+    // renditions, then drop it (cascading FTS + embeddings/transcripts/categories/
+    // assets/tags). A deduped survivor (occurrence from another source) is left alone.
+    const remainingForItem = db.prepare(
+      'SELECT COUNT(*) AS n FROM item_occurrences WHERE item_id = @itemId',
+    );
+    const assetsForItem = db.prepare('SELECT path FROM item_assets WHERE item_id = @itemId');
+    const deleteItem = db.prepare('DELETE FROM items WHERE id = @itemId');
+    const derivedToDelete: string[] = [];
+    let itemsRemoved = 0;
+    for (const itemId of affectedItemIds) {
+      if (Number(remainingForItem.get<{ n: number }>({ itemId })?.n ?? 0) > 0) continue;
+      for (const asset of assetsForItem.all<{ path: string }>({ itemId })) {
+        assertSafeAssetRelPath(asset.path);
+        derivedToDelete.push(assertWithinRoot(root, join(root, asset.path)));
+      }
+      deleteItem.run({ itemId });
+      itemsRemoved += 1;
+    }
+
+    // A content-addressed blob is deleted ONLY when no content_addressed occurrence
+    // references its bytes any more (mirrors removeOccurrence): undoing one source can
+    // never dangle a memory that still lives, deduped, in another source. content_hash
+    // is UNIQUE on items, so an orphaned item's hash yields 0 while a survivor's yields
+    // >0 — exactly the reference count we want.
+    const blobRefs = db.prepare(
+      `SELECT COUNT(*) AS n
+       FROM item_occurrences o
+       JOIN items i ON i.id = o.item_id
+       WHERE i.content_hash = @hash AND o.original_kind = 'content_addressed'`,
+    );
+    const blobsToDelete: string[] = [];
+    for (const { hash, ext } of blobs.values()) {
+      if (Number(blobRefs.get<{ n: number }>({ hash })?.n ?? 0) > 0) continue;
+      assertSafeHash(hash);
+      blobsToDelete.push(assertWithinRoot(root, blobAbsPath(root, hash, ext)));
+    }
+
+    // The source row is now empty provenance: drop it so the catalog is exactly its
+    // pre-import shape (a re-import registers a fresh source and re-adds it — AC-14).
+    db.prepare('DELETE FROM sources WHERE id = @id').run({ id });
+
+    return { blobsToDelete, derivedToDelete, occurrencesRemoved: occurrences.length, itemsRemoved };
+  })(sourceId);
+
+  // The DB removal already COMMITTED — it is the source of truth (AC-14). Post-commit
+  // disk cleanup is therefore BEST-EFFORT: a per-file EPERM/EACCES (a locked or
+  // cloud-synced original) must NEVER throw back to the caller, or the UI would revert
+  // to "nothing happened" while the memories are already gone. Each failure is caught,
+  // logged, and counted; the leftover is an unreferenced orphan the originals GC
+  // reclaims on its next sweep. Only a failure of the transaction ABOVE (which rolls
+  // back, leaving the data intact) is ever surfaced to the user as "undo failed".
+  let blobsDeleted = 0;
+  let filesOrphaned = 0;
+  for (const blob of plan.blobsToDelete) {
+    const outcome = bestEffortDelete(blob, removeFile);
+    if (outcome === 'deleted') blobsDeleted += 1;
+    else if (outcome === 'failed') filesOrphaned += 1;
+  }
+  let assetsDeleted = 0;
+  for (const derived of plan.derivedToDelete) {
+    const outcome = bestEffortDelete(derived, removeFile);
+    if (outcome === 'deleted') assetsDeleted += 1;
+    else if (outcome === 'failed') filesOrphaned += 1;
+  }
+
+  return {
+    removed: plan.occurrencesRemoved > 0,
+    occurrencesRemoved: plan.occurrencesRemoved,
+    itemsRemoved: plan.itemsRemoved,
+    blobsDeleted,
+    assetsDeleted,
+    filesOrphaned,
+  };
+}
+
+type DeleteOutcome = 'deleted' | 'absent' | 'failed';
+
+/**
+ * Delete a file post-commit as BEST EFFORT. Returns 'deleted' when a file was removed,
+ * 'absent' when nothing was there, and 'failed' — after logging a privacy-preserving
+ * warning ({name,code} only, mirroring the IPC layer's diagnosticError) — when the OS
+ * refused (EPERM/EACCES). NEVER throws: the catalog removal already committed, so a
+ * lingering file is only an unreferenced orphan for {@link garbageCollectOrphanedOriginals}.
+ */
+function bestEffortDelete(
+  absPath: string,
+  removeFile: (absPath: string) => void,
+): DeleteOutcome {
+  if (!existsSync(absPath)) return 'absent';
+  try {
+    removeFile(absPath);
+    return 'deleted';
+  } catch (error) {
+    // Local diagnostic only (no telemetry, no egress): the projection carries ONLY the
+    // error name + errno code — never the message/stack/path, which could leak a
+    // filesystem location or item text (#373). The static template + internal string
+    // is not attacker-controlled printf input.
+    console.warn(
+      '[kawsay] undo import: could not remove an orphaned file post-commit (left for GC)',
+      cleanupDiagnostic(error),
+    ); // nosemgrep: unsafe-formatstring
+    return 'failed';
+  }
+}
+
+/** A privacy-preserving projection of a cleanup error: only the error `name` and an
+ *  optional errno `code` — never the raw message/stack/path. Mirrors the IPC layer's
+ *  diagnosticError so main-process faults log the same safe shape. */
+function cleanupDiagnostic(error: unknown): { name: string; code?: string } {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === undefined ? { name: error.name } : { name: error.name, code };
+  }
+  return { name: typeof error };
+}
+
 function deleteFileIfExists(absPath: string): boolean {
   if (!existsSync(absPath)) return false;
   rmSync(absPath, { force: true });

@@ -8,6 +8,7 @@ import {
   CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATALOG_UNDO_IMPORT,
   CATEGORIZE_APPLY_CORRECTION,
   CATEGORIZE_CANCEL,
   CATEGORIZE_LIST_FOR_ITEM,
@@ -376,6 +377,7 @@ const ipcHandlers: IpcHandlerMap = {
   [CATALOG_SET_FAVOURITE]: (request) => catalogSession.setFavourite(request),
   [IMPORT_START]: (request) => catalogSession.beginImport(request),
   [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
+  [CATALOG_UNDO_IMPORT]: (request) => catalogSession.undoImport(request),
   [DIALOG_OPEN_DIRECTORY]: (request) => handleOpenDirectory({ showOpenDialog }, request),
   [DIALOG_OPEN_FILE]: (request) => handleOpenFile({ showOpenDialog }, request),
   [TRANSCRIPTION_DOWNLOAD_MODEL]: () => {
