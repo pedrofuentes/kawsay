@@ -2,7 +2,7 @@
 // screens, so a typed state machine in React context is lighter and clearer than
 // a routing library (see ADR-0015). U1 (timeline) and U2 (search) read the active
 // view here and call `navigate()` to move between the main sections.
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import type { ItemCardDTO } from '@shared/kawsay-api';
 
@@ -40,26 +40,61 @@ export type View =
       via?: 'prev' | 'next';
     };
 
-/** The durable favourite flag for an item id, once a `catalog:setFavourite` save
- *  has actually persisted — overrides the (possibly stale) value frozen into a
- *  `siblings` snapshot at open time. */
+/** The best-known favourite flag per item id — the optimistic value while a
+ *  `catalog:setFavourite` save is in flight, then the durable value it persisted —
+ *  overlaid on the (possibly stale) flag frozen into a `siblings`/timeline snapshot
+ *  at open time. */
 export type FavouriteOverrides = Readonly<Record<string, boolean>>;
+
+/** The live favourite state for one item id, owned by the provider so it survives
+ *  ItemView's id-keyed remount. `value` is optimistic-then-reconciled; `saving` is
+ *  true while a save is in flight (from ANY mount), so the reopened memory shows the
+ *  pending state and disables its toggle until the one save settles (#458). */
+export interface FavouriteState {
+  value: boolean;
+  saving: boolean;
+}
+
+/** The outcome handed back to `settleFavouriteSave`: the durable flag on success,
+ *  or a reverting fallback (the pre-toggle value) on a failed save that persisted
+ *  nothing. */
+export type FavouriteSettlement =
+  | { readonly ok: true; readonly value: boolean }
+  | { readonly ok: false; readonly revertTo: boolean };
 
 export interface NavigationValue {
   view: View;
   navigate: (view: View) => void;
   /**
-   * The last SETTLED favourite state per item id. Owned here — ABOVE MainApp,
-   * which keys `<ItemView key={`item-${id}`}/>` — so it OUTLIVES ItemView's
-   * id-keyed remount. A favourite save that resolves only after the user arrowed
-   * away (unmounting that ItemView) reconciles into this map, and the next mount
-   * of the same memory reads the corrected flag from it (#458 before-settle race).
+   * The best-known favourite flag per item id (optimistic-or-settled), for
+   * overlay consumers (Timeline, ItemView's sibling snapshot). Derived from the
+   * provider-owned favourite state, which lives ABOVE MainApp's
+   * `<ItemView key={`item-${id}`}/>` so it OUTLIVES the id-keyed remount.
    */
   favouriteOverrides: FavouriteOverrides;
-  /** Record a durable favourite outcome for an item id (success path only —
-   *  callers must never reconcile a failed/unpersisted save). Safe to call from an
-   *  unmounted child's async settlement: it targets this always-mounted provider. */
-  reconcileFavourite: (id: string, isFavourite: boolean) => void;
+  /** The live favourite state for one id, or `undefined` if it was never toggled
+   *  this session (caller then falls back to the item's own flag). Read by
+   *  `useFavourite` so every mount of the same memory — including one that remounted
+   *  while a save was still in flight — reflects the SAME value and busy state. */
+  favouriteStateFor: (id: string) => FavouriteState | undefined;
+  /**
+   * Begin an optimistic favourite save: record `optimistic` as the value, mark the
+   * id busy, bump its monotonic per-id attempt token, and return that token. The
+   * token is scoped to the item id (NOT to a hook instance), so an out-of-order
+   * OLDER reply — even one from an ItemView that has since unmounted — can be
+   * recognised and dropped by `settleFavouriteSave` (#458 cross-remount clobber).
+   */
+  beginFavouriteSave: (id: string, optimistic: boolean) => number;
+  /**
+   * Settle a save started with `beginFavouriteSave`. Applies the outcome ONLY when
+   * `token` is not older than the last settled token for this id — a superseded
+   * reply must never regress a newer intent. Clears `saving` only when this token is
+   * the newest attempt (an older reply must not re-enable the control while a newer
+   * save is still pending). Returns whether it applied, so the caller can gate a
+   * failure announcement. Safe to call from an unmounted child: it targets this
+   * always-mounted provider.
+   */
+  settleFavouriteSave: (id: string, token: number, outcome: FavouriteSettlement) => boolean;
   /**
    * A monotonic counter bumped whenever catalog data the timeline reads has
    * CHANGED beneath it — today only a completed import (#432 review). MainApp
@@ -92,14 +127,61 @@ export function NavigationProvider({
   children: ReactNode;
 }): ReactElement {
   const [view, setView] = useState<View>(initialView ?? DEFAULT_VIEW);
-  const [favouriteOverrides, setFavouriteOverrides] = useState<FavouriteOverrides>({});
+  const [favourites, setFavourites] = useState<Readonly<Record<string, FavouriteState>>>({});
   const [dataVersion, setDataVersion] = useState(0);
 
-  const reconcileFavourite = useCallback((id: string, isFavourite: boolean): void => {
-    setFavouriteOverrides((prev) =>
-      prev[id] === isFavourite ? prev : { ...prev, [id]: isFavourite },
-    );
+  // Monotonic per-id save sequence, kept in a ref so it survives ItemView's id-keyed
+  // remount and is readable synchronously from a settlement handler. `attempt` is
+  // bumped on each begin; `settled` records the newest token already applied, so a
+  // later OLDER reply is dropped.
+  const favouriteSeqRef = useRef<Map<string, { attempt: number; settled: number }>>(new Map());
+
+  const favouriteStateFor = useCallback(
+    (id: string): FavouriteState | undefined => favourites[id],
+    [favourites],
+  );
+
+  const beginFavouriteSave = useCallback((id: string, optimistic: boolean): number => {
+    const seq = favouriteSeqRef.current.get(id) ?? { attempt: 0, settled: 0 };
+    const attempt = seq.attempt + 1;
+    favouriteSeqRef.current.set(id, { attempt, settled: seq.settled });
+    setFavourites((prev) => ({ ...prev, [id]: { value: optimistic, saving: true } }));
+    return attempt;
   }, []);
+
+  const settleFavouriteSave = useCallback(
+    (id: string, token: number, outcome: FavouriteSettlement): boolean => {
+      const seq = favouriteSeqRef.current.get(id) ?? { attempt: 0, settled: 0 };
+      // Superseded by a newer settlement (out-of-order OLDER reply) — drop entirely,
+      // reconcile included, so it never regresses the newer value.
+      if (token < seq.settled) {
+        return false;
+      }
+      favouriteSeqRef.current.set(id, { attempt: seq.attempt, settled: token });
+      const isNewestAttempt = token === seq.attempt;
+      const value = outcome.ok ? outcome.value : outcome.revertTo;
+      setFavourites((prev) => {
+        const current = prev[id];
+        // Only the newest in-flight save clears the busy flag; an older reply must not
+        // re-enable the control while a newer save is still pending.
+        const saving = isNewestAttempt ? false : (current?.saving ?? false);
+        if (current !== undefined && current.value === value && current.saving === saving) {
+          return prev;
+        }
+        return { ...prev, [id]: { value, saving } };
+      });
+      return true;
+    },
+    [],
+  );
+
+  const favouriteOverrides = useMemo<FavouriteOverrides>(() => {
+    const overrides: Record<string, boolean> = {};
+    for (const [id, state] of Object.entries(favourites)) {
+      overrides[id] = state.value;
+    }
+    return overrides;
+  }, [favourites]);
 
   const invalidateTimeline = useCallback((): void => {
     setDataVersion((version) => version + 1);
@@ -110,11 +192,21 @@ export function NavigationProvider({
       view,
       navigate: (next: View) => setView(next),
       favouriteOverrides,
-      reconcileFavourite,
+      favouriteStateFor,
+      beginFavouriteSave,
+      settleFavouriteSave,
       dataVersion,
       invalidateTimeline,
     }),
-    [view, favouriteOverrides, reconcileFavourite, dataVersion, invalidateTimeline],
+    [
+      view,
+      favouriteOverrides,
+      favouriteStateFor,
+      beginFavouriteSave,
+      settleFavouriteSave,
+      dataVersion,
+      invalidateTimeline,
+    ],
   );
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
 }

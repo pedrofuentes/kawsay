@@ -57,7 +57,7 @@ function ownsArrowKeys(target: EventTarget | null): boolean {
 }
 
 export function ItemView(): ReactElement | null {
-  const { view, navigate, favouriteOverrides, reconcileFavourite } = useNavigation();
+  const { view, navigate, favouriteOverrides } = useNavigation();
   const headingRef = useAutoFocusHeading<HTMLHeadingElement>();
 
   const isItemView = view.name === 'item';
@@ -196,11 +196,7 @@ export function ItemView(): ReactElement | null {
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex items-center gap-1">
             <Heading headingRef={headingRef}>{heading}</Heading>
-            <FavouriteToggle
-              item={item}
-              initialFavourite={seededFavourite}
-              onSettled={reconcileFavourite}
-            />
+            <FavouriteToggle item={item} initialFavourite={seededFavourite} />
           </div>
           <p className="flex flex-wrap items-center gap-x-2 font-body text-base text-text-secondary">
             <span>{typeLabel}</span>
@@ -230,35 +226,20 @@ export function ItemView(): ReactElement | null {
  * channel (backed by the `is_favourite` column that already exists on `items`,
  * ARCHITECTURE §4.2) — so a favourite marked here survives an app restart.
  *
- * `initialFavourite` is the flag to seed with — the navigation-owned settled
- * override if one exists, else the value on the opened card — so a memory whose
- * favourite settled while the user was away opens already-correct.
- *
- * `onSettled` lets the parent reconcile its PERSISTENT favourite source (the
- * navigation-owned override map) with what actually persisted, so an arrow
- * away-and-back reads the corrected flag instead of the frozen open-time value —
- * even when the save settled only after this ItemView unmounted (#458).
+ * `initialFavourite` is the flag to seed with when this memory has not been toggled
+ * this session — the value on the opened card. Once toggled, the live value and busy
+ * state come from the navigation-owned favourite state (keyed by id), so an arrow
+ * away-and-back — even over a still in-flight save — reflects the SAME state instead
+ * of the frozen open-time value (#458).
  */
 function FavouriteToggle({
   item,
   initialFavourite,
-  onSettled,
 }: {
   item: ItemCardDTO;
   initialFavourite: boolean;
-  onSettled?: (id: string, isFavourite: boolean) => void;
 }): ReactElement {
-  const handleSettled = useCallback(
-    (isFavourite: boolean): void => {
-      onSettled?.(item.id, isFavourite);
-    },
-    [onSettled, item.id],
-  );
-  const { isFavourite, isSaving, announcement, toggle } = useFavourite(
-    item.id,
-    initialFavourite,
-    handleSettled,
-  );
+  const { isFavourite, isSaving, announcement, toggle } = useFavourite(item.id, initialFavourite);
   return (
     <>
       <button
