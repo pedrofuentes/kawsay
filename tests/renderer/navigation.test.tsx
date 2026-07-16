@@ -127,10 +127,11 @@ describe('favourite overrides — settled truth only for overlay consumers (#488
     // save. Without the clause the update is wrongly skipped and the id stays absent.
     const { result } = renderHook(() => useNavigation(), { wrapper: wrapper() });
     let older = 0;
-    let newer = 0;
     act(() => {
       older = result.current.beginFavouriteSave('item-4', true); // optimistic favourite
-      newer = result.current.beginFavouriteSave('item-4', false); // then un-favourite
+      // The newer save stays in flight for the whole test; its token is unused because
+      // we only settle the OLDER reply here.
+      result.current.beginFavouriteSave('item-4', false); // then un-favourite
     });
     // Nothing settled yet → overlay shows no override (falls back to the card's flag).
     expect(result.current.favouriteOverrides['item-4']).toBeUndefined();
