@@ -402,6 +402,12 @@ next, `Esc` closes, `Space` toggles play **only after** the player has focus (so
 surprise-plays from the grid). Pressing **Play** on one media item **pauses any other** — never two
 voices at once.
 
+The same `←/→` previous/next also works when a memory is opened on its own page (**ItemView**, not
+the overlay), moving through the same ordered timeline/search list the memory was opened from and
+politely announcing which memory is now showing. It quietly stands down whenever the arrow key has a
+more local job: a held modifier (Alt/Ctrl/Cmd for OS shortcuts, Shift for extending a text selection),
+a focused control that owns arrows itself, or a live text selection in the transcript (#434, #491).
+
 | State | Behavior |
 |---|---|
 | **Happy** | Open → view → optionally Play (user-initiated) → navigate prev/next or close back to the grid. |
@@ -774,7 +780,7 @@ bar (AC-13).
 | **Non-text contrast** | Buttons, icons, **interactive control borders** (inputs, dropzone outline, control edges → `--color-border-interactive`, 5.30:1), and the **focus ring** (`--color-focus-ring` = sage-600, 6.70:1) are **≥4.5:1** (AA min 3:1) against adjacent colors. The decorative `--color-border-*` dividers and status-chip/banner outlines are exempt (WCAG 1.4.11): they are never the sole affordance — each is reinforced by a tinted fill, a ≥7:1 text label, and/or a labeled icon. (§6.1.) |
 | **Visible focus** | A **3px solid sage-600 focus ring at 3px offset** (`--color-focus-ring` #2E5E4A) on **every** interactive element; focus is **never** removed, only restyled. Visible for mouse and keyboard. |
 | **Hit targets** | **≥44×44px** minimum, **prefer 48px**, **56px** for primary actions; **≥8px** between adjacent targets (tremor tolerance). |
-| **Keyboard** | Everything operable without a mouse: logical tab order, Enter/Space activation, `Esc` closes overlays, `←/→` prev/next in MediaViewer. **No keyboard traps.** Drag-and-drop is never the only path — a **BrowseButton** primary always exists (AC-12). |
+| **Keyboard** | Everything operable without a mouse: logical tab order, Enter/Space activation, `Esc` closes overlays, `←/→` prev/next in MediaViewer **and** in ItemView (a single opened memory) — politely announced, standing down for held modifiers, a focused control, or an active text selection. **No keyboard traps.** Drag-and-drop is never the only path — a **BrowseButton** primary always exists (AC-12). |
 | **Focus management (wizard)** | On each onboarding/walkthrough step change, **move focus to the step's `<h1>`** so screen-reader users are re-oriented and short-term-memory load is reduced. |
 | **Screen readers** | Correct ARIA roles/labels on all controls. **Import progress is an `aria-live="polite"` region** announcing milestones ("84 messages found", "Import complete — 347 photos"). UI glyphs come from the **bundled monochrome SVG `Icon` set** (no color emoji, which can mis-announce and fail non-text contrast): meaningful icons carry an `aria-label`, decorative ones are `aria-hidden`; meaningful images have alt text (e.g. a photo's date/source). Electron auto-enables a11y when VoiceOver/JAWS is detected; an **explicit override (AccessibilityToggle) lives in Settings** (Journey G). |
 | **No auto-play** | **No audio or video ever auto-plays** — voice notes and videos require an explicit Play; `Space` only toggles play **after** the player has focus. (Protects against a loved one's voice starting unexpectedly.) |
