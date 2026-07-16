@@ -94,6 +94,48 @@ describe('UndoBanner — every import is undoable (AC-14)', () => {
     await screen.findByRole('button', { name: /yes, remove/i });
     await expectNoAxeViolations(container);
   });
+
+  // A GENUINE failure is a rejected onUndo — the DB transaction rolled back, so the
+  // memories are still safe. That must be surfaced honestly, never swallowed into a
+  // silent "nothing happened" revert to idle (the 🔴 this fixes).
+  it('surfaces an honest, reverent error on a genuine failure — never a silent revert', async () => {
+    const onUndo = vi.fn(() => Promise.reject(new Error('db txn failed')));
+    const { user } = setup({ onUndo });
+    await user.click(screen.getByRole('button', { name: /undo this import/i }));
+    await user.click(screen.getByRole('button', { name: /yes, remove/i }));
+
+    // Honest + reassuring: the memories are still here; NOT the calm "Done".
+    expect(await screen.findByText(/still (here|there)|couldn.t undo/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Done/)).not.toBeInTheDocument();
+    // Never a silent return to the resting "Undo this import" affordance.
+    expect(screen.queryByRole('button', { name: /^undo this import$/i })).not.toBeInTheDocument();
+    // And a way to try again.
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('lets the user retry after a failure and reach Done', async () => {
+    const onUndo = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('db txn failed'))
+      .mockResolvedValueOnce(undefined);
+    const { user } = setup({ onUndo });
+    await user.click(screen.getByRole('button', { name: /undo this import/i }));
+    await user.click(screen.getByRole('button', { name: /yes, remove/i }));
+    await user.click(await screen.findByRole('button', { name: /try again/i }));
+    await user.click(await screen.findByRole('button', { name: /yes, remove/i }));
+
+    expect(await screen.findByText(/removed|as it was/i)).toBeInTheDocument();
+    expect(onUndo).toHaveBeenCalledTimes(2);
+  });
+
+  it('has no axe violations on the failure face', async () => {
+    const onUndo = vi.fn(() => Promise.reject(new Error('db txn failed')));
+    const { user, container } = setup({ onUndo });
+    await user.click(screen.getByRole('button', { name: /undo this import/i }));
+    await user.click(screen.getByRole('button', { name: /yes, remove/i }));
+    await screen.findByRole('button', { name: /try again/i });
+    await expectNoAxeViolations(container);
+  });
 });
 
 describe('ImportStep hosts the UndoBanner on its completion summary (#429)', () => {

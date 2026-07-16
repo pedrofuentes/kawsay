@@ -6,18 +6,23 @@
 // categories/assets/tags), and — after commit — removes only the orphaned items'
 // copied originals + derived renditions. An item that is ALSO in another source
 // (deduped) survives untouched, and so does its file.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { openCatalog } from '../../electron/main/db/connection';
 import { runMigrations } from '../../electron/main/db/migrate';
 import { createCatalogRepo, type CatalogRepo } from '../../electron/main/db/catalog-repo';
 import {
+  garbageCollectOrphanedOriginals,
   putOriginal,
   removeSource,
   resolveOriginal,
 } from '../../electron/main/library/originals-store';
+
+/** Non-root only: a read-only directory does not block root, so skip the chmod-based
+ *  "OS refuses to delete" case when the suite runs as root (some CI containers). */
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
 import type { CatalogDatabase } from '../../electron/main/db/connection';
 import { makeTmpDir, removeTmpDir } from '../helpers/tmp';
 
@@ -181,6 +186,50 @@ describe('removeSource (undo import — AC-14, dedup survivors preserved)', () =
     // Nothing was removed — the occurrence, item, and source all remain.
     expect(snapshot()).toEqual(before);
   });
+
+  it.skipIf(isRoot)(
+    'is best-effort on disk after commit: an undeletable file lingers as a GC orphan, undo still SUCCEEDS',
+    () => {
+      const sourceB = repo.registerSource({ sourceKey: 'B', type: 'whatsapp', label: 'WhatsApp' });
+      const bHash = hashOf('locked');
+      const blob = stageBlob(bHash, 'locked');
+      const itemId = repo.insertItem({ mediaType: 'photo', contentHash: bHash, originalExt: '.jpg' });
+      repo.addOccurrence({ itemId, sourceId: sourceB, sourceRef: 'B/locked.jpg', originalKind: 'content_addressed' });
+
+      // Make the blob's shard directory read-only so unlinking the blob fails
+      // (EACCES/EPERM) — the real "locked or cloud-synced original" case.
+      const shardDir = dirname(blob);
+      chmodSync(shardDir, 0o555);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const result = removeSource(db, root, sourceB);
+
+        // The DB removal is the source of truth: undo SUCCEEDS despite the disk fault.
+        expect(result.removed).toBe(true);
+        expect(result.itemsRemoved).toBe(1);
+        expect(result.filesOrphaned).toBeGreaterThanOrEqual(1);
+        // Catalog rows are gone — the memory was removed as intended.
+        expect(count('SELECT COUNT(*) AS n FROM items')).toBe(0);
+        expect(count('SELECT COUNT(*) AS n FROM item_occurrences')).toBe(0);
+        // A warning was logged, projected to {name,code} — never the raw file path.
+        expect(warn).toHaveBeenCalled();
+        const leakedPath = warn.mock.calls.some((args) =>
+          args.some((arg) => typeof arg === 'string' && arg.includes(blob)),
+        );
+        expect(leakedPath).toBe(false);
+        // The undeletable file lingered — an unreferenced orphan.
+        expect(existsSync(blob)).toBe(true);
+      } finally {
+        warn.mockRestore();
+        chmodSync(shardDir, 0o755); // restore so GC (and afterEach cleanup) can proceed
+      }
+
+      // The orphan is recoverable: the originals GC reclaims it on its next sweep.
+      const gc = garbageCollectOrphanedOriginals(db, root);
+      expect(gc.deleted).toBeGreaterThanOrEqual(1);
+      expect(existsSync(blob)).toBe(false);
+    },
+  );
 
   it('returns removed:false and touches nothing for an unknown source id', () => {
     const before = snapshot();
