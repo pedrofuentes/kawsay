@@ -387,14 +387,23 @@ export interface ServableOriginal {
  * in the realpath→open window (refused by `O_NOFOLLOW` → `ELOOP`) — before the open.
  */
 /**
- * The hardened flags every media original is opened with (§2.4). `O_NOFOLLOW` closes
- * the realpath→open symlink race (CWE-367): if the FINAL path component is a symlink
- * at open time — one planted in the window after realpath resolved a legitimate
- * in-root path — the open fails with `ELOOP` instead of following it out of the
- * servable roots. Both flags are absent on Windows and degrade to `0` (Windows
+ * The complete hardened secure-open recipe every media original is opened with (§2.4):
+ * `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`.
+ *  - `O_NOFOLLOW` closes the realpath→open symlink race (CWE-367): if the FINAL path
+ *    component is a symlink at open time — one planted in the window after realpath
+ *    resolved a legitimate in-root path — the open fails with `ELOOP` instead of
+ *    following it out of the servable roots.
+ *  - `O_NONBLOCK` prevents a main-thread FREEZE (CWE-400): a synchronous open of a
+ *    writer-less FIFO (or certain devices) planted at the path would otherwise block
+ *    indefinitely, hanging every window + IPC. With it, the open returns immediately
+ *    and the fstat `isFile()` gate below rejects the non-regular file. It is a no-op
+ *    for a regular file (open succeeds; reads never return EAGAIN), so streaming a
+ *    real original is byte-for-byte unaffected.
+ * Both `O_NOFOLLOW`/`O_NONBLOCK` are absent on Windows and degrade to `0` (Windows
  * symlink/FIFO creation is privileged, so the local surface there is minimal).
  */
-export const MEDIA_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+export const MEDIA_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
 
 export function pinRegularFile(canonicalPath: string, kind: OriginalKind): ServableOriginal | null {
   let fd: number;
