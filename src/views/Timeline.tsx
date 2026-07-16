@@ -159,8 +159,10 @@ export function Timeline({ active = true }: TimelineProps = {}): ReactElement {
   // stale) cached page, exactly as ItemView does (#432 review regression A):
   // MainApp keeps this timeline mounted across a round trip, so a heart marked
   // on the item view would otherwise never show here (the cached `isFavourite`
-  // is frozen at fetch time). The override map is the single source of settled
-  // truth, so reading it here keeps the card honest without any refetch.
+  // is frozen at fetch time). The override map carries only SETTLED values — the
+  // optimistic in-flight value stays on the mounted toggle — so reading it here
+  // keeps the card honest without a refetch and without ever flashing a favourite
+  // that a still-pending save might revert (#488).
   const items = useMemo<ItemCardDTO[]>(
     () => applyFavouriteOverrides(rawItems, favouriteOverrides),
     [rawItems, favouriteOverrides],
