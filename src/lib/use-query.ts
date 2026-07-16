@@ -28,7 +28,10 @@ export interface UseQueryOptions<T> {
    */
   key: string | null;
   /** Runs the actual read. Receives an `AbortSignal` that fires when the fetch is
-   *  superseded (key change / refetch / unmount), for fetchers that can honour it. */
+   *  superseded (key change / refetch / unmount), for fetchers that can honour it.
+   *  MUST report failure by returning a rejected promise, not by throwing
+   *  synchronously — a sync throw escapes the race guard rather than becoming an
+   *  `error` state (wrap risky work in the async body / `Promise.reject`). */
   fetcher: (signal: AbortSignal) => Promise<T>;
   /** Default true. When false the query is idle and never fetches (like `key: null`). */
   enabled?: boolean;
@@ -62,7 +65,9 @@ export interface UseQueryResult<T> {
 // A single module-level stale-while-revalidate store. Kept minimal on purpose: a
 // last-value-per-key map, no TTL or eviction (the renderer's keyspace is tiny and
 // bounded — a handful of catalog reads). `resetQueryCache` clears it so tests never
-// leak a retained value from one case into the next.
+// leak a retained value from one case into the next. NOTE: keys share one flat
+// namespace — a caching hook MUST use a globally-unique key string (there is no
+// per-hook namespacing) or two hooks would read/write each other's cached value.
 const queryCache = new Map<string, unknown>();
 
 /** Clear the stale-while-revalidate cache. Call between tests (wired into the
@@ -141,12 +146,20 @@ export function useQuery<T>(options: UseQueryOptions<T>): UseQueryResult<T> {
 
       const hasStale = cacheRef.current && queryCache.has(currentKey);
       setState((prev) => ({
-        // Keep any current/cached data visible during a soft revalidation; drop to
-        // a bare loading state only on a hard refresh (showLoading) with nothing
-        // cached to show.
+        // Keep any current/cached data visible during a soft revalidation, but a
+        // caller that explicitly asks for a hard refresh (`showLoading`) ALWAYS
+        // gets a visible loading state — even when a cached value exists — so the
+        // cache can never silently downgrade a hard refresh into a background
+        // revalidation (the data stays on screen while status reads `loading`).
         data: hasStale ? (queryCache.get(currentKey) as T) : prev.data,
         error: prev.error,
-        status: showLoading && !hasStale ? 'loading' : prev.status === 'idle' ? 'loading' : prev.status,
+        status: showLoading
+          ? 'loading'
+          : hasStale
+            ? 'success'
+            : prev.status === 'idle'
+              ? 'loading'
+              : prev.status,
         isFetching: true,
       }));
 

@@ -274,6 +274,38 @@ describe('useQuery — stale-while-revalidate cache (opt-in)', () => {
   });
 });
 
+describe('useQuery — showLoading wins over the stale cache (hard refresh)', () => {
+  it('cache:true + a populated cache + refetch({ showLoading }) still goes to loading, not a silent success', async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const fetcher = vi
+      .fn<() => Promise<string>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { result } = renderHook(() => useQuery({ key: 'k', fetcher, cache: true }));
+    await act(async () => {
+      first.resolve('v1');
+      await first.promise;
+    });
+    // The cache is now populated with 'v1'.
+    expect(result.current.status).toBe('success');
+    expect(result.current.data).toBe('v1');
+
+    // A hard refresh MUST show loading even though a cached value exists — a caller
+    // that asks for showLoading (e.g. useCollections.reload) relies on it; the cache
+    // must not silently suppress it into a background revalidation.
+    act(() => result.current.refetch({ showLoading: true }));
+    expect(result.current.status).toBe('loading');
+
+    await act(async () => {
+      second.resolve('v2');
+      await second.promise;
+    });
+    expect(result.current.status).toBe('success');
+    expect(result.current.data).toBe('v2');
+  });
+});
+
 describe('useQuery — setData (imperative cache write for mutations)', () => {
   it('setData updates the visible data and the cache', async () => {
     const fetcher = vi.fn(() => Promise.resolve('server'));

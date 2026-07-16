@@ -30,8 +30,13 @@ export function useCategorizationStatus(): UseCategorizationStatusResult {
   const api = useKawsayApi();
   // The gate read (is the surface offered, and has the user opted in) now runs
   // through the shared useQuery primitive (#443): the bespoke `active` staleness
-  // flag collapses into its race guard, and its stale-while-revalidate cache keeps
-  // the consent state ready across view switches instead of re-reading each open.
+  // flag collapses into its race guard. It deliberately does NOT opt into the
+  // stale-while-revalidate cache: seeding the card from a cached `optedIn` while a
+  // background revalidation is still in flight would open a window where an
+  // optimistic toggle (`setData`, which does not bump the fetch generation) could
+  // be transiently clobbered by the in-flight read committing the stale value —
+  // a settings switch visibly flipping back. The no-flash benefit is marginal for
+  // a settings card, so re-entry goes through `loading` exactly as before (#443 review).
   const query = useQuery<CategorizationStatusDTO>({
     // `null` while the bridge is missing keeps the query idle (loading:false,
     // offered:false) rather than guessing the feature is available.
@@ -42,7 +47,6 @@ export function useCategorizationStatus(): UseCategorizationStatusResult {
       }
       return api.getCategorizationStatus();
     },
-    cache: true,
   });
   const { setData } = query;
   // A failed read leaves the surface hidden (offered stays false — data undefined)
