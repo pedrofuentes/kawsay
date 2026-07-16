@@ -108,6 +108,42 @@ function buildRows(items: ItemCardDTO[]): Row[] {
   return rows;
 }
 
+/**
+ * Overlay the navigation-owned favourite overrides onto a loaded page, cloning
+ * ONLY the cards an override actually changes. Returns the SAME `rawItems`
+ * reference whenever nothing on this page changes — an empty override map, or a
+ * toggle whose item isn't loaded here, or one that already matches the cached
+ * state. That reference stability matters: MainApp keeps this timeline mounted
+ * even while hidden, so a favourite toggle ANYWHERE ticks `favouriteOverrides`;
+ * a blind full remap would reallocate the whole list on every such toggle and
+ * cascade into the row-building and virtualization memos (#432 review 🟡). Here
+ * an unrelated toggle costs one O(n) scan and no allocation.
+ */
+export function applyFavouriteOverrides(
+  rawItems: ItemCardDTO[],
+  favouriteOverrides: Record<string, boolean>,
+): ItemCardDTO[] {
+  // Cheapest possible bail-out: no overrides at all means nothing to overlay.
+  if (Object.keys(favouriteOverrides).length === 0) {
+    return rawItems;
+  }
+  // Does any override actually differ from a loaded card? If not, keep the exact
+  // same list — no reallocation, so downstream memos stay warm.
+  const changesSomething = rawItems.some((item) => {
+    const override = favouriteOverrides[item.id];
+    return override !== undefined && override !== item.isFavourite;
+  });
+  if (!changesSomething) {
+    return rawItems;
+  }
+  return rawItems.map((item) => {
+    const override = favouriteOverrides[item.id];
+    return override !== undefined && override !== item.isFavourite
+      ? { ...item, isFavourite: override }
+      : item;
+  });
+}
+
 export interface TimelineProps {
   /**
    * Is Timeline the CURRENTLY VISIBLE view? Defaults to `true` for every
@@ -141,13 +177,7 @@ export function Timeline({ active = true }: TimelineProps = {}): ReactElement {
   // is frozen at fetch time). The override map is the single source of settled
   // truth, so reading it here keeps the card honest without any refetch.
   const items = useMemo<ItemCardDTO[]>(
-    () =>
-      rawItems.map((item) => {
-        const override = favouriteOverrides[item.id];
-        return override !== undefined && override !== item.isFavourite
-          ? { ...item, isFavourite: override }
-          : item;
-      }),
+    () => applyFavouriteOverrides(rawItems, favouriteOverrides),
     [rawItems, favouriteOverrides],
   );
 
