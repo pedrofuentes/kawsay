@@ -17,6 +17,7 @@ import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { SuggestionDTO, SuggestionMergeTargetDTO } from '@shared/kawsay-api';
 import { cx } from '@renderer/lib/cx';
+import { pluralize } from '@renderer/lib/pluralize';
 import { Icon } from './Icon';
 import { useCategorizationStatus } from '@renderer/lib/use-categorization';
 import { useSuggestions } from '@renderer/lib/use-suggestions';
@@ -109,9 +110,7 @@ function SuggestionCard({
 
   const trimmedName = name.trim();
   const kindLabel = suggestion.kind === 'place' ? 'Place' : 'Theme';
-  const memberLabel = `${suggestion.memberCount} ${
-    suggestion.memberCount === 1 ? 'memory' : 'memories'
-  }`;
+  const memberLabel = `${suggestion.memberCount} ${pluralize(suggestion.memberCount, 'memory', 'memories')}`;
 
   return (
     <li className="flex flex-col gap-4 rounded-xl bg-surface-sunken p-4">

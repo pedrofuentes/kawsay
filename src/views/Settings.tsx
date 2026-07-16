@@ -9,6 +9,7 @@
 // view is unchanged there.
 import type { ReactElement } from 'react';
 import { CategorizationConsent } from '@renderer/components/CategorizationConsent';
+import { Heading } from '@renderer/components/Heading';
 import { LibrarySettings } from '@renderer/components/LibrarySettings';
 import { PrivacyNotice } from '@renderer/components/PrivacyNotice';
 import { ReducedMotionToggle } from '@renderer/components/ReducedMotionToggle';
@@ -24,13 +25,7 @@ export function Settings(): ReactElement {
   return (
     <section className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <h1
-          ref={headingRef}
-          tabIndex={-1}
-          className="font-display text-3xl font-semibold text-text-primary outline-none"
-        >
-          Settings
-        </h1>
+        <Heading headingRef={headingRef}>Settings</Heading>
         <p className="font-body text-base text-text-secondary">
           Everything stays on this computer. There is nothing to sign in to.
         </p>

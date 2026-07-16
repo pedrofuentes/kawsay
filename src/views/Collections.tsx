@@ -13,30 +13,16 @@ import type { ReactElement } from 'react';
 import { Button } from '@renderer/components/Button';
 import { EmptyState } from '@renderer/components/EmptyState';
 import { ErrorBanner } from '@renderer/components/ErrorBanner';
+import { Heading } from '@renderer/components/Heading';
 import { Icon } from '@renderer/components/Icon';
-import type { IconName } from '@renderer/components/Icon';
 import { MediaThumbnail } from '@renderer/components/MediaThumbnail';
+import { MEDIA_META } from '@renderer/lib/media-meta';
+import { pluralize } from '@renderer/lib/pluralize';
 import { useAutoFocusHeading } from '@renderer/lib/use-auto-focus';
 import { useCollectionItems, useCollections } from '@renderer/lib/use-collections';
 import { useNavigation } from '@renderer/lib/navigation';
 import type { View } from '@renderer/lib/navigation';
-import type { CollectionSummaryDTO, ItemCardDTO, MediaType } from '@shared/kawsay-api';
-
-const MEDIA_LABEL: Record<MediaType, string> = {
-  photo: 'Photo',
-  video: 'Video',
-  audio: 'Voice note',
-  document: 'Document',
-  message: 'Message',
-};
-
-const MEDIA_ICON: Record<MediaType, IconName> = {
-  photo: 'photos',
-  video: 'video',
-  audio: 'audio',
-  document: 'document',
-  message: 'messages',
-};
+import type { CollectionSummaryDTO, ItemCardDTO } from '@shared/kawsay-api';
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
@@ -52,7 +38,7 @@ function formatDate(iso: string | null): string | null {
 }
 
 function memoryCountLabel(count: number): string {
-  return `${count} ${count === 1 ? 'memory' : 'memories'}`;
+  return `${count} ${pluralize(count, 'memory', 'memories')}`;
 }
 
 // ── The list: every browsable collection ───────────────────────────────────
@@ -64,13 +50,7 @@ export function Collections(): ReactElement {
   return (
     <section className="flex flex-col gap-8">
       <header className="flex flex-col gap-1">
-        <h1
-          ref={headingRef}
-          tabIndex={-1}
-          className="font-display text-3xl font-semibold text-text-primary outline-none"
-        >
-          Collections
-        </h1>
+        <Heading headingRef={headingRef}>Collections</Heading>
         <p className="font-body text-base text-text-secondary">
           Memories gathered together by a place or a moment.
         </p>
@@ -121,7 +101,7 @@ export function Collections(): ReactElement {
     return (
       <>
         <p role="status" aria-live="polite" className="font-body text-sm text-text-secondary">
-          {collections.length} {collections.length === 1 ? 'collection' : 'collections'}
+          {collections.length} {pluralize(collections.length, 'collection', 'collections')}
         </p>
         <ul className="flex flex-col gap-3">
           {collections.map((collection) => (
@@ -192,13 +172,7 @@ export function CollectionDetail(): ReactElement | null {
         </Button>
       </div>
       <header className="flex flex-col gap-1">
-        <h1
-          ref={headingRef}
-          tabIndex={-1}
-          className="font-display text-3xl font-semibold text-text-primary outline-none"
-        >
-          {heading}
-        </h1>
+        <Heading headingRef={headingRef}>{heading}</Heading>
         {subtitle !== null ? (
           <p className="font-body text-base text-text-secondary">{subtitle}</p>
         ) : null}
@@ -289,7 +263,7 @@ function CollectionMemoryCard({
   from: View;
 }): ReactElement {
   const { navigate } = useNavigation();
-  const typeLabel = MEDIA_LABEL[item.mediaType];
+  const typeLabel = MEDIA_META[item.mediaType].label;
   const caption = (item.title ?? item.description ?? '').trim();
   const dateText = formatDate(item.captureDate);
 
@@ -304,7 +278,7 @@ function CollectionMemoryCard({
         >
           <MediaThumbnail
             item={item}
-            icon={MEDIA_ICON[item.mediaType]}
+            icon={MEDIA_META[item.mediaType].icon}
             className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-surface-sunken text-sage-600"
             iconClassName="h-9 w-9"
           />
