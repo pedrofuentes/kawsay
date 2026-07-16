@@ -34,6 +34,7 @@ export default defineConfig({
         // singletons at module load, so it cannot run under vitest/jsdom. Each
         // collaborator it composes is unit-tested in isolation.
         'electron/main/index.ts', // main-process entry (app/BrowserWindow bootstrap)
+        'electron/main/app/composition-root.ts', // bootstrap glue: composes unit-tested collaborators (ordering asserted in composition-root.test.ts)
         'electron/preload/index.ts', // preload bootstrap (contextBridge.exposeInMainWorld)
         'electron/main/importers/workers/ingestion-worker.ts', // worker_threads entry
         'electron/main/transcription/workers/transcription-worker.ts', // worker_threads entry
