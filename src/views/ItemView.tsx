@@ -77,11 +77,20 @@ export function ItemView(): ReactElement | null {
   const isItemView = view.name === 'item';
   const item = isItemView ? view.item : null;
   const from = isItemView ? view.from : undefined;
+  const via = isItemView ? view.via : undefined;
+
   // The ordered page this memory was opened FROM (Timeline's newest-first load,
   // or Search's current result set) — already in hand, so no re-fetch and no new
-  // IPC channel are needed to find the previous/next memory (#434).
-  const siblings = isItemView ? (view.siblings ?? []) : [];
-  const via = isItemView ? view.via : undefined;
+  // IPC channel are needed to find the previous/next memory (#434). Kept in LOCAL
+  // state, seeded once from the navigation snapshot, so a favourite toggled here
+  // can be patched into it (below) and survive an arrow away-and-back within the
+  // session — the snapshot alone is frozen at open time and would otherwise
+  // revert the heart (#458 review fix). MainApp keys ItemView by item id, so a
+  // fresh open always remounts and re-seeds; every in-session move goes through
+  // `goTo`, which threads this (patched) array forward.
+  const [siblings, setSiblings] = useState<ItemCardDTO[]>(() =>
+    view.name === 'item' ? (view.siblings ?? []) : [],
+  );
 
   const currentIndex = item !== null ? siblings.findIndex((sibling) => sibling.id === item.id) : -1;
   const prevItem = currentIndex > 0 ? siblings[currentIndex - 1] : null;
@@ -95,14 +104,38 @@ export function ItemView(): ReactElement | null {
     [navigate, from, siblings],
   );
 
+  // When a favourite save PERSISTS for the memory on screen, reconcile that
+  // memory's entry in the ordered snapshot so arrowing back reads the corrected
+  // flag (not the value frozen when the list was first opened). Only touches the
+  // snapshot copy — the live toggle stays authoritative from `useFavourite`.
+  const patchSiblingFavourite = useCallback((id: string, favourite: boolean): void => {
+    setSiblings((prev) =>
+      prev.map((sibling) =>
+        sibling.id === id && sibling.isFavourite !== favourite
+          ? { ...sibling, isFavourite: favourite }
+          : sibling,
+      ),
+    );
+  }, []);
+
   // Global ←/→ handling — not scoped to a focused element, so it never traps
   // focus (Tab, Shift+Tab, and every other key keep working exactly as before;
-  // nothing here calls preventDefault). Ignored with a modifier held (Alt/Ctrl/
-  // Cmd+Arrow are OS/browser shortcuts, e.g. history back/forward) and deferred
-  // to any element that owns arrow keys itself.
+  // nothing here calls preventDefault). It stands down whenever the arrow key
+  // has a more local job to do: auto-repeat from a held key (avoid a burst of
+  // remounts), a held modifier (Alt/Ctrl/Cmd+Arrow are OS/browser shortcuts like
+  // history back/forward), a focused control that owns arrows itself, or — the
+  // #458 review fix — a live text selection, so collapsing a selected transcript
+  // sentence with ← never teleports the reader to another memory.
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
-      if (event.altKey || event.ctrlKey || event.metaKey || ownsArrowKeys(event.target)) {
+      if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+      if (ownsArrowKeys(event.target)) {
+        return;
+      }
+      const selection = window.getSelection();
+      if (selection !== null && !selection.isCollapsed) {
         return;
       }
       if (event.key === 'ArrowLeft' && prevItem !== null) {
@@ -185,7 +218,7 @@ export function ItemView(): ReactElement | null {
             >
               {heading}
             </h1>
-            <FavouriteToggle item={item} />
+            <FavouriteToggle item={item} onSettled={patchSiblingFavourite} />
           </div>
           <p className="flex flex-wrap items-center gap-x-2 font-body text-base text-text-secondary">
             <span>{typeLabel}</span>
@@ -213,9 +246,29 @@ export function ItemView(): ReactElement | null {
  * for a screen-reader user. Persists via the validated `catalog:setFavourite`
  * channel (backed by the `is_favourite` column that already exists on `items`,
  * ARCHITECTURE §4.2) — so a favourite marked here survives an app restart.
+ *
+ * `onSettled` lets the parent reconcile its ordered `siblings` snapshot with
+ * what actually persisted, so an arrow away-and-back within the session reads
+ * the corrected flag instead of the frozen open-time value (#458 review fix).
  */
-function FavouriteToggle({ item }: { item: ItemCardDTO }): ReactElement {
-  const { isFavourite, isSaving, announcement, toggle } = useFavourite(item.id, item.isFavourite);
+function FavouriteToggle({
+  item,
+  onSettled,
+}: {
+  item: ItemCardDTO;
+  onSettled?: (id: string, isFavourite: boolean) => void;
+}): ReactElement {
+  const handleSettled = useCallback(
+    (isFavourite: boolean): void => {
+      onSettled?.(item.id, isFavourite);
+    },
+    [onSettled, item.id],
+  );
+  const { isFavourite, isSaving, announcement, toggle } = useFavourite(
+    item.id,
+    item.isFavourite,
+    handleSettled,
+  );
   return (
     <>
       <button

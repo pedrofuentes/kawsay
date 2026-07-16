@@ -39,12 +39,29 @@ const SAVE_FAILURE_MESSAGE = "We couldn't save that change just now. Nothing was
  * Track and toggle ONE item's favourite flag. `itemId`/`initial` describe the
  * memory currently being viewed; a new `itemId` resets the visible state to that
  * item's own `initial` value and drops any stale announcement.
+ *
+ * `onSettled` (optional) is called with the durable `isFavourite` the main
+ * process echoed back, but ONLY when a save actually persisted — never on a
+ * failed/reverted save, and never for a settlement a mount/sequence guard
+ * dropped. ItemView uses it to keep its ordered `siblings` snapshot in step, so
+ * arrowing away and back reads the corrected value rather than a frozen one
+ * (#434 review fix). Held in a ref so a changing callback identity never
+ * re-runs the item-switch effect or stales the toggle closure.
  */
-export function useFavourite(itemId: string, initial: boolean): UseFavouriteResult {
+export function useFavourite(
+  itemId: string,
+  initial: boolean,
+  onSettled?: (isFavourite: boolean) => void,
+): UseFavouriteResult {
   const api = useKawsayApi();
   const [isFavourite, setIsFavourite] = useState(initial);
   const [isSaving, setIsSaving] = useState(false);
   const [announcement, setAnnouncement] = useState('');
+
+  const onSettledRef = useRef(onSettled);
+  useEffect(() => {
+    onSettledRef.current = onSettled;
+  });
 
   // False after unmount, so a late-arriving save settlement never calls setState
   // on a dead tree (mirrors useItemCategories's mountedRef). The user can toggle
@@ -98,6 +115,10 @@ export function useFavourite(itemId: string, initial: boolean): UseFavouriteResu
         }
         lastSettledSeqRef.current = seq;
         setIsFavourite(result.isFavourite);
+        // Let the owner reconcile any cached copy of this item (e.g. ItemView's
+        // ordered `siblings`) with what actually persisted — success path only,
+        // so a failed/reverted save never patches a cache to a value not on disk.
+        onSettledRef.current?.(result.isFavourite);
         // Only the newest in-flight save clears the busy state, so an older reply
         // can't re-enable the control while a newer save is still pending.
         if (seq === attemptSeqRef.current) {

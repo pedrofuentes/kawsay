@@ -127,7 +127,18 @@ export function OnboardingFlow(): ReactElement {
           />
         );
       default:
-        return <WelcomeStep onStart={() => setStep('name')} onTour={enterApp} />;
+        // Exhaustiveness guard: every `Step` has its own case above, so `step`
+        // narrows to `never` here. This replaces a former fallback that returned
+        // WelcomeStep with the old fake `onTour={enterApp}` — that dead branch is
+        // gone, so the fake tour cannot resurface.
+        return assertNever(step);
     }
   }
+}
+
+// If a new `Step` is ever added without its own `case`, `step` is no longer
+// `never` here and this fails to type-check — a compile error, not a silent
+// fallback (mirrors MainApp's view-router guard, ADR-0015).
+function assertNever(step: never): never {
+  throw new Error(`Unhandled onboarding step: ${JSON.stringify(step)}`);
 }
