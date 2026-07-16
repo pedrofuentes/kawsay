@@ -12,6 +12,7 @@ import type {
   ItemCategoriesDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
+  SettingsDTO,
   SuggestionsViewDTO,
   TimelinePageDTO,
   TranscriptionSnapshotDTO,
@@ -290,6 +291,22 @@ export interface KawsayAPI {
    * Idempotent per category.
    */
   dismissSuggestion(input: { categoryId: string; name?: string }): Promise<SuggestionsViewDTO>;
+
+  /**
+   * Read the persisted app-wide UX settings (AC-13 / Journey G, #433): the
+   * text-size step and the reduced-motion override. Resolves the durable
+   * snapshot the Settings view reads on mount and the app root applies
+   * IMMEDIATELY (src/lib/settings.tsx) — no reload needed.
+   */
+  getSettings(): Promise<SettingsDTO>;
+
+  /**
+   * Persist a PARTIAL settings update — just the field a control changed — and
+   * resolve the RESOLVED full snapshot, so the caller reconciles with what is
+   * actually durable rather than trusting its own optimistic guess. Mirrors
+   * `setCategorizationConsent`'s echo-the-truth shape.
+   */
+  setSettings(input: { textSize?: SettingsDTO['textSize']; reducedMotion?: boolean }): Promise<SettingsDTO>;
 }
 
 /**
@@ -323,6 +340,8 @@ export type {
   SuggestionKindDTO,
   LibrarySummaryDTO,
   SearchResultDTO,
+  SettingsDTO,
+  TextSizeDTO,
   TimelinePageDTO,
   ImportSummaryDTO,
   SkippedItemDTO,

@@ -12,6 +12,7 @@ import type {
   LibrarySummaryDTO,
   ModelDownloadProgressEvent,
   SearchResultDTO,
+  SettingsDTO,
   SuggestionDTO,
   SuggestionsViewDTO,
   TranscriptionProgressEvent,
@@ -65,6 +66,16 @@ export function makeLibrarySummary(over: Partial<LibrarySummaryDTO> = {}): Libra
     name: 'Elena',
     createdAt: '2026-06-24T12:00:00.000Z',
     schemaVersion: 1,
+    ...over,
+  };
+}
+
+/** Build a persisted UX-settings snapshot (AC-13 / Journey G, #433). Defaults to
+ *  the calm baseline (default text size, no reduced-motion override). */
+export function makeSettings(over: Partial<SettingsDTO> = {}): SettingsDTO {
+  return {
+    textSize: 'default',
+    reducedMotion: false,
     ...over,
   };
 }
@@ -228,6 +239,8 @@ export interface FakeApiOptions {
   setFavourite?: KawsayAPI['setFavourite'];
   getSmartSearchStatus?: KawsayAPI['getSmartSearchStatus'];
   enableSmartSearch?: KawsayAPI['enableSmartSearch'];
+  getSettings?: KawsayAPI['getSettings'];
+  setSettings?: KawsayAPI['setSettings'];
   getCategorizationStatus?: KawsayAPI['getCategorizationStatus'];
   setCategorizationConsent?: KawsayAPI['setCategorizationConsent'];
   listItemCategories?: KawsayAPI['listItemCategories'];
@@ -365,6 +378,15 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
         smartSearchModelListeners.delete(listener);
       };
     },
+    // App-wide UX settings (AC-13 / Journey G, #433) — text size + reduced-motion
+    // override. Defaults stay calm (default size, no override); `setSettings`
+    // mirrors the real main process's merge-and-echo: it folds the patch onto
+    // whatever was last read/written by THIS fake so a test's round trip behaves
+    // like the durable store without needing its own state machine.
+    getSettings: opts.getSettings ?? vi.fn(() => Promise.resolve(makeSettings())),
+    setSettings:
+      opts.setSettings ??
+      vi.fn((patch: Partial<SettingsDTO>) => Promise.resolve(makeSettings(patch))),
     // Categorization opt-in (M4-2h / #270) — the explainable-chips + consent UI drive
     // these the same way transcription drives its run methods. Defaults stay calm and
     // DEFAULT-OFF: not offered, not opted in, no chips, an idle run, a no-op cancel.

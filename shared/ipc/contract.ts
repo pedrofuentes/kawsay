@@ -14,6 +14,8 @@ import {
   librarySummarySchema,
   pathSchema,
   searchResultSchema,
+  settingsPatchSchema,
+  settingsSchema,
   sourceTypeSchema,
   suggestionsViewSchema,
   thumbnailDataUrlSchema,
@@ -171,6 +173,19 @@ export const SUGGESTIONS_ACCEPT = 'suggestions:accept';
 export const SUGGESTIONS_MERGE = 'suggestions:merge';
 /** IPC channel: dismiss a suggestion (durable tombstone — not re-proposed); echoes the refreshed tray. */
 export const SUGGESTIONS_DISMISS = 'suggestions:dismiss';
+
+/**
+ * IPC channels for the app-wide UX SETTINGS surface (AC-13 / Journey G, #433).
+ * Both ADDITIVE — no existing channel or the contextBridge exposure model
+ * changes. Mirrors the M2 consent-store pattern (a single small JSON file
+ * main-side, ARCHITECTURE §2.6): `settings:get` reads the durable snapshot and
+ * `settings:set` persists a PARTIAL update, echoing the resolved full snapshot
+ * so the UI never has to guess what actually landed on disk.
+ */
+/** IPC channel: read the persisted settings snapshot (text size + reduced-motion override). */
+export const SETTINGS_GET = 'settings:get';
+/** IPC channel: persist a partial settings update; echoes the resolved full snapshot. */
+export const SETTINGS_SET = 'settings:set';
 
 /**
  * The renderer-controllable options for a native open dialog (W2). This is the
@@ -383,6 +398,17 @@ export const ipcContract = {
       name: z.string().min(1).max(CATEGORY_NAME_MAX_LENGTH).optional(),
     }),
     response: suggestionsViewSchema,
+  },
+  // ── App-wide UX settings (AC-13 / Journey G, #433) — a NEW, self-contained
+  // section, deliberately kept separate from every other channel group above so
+  // it merges cleanly alongside concurrent contract changes elsewhere in this file.
+  [SETTINGS_GET]: {
+    request: z.strictObject({}),
+    response: settingsSchema,
+  },
+  [SETTINGS_SET]: {
+    request: settingsPatchSchema,
+    response: settingsSchema,
   },
 } as const;
 

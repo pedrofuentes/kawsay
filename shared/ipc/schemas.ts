@@ -524,3 +524,42 @@ export const suggestionsViewSchema = z.strictObject({
   collections: z.array(suggestionMergeTargetSchema).max(SUGGESTIONS_VIEW_MAX),
 });
 export type SuggestionsViewDTO = z.infer<typeof suggestionsViewSchema>;
+
+// ── App-wide UX settings (AC-13 / Journey G, #433) ─────────────────────────
+//
+// A small, persisted set of accessibility preferences the Settings view exposes:
+// a named text-size step applied app-wide via a root override (base `--text-md`,
+// ARCHITECTURE §9 token system), and an explicit reduced-motion override that
+// composes with — never fights — the OS-level `prefers-reduced-motion` media
+// query. Both are bounded (an enum and a boolean), so a malformed payload is a
+// hard validation error in either direction, mirroring every other IPC schema.
+
+/** The named, reverent text-size steps — never a raw px/percent from the renderer. */
+export const TEXT_SIZE_STEPS = ['default', 'large', 'larger'] as const;
+export const textSizeSchema = z.enum(TEXT_SIZE_STEPS);
+export type TextSizeDTO = z.infer<typeof textSizeSchema>;
+
+/**
+ * The full persisted settings snapshot: the text-size step (mapped to a token
+ * scale) and the reduced-motion override (`true` forces reduced motion
+ * regardless of the OS setting; `false` defers entirely to
+ * `prefers-reduced-motion`). Returned by `settings:get` and echoed (resolved)
+ * by `settings:set`.
+ */
+export const settingsSchema = z.strictObject({
+  textSize: textSizeSchema,
+  reducedMotion: z.boolean(),
+});
+export type SettingsDTO = z.infer<typeof settingsSchema>;
+
+/**
+ * A partial update to the settings snapshot — every field optional, so a single
+ * control can persist just the field it owns without needing to know the other's
+ * current value. The main-side store merges this onto the durable snapshot and
+ * the handler echoes the full RESOLVED settings, mirroring `categorize:setConsent`.
+ */
+export const settingsPatchSchema = z.strictObject({
+  textSize: textSizeSchema.optional(),
+  reducedMotion: z.boolean().optional(),
+});
+export type SettingsPatchDTO = z.infer<typeof settingsPatchSchema>;

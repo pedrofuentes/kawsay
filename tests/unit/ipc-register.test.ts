@@ -19,6 +19,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SETTINGS_GET,
+  SETTINGS_SET,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
   SUGGESTIONS_ACCEPT,
@@ -101,6 +103,8 @@ const otherHandlers = {
   [SUGGESTIONS_ACCEPT]: () => ({ suggestions: [], collections: [] }),
   [SUGGESTIONS_MERGE]: () => ({ suggestions: [], collections: [] }),
   [SUGGESTIONS_DISMISS]: () => ({ suggestions: [], collections: [] }),
+  [SETTINGS_GET]: () => ({ textSize: 'default' as const, reducedMotion: false }),
+  [SETTINGS_SET]: () => ({ textSize: 'default' as const, reducedMotion: false }),
 } satisfies Omit<IpcHandlerMap, typeof APP_GET_VERSION>;
 
 const trustedEvent = { senderFrame: { url: 'file:///app/out/renderer/index.html' } };
