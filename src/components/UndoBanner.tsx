@@ -20,12 +20,13 @@ export interface UndoBannerProps {
   onUndo: () => Promise<void>;
 }
 
-type Phase = 'idle' | 'confirming' | 'removing' | 'removed';
+type Phase = 'idle' | 'confirming' | 'removing' | 'removed' | 'failed';
 
 export function UndoBanner({ personName, count, onUndo }: UndoBannerProps): ReactElement {
   const [phase, setPhase] = useState<Phase>('idle');
   const confirmHeadingRef = useRef<HTMLParagraphElement>(null);
   const removedRef = useRef<HTMLDivElement>(null);
+  const failedRef = useRef<HTMLDivElement>(null);
 
   // Move focus onto the confirmation prompt so a screen-reader user hears the second,
   // destructive question rather than silently landing on a new button; and onto the
@@ -33,9 +34,43 @@ export function UndoBanner({ personName, count, onUndo }: UndoBannerProps): Reac
   useEffect(() => {
     if (phase === 'confirming') confirmHeadingRef.current?.focus();
     if (phase === 'removed') removedRef.current?.focus();
+    if (phase === 'failed') failedRef.current?.focus();
   }, [phase]);
 
   const memories = count === 1 ? 'memory' : 'memories';
+
+  // A rejected onUndo means the REMOVAL TRANSACTION rolled back — the memories are
+  // untouched. Surface that honestly (never a silent revert to idle): reverent copy +
+  // a way to try again. A best-effort disk-cleanup miss is NOT a rejection — it
+  // resolves as success, so it lands on 'removed' like any other undo.
+  const runUndo = (): void => {
+    setPhase('removing');
+    void onUndo()
+      .then(() => setPhase('removed'))
+      .catch(() => setPhase('failed'));
+  };
+
+  if (phase === 'failed') {
+    return (
+      <section
+        aria-label="Undo this import"
+        className="flex flex-col gap-4 rounded-2xl border border-error-border bg-error-bg p-5 text-error-text"
+      >
+        <p ref={failedRef} role="alert" tabIndex={-1} className="font-body text-base leading-relaxed outline-none">
+          We couldn&apos;t undo that just now — nothing was changed, and {personName}&apos;s memories
+          are still here. You can try again.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <Button variant="primary" onClick={runUndo}>
+            Try again
+          </Button>
+          <Button variant="secondary" onClick={() => setPhase('idle')}>
+            Not now
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   if (phase === 'removed') {
     return (
@@ -75,16 +110,7 @@ export function UndoBanner({ personName, count, onUndo }: UndoBannerProps): Reac
           back later.
         </p>
         <div className="flex flex-wrap gap-3">
-          <Button
-            variant="primary"
-            disabled={removing}
-            onClick={() => {
-              setPhase('removing');
-              void onUndo()
-                .then(() => setPhase('removed'))
-                .catch(() => setPhase('idle'));
-            }}
-          >
+          <Button variant="primary" disabled={removing} onClick={runUndo}>
             {removing ? 'Removing…' : `Yes, remove ${count === 1 ? 'it' : 'them'}`}
           </Button>
           <Button variant="secondary" disabled={removing} onClick={() => setPhase('idle')}>

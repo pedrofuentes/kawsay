@@ -540,6 +540,15 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
     },
     undoImport(input) {
       const { db, summary } = requireOpen();
+      // Never undo while ANY import is still in flight: the worker thread may still be
+      // writing occurrences/originals for a source, and removing rows out from under it
+      // could corrupt state. Imports are one-at-a-time (see beginImport), and a settled
+      // import's worker is torn down before its summary/UndoBanner appears — so in the
+      // normal post-import flow this is empty. Surfaced as a rejected invoke the UI
+      // shows as a reverent "still here" (the memories are untouched).
+      if (coordinator.active().length > 0) {
+        throw new CatalogSessionError('an import is in progress');
+      }
       const result = removeSource(db, summary.root, input.sourceId);
       return {
         itemsRemoved: result.itemsRemoved,

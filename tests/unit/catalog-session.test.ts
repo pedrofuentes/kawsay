@@ -425,6 +425,15 @@ describe('createCatalogSession (the IPC application service)', () => {
     expect(() => session.undoImport({ sourceId: JOB_ID })).toThrow();
   });
 
+  it('undoImport refuses while an import is still in flight (race guard, #429)', () => {
+    session.createLibrary({ path: root });
+    // Start an import so the coordinator reports an active job; undo must refuse rather
+    // than remove rows out from under a still-writing worker.
+    session.beginImport({ sourceType: 'folder', inputPath: root });
+    expect(coordinator.started.length).toBeGreaterThan(0);
+    expect(() => session.undoImport({ sourceId: JOB_ID })).toThrow(/in progress/i);
+  });
+
   it('beginImport registers a source and starts a well-formed off-thread job', () => {
     session.createLibrary({ path: root });
     const { jobId, sourceId } = session.beginImport({ sourceType: 'folder', inputPath: root });

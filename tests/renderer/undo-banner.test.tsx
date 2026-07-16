@@ -121,8 +121,8 @@ describe('UndoBanner — every import is undoable (AC-14)', () => {
     const { user } = setup({ onUndo });
     await user.click(screen.getByRole('button', { name: /undo this import/i }));
     await user.click(screen.getByRole('button', { name: /yes, remove/i }));
+    // "Try again" IS the deliberate retry — one click re-runs the removal (no re-ask).
     await user.click(await screen.findByRole('button', { name: /try again/i }));
-    await user.click(await screen.findByRole('button', { name: /yes, remove/i }));
 
     expect(await screen.findByText(/removed|as it was/i)).toBeInTheDocument();
     expect(onUndo).toHaveBeenCalledTimes(2);

@@ -415,6 +415,12 @@ export interface RemoveSourceResult {
   blobsDeleted: number;
   /** Orphaned derived renditions (thumbnails/posters/waveforms) removed on disk. */
   assetsDeleted: number;
+  /**
+   * Files the OS refused to delete post-commit (EPERM/EACCES on a locked or
+   * cloud-synced original). The catalog removal still succeeded — these are now
+   * unreferenced orphans that {@link garbageCollectOrphanedOriginals} reclaims later.
+   */
+  filesOrphaned: number;
 }
 
 interface SourceRemovalPlan {
@@ -520,10 +526,26 @@ export function removeSource(
     return { blobsToDelete, derivedToDelete, occurrencesRemoved: occurrences.length, itemsRemoved };
   })(sourceId);
 
+  // The DB removal already COMMITTED — it is the source of truth (AC-14). Post-commit
+  // disk cleanup is therefore BEST-EFFORT: a per-file EPERM/EACCES (a locked or
+  // cloud-synced original) must NEVER throw back to the caller, or the UI would revert
+  // to "nothing happened" while the memories are already gone. Each failure is caught,
+  // logged, and counted; the leftover is an unreferenced orphan the originals GC
+  // reclaims on its next sweep. Only a failure of the transaction ABOVE (which rolls
+  // back, leaving the data intact) is ever surfaced to the user as "undo failed".
   let blobsDeleted = 0;
-  for (const blob of plan.blobsToDelete) if (deleteFileIfExists(blob)) blobsDeleted += 1;
+  let filesOrphaned = 0;
+  for (const blob of plan.blobsToDelete) {
+    const outcome = bestEffortDelete(blob);
+    if (outcome === 'deleted') blobsDeleted += 1;
+    else if (outcome === 'failed') filesOrphaned += 1;
+  }
   let assetsDeleted = 0;
-  for (const derived of plan.derivedToDelete) if (deleteFileIfExists(derived)) assetsDeleted += 1;
+  for (const derived of plan.derivedToDelete) {
+    const outcome = bestEffortDelete(derived);
+    if (outcome === 'deleted') assetsDeleted += 1;
+    else if (outcome === 'failed') filesOrphaned += 1;
+  }
 
   return {
     removed: plan.occurrencesRemoved > 0,
@@ -531,7 +553,46 @@ export function removeSource(
     itemsRemoved: plan.itemsRemoved,
     blobsDeleted,
     assetsDeleted,
+    filesOrphaned,
   };
+}
+
+type DeleteOutcome = 'deleted' | 'absent' | 'failed';
+
+/**
+ * Delete a file post-commit as BEST EFFORT. Returns 'deleted' when a file was removed,
+ * 'absent' when nothing was there, and 'failed' — after logging a privacy-preserving
+ * warning ({name,code} only, mirroring the IPC layer's diagnosticError) — when the OS
+ * refused (EPERM/EACCES). NEVER throws: the catalog removal already committed, so a
+ * lingering file is only an unreferenced orphan for {@link garbageCollectOrphanedOriginals}.
+ */
+function bestEffortDelete(absPath: string): DeleteOutcome {
+  if (!existsSync(absPath)) return 'absent';
+  try {
+    rmSync(absPath, { force: true });
+    return 'deleted';
+  } catch (error) {
+    // Local diagnostic only (no telemetry, no egress): the projection carries ONLY the
+    // error name + errno code — never the message/stack/path, which could leak a
+    // filesystem location or item text (#373). The static template + internal string
+    // is not attacker-controlled printf input.
+    console.warn(
+      '[kawsay] undo import: could not remove an orphaned file post-commit (left for GC)',
+      cleanupDiagnostic(error),
+    ); // nosemgrep: unsafe-formatstring
+    return 'failed';
+  }
+}
+
+/** A privacy-preserving projection of a cleanup error: only the error `name` and an
+ *  optional errno `code` — never the raw message/stack/path. Mirrors the IPC layer's
+ *  diagnosticError so main-process faults log the same safe shape. */
+function cleanupDiagnostic(error: unknown): { name: string; code?: string } {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === undefined ? { name: error.name } : { name: error.name, code };
+  }
+  return { name: typeof error };
 }
 
 function deleteFileIfExists(absPath: string): boolean {
