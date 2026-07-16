@@ -9,7 +9,7 @@
 //     content-type, `Accept-Ranges`, and HTTP range support for video seeking;
 //   • the whole path reads a LOCAL file only — it opens no socket (AC-4).
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { fstatSync, mkdirSync, openSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   createMediaProtocolHandler,
@@ -107,11 +107,21 @@ describe('createMediaProtocolHandler — hardened id→bytes serving (#428)', ()
     return createMediaProtocolHandler({ resolve });
   }
 
+  /** A resolver whose serve is PINNED by an open fd (mirrors the real resolver):
+   *  it opens `path` once and returns `{ fd, size, mimeType }`. The handler owns and
+   *  closes the fd, so the path is never re-opened downstream. */
+  function pinnedResolve(path: string, mimeType: string): () => ResolvedMedia {
+    return () => {
+      const fd = openSync(path, 'r');
+      return { fd, size: fstatSync(fd).size, mimeType };
+    };
+  }
+
   it('rejects a malformed id with 400 and streams no bytes', async () => {
     let called = false;
     const handler = handlerFor(() => {
       called = true;
-      return { absPath: filePath, mimeType: 'audio/mpeg' };
+      return { fd: openSync(filePath, 'r'), size: body.length, mimeType: 'audio/mpeg' };
     });
     const res = await handler(request('kawsay-media://item/not-a-uuid'));
     expect(res.status).toBe(400);
@@ -154,14 +164,8 @@ describe('createMediaProtocolHandler — hardened id→bytes serving (#428)', ()
     expect(JSON.stringify(events[0])).not.toContain('secret');
   });
 
-  it('returns 404 when the resolved file does not exist on disk', async () => {
-    const handler = handlerFor(() => ({ absPath: join(root, 'originals', 'missing.bin'), mimeType: 'audio/mpeg' }));
-    const res = await handler(request(mediaUrl(VALID_ID)));
-    expect(res.status).toBe(404);
-  });
-
-  it('streams the whole file with 200, the correct content-type, and Accept-Ranges', async () => {
-    const handler = handlerFor(() => ({ absPath: filePath, mimeType: 'video/mp4' }));
+  it('streams the whole file (from the pinned fd) with 200, the correct content-type, and Accept-Ranges', async () => {
+    const handler = handlerFor(pinnedResolve(filePath, 'video/mp4'));
     const res = await handler(request(mediaUrl(VALID_ID)));
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('video/mp4');
@@ -172,7 +176,7 @@ describe('createMediaProtocolHandler — hardened id→bytes serving (#428)', ()
   });
 
   it('answers a Range request with 206 partial content and the requested slice', async () => {
-    const handler = handlerFor(() => ({ absPath: filePath, mimeType: 'video/mp4' }));
+    const handler = handlerFor(pinnedResolve(filePath, 'video/mp4'));
     const res = await handler(request(mediaUrl(VALID_ID), { Range: 'bytes=5-14' }));
     expect(res.status).toBe(206);
     expect(res.headers.get('content-range')).toBe(`bytes 5-14/${body.length}`);
@@ -181,10 +185,42 @@ describe('createMediaProtocolHandler — hardened id→bytes serving (#428)', ()
     expect(bytes.equals(body.subarray(5, 15))).toBe(true);
   });
 
+  it('closes the pinned fd after a full stream (autoClose — no fd leak)', async () => {
+    let fd: number | undefined;
+    const handler = createMediaProtocolHandler({
+      resolve: () => {
+        fd = openSync(filePath, 'r');
+        return { fd, size: body.length, mimeType: 'audio/mpeg' };
+      },
+    });
+    const res = await handler(request(mediaUrl(VALID_ID)));
+    await res.arrayBuffer();
+    expect(fd).toBeDefined();
+    expect(() => fstatSync(fd as number)).toThrow();
+  });
+
+  it('closes the pinned fd for an EMPTY original and returns 200 with no body (no fd leak)', async () => {
+    const empty = join(root, 'originals', 'empty.bin');
+    writeFileSync(empty, Buffer.alloc(0));
+    let fd: number | undefined;
+    const handler = createMediaProtocolHandler({
+      resolve: () => {
+        fd = openSync(empty, 'r');
+        return { fd, size: 0, mimeType: 'audio/mpeg' };
+      },
+    });
+    const res = await handler(request(mediaUrl(VALID_ID)));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-length')).toBe('0');
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+    expect(fd).toBeDefined();
+    expect(() => fstatSync(fd as number)).toThrow();
+  });
+
   it('opens NO socket while serving a memory — a local file read only (AC-4)', async () => {
     const spies = installEgressSpies();
     try {
-      const handler = handlerFor(() => ({ absPath: filePath, mimeType: 'audio/mpeg' }));
+      const handler = handlerFor(pinnedResolve(filePath, 'audio/mpeg'));
       const res = await handler(request(mediaUrl(VALID_ID)));
       await res.arrayBuffer();
       spies.assertNoEgress();

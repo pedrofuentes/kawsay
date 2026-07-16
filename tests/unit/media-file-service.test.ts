@@ -1,13 +1,22 @@
-// Unit tests for the id→confined-path media resolver behind the `kawsay-media:`
-// protocol (#428). Mirrors the thumbnail-service posture (U4 / AC-14): the
-// renderer names ONLY an opaque catalog id, and the service resolves it
-// server-side to a path CONFINED to the library originals via `resolveOriginal`,
-// which THROWS on an escaping content-address rather than reading outside the
-// store. No renderer-supplied path is ever accepted, and the whole path is
-// egress-free (AC-4).
+// Unit tests for the id→PINNED-fd media resolver behind the `kawsay-media:`
+// protocol (#428). Mirrors the thumbnail-service posture (U4 / AC-14): the renderer
+// names ONLY an opaque catalog id, and the service resolves it server-side to a
+// CONFINED original. To close the validate-then-reopen TOCTOU (§2.4), it realpaths
+// + containment-checks ONCE, then OPENS the canonical (symlink-free) path to a file
+// descriptor and returns the FD — so the exact file validated is the exact file
+// streamed. It THROWS on an escaping content-address / in-place symlink swap rather
+// than handing out a servable file. No renderer-supplied path is ever accepted, and
+// the whole path is egress-free (AC-4).
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 import { openCatalog, type CatalogDatabase } from '../../electron/main/db/connection';
 import { runMigrations } from '../../electron/main/db/migrate';
 import { createCatalogRepo, type CatalogRepo } from '../../electron/main/db/catalog-repo';
@@ -16,7 +25,10 @@ import {
   ERR_ORIGINAL_PATH_ESCAPE,
   isServablePath,
 } from '../../electron/main/library/originals-store';
-import { createMediaFileService } from '../../electron/main/library/media-file-service';
+import {
+  createMediaFileService,
+  type MediaFileDescriptor,
+} from '../../electron/main/library/media-file-service';
 import { createMediaProtocolHandler } from '../../electron/main/security/media-protocol';
 import { mediaUrl } from '@shared/media';
 import type { MediaType } from '@shared/catalog';
@@ -28,9 +40,29 @@ function noRangeHeaders(): { get(name: string): string | null } {
   return { get: () => null };
 }
 
+/** Close a resolved descriptor's pinned fd so a unit test never leaks it. */
+function closeDescriptor(descriptor: MediaFileDescriptor | null): void {
+  if (descriptor !== null) {
+    try {
+      closeSync(descriptor.fd);
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
 /** A canonical 64-hex content hash seeded from a single distinguishing nibble. */
 function hash(nibble: string): string {
   return nibble.repeat(64);
+}
+
+/** Write a real content-addressed blob on disk (its shard dir + bytes) so the
+ *  resolver can open + pin it — content-addressed serving now requires the file. */
+function writeBlob(root: string, contentHash: string, ext: string, bytes: Buffer): string {
+  const path = blobAbsPath(root, contentHash, ext);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, bytes);
+  return path;
 }
 
 describe('createMediaFileService (id-keyed, path-confined media resolution — #428 / AC-14)', () => {
@@ -78,7 +110,8 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
     return id;
   }
 
-  it('resolves an audio memory by id to its CONFINED originals-store path (never a renderer path)', () => {
+  it('resolves an audio memory by id to a PINNED fd on the confined original (never a renderer path)', () => {
+    writeBlob(root, hash('a'), '.mp3', Buffer.from('the sound of a voice'));
     const service = createMediaFileService({ db, root });
     const id = seedItem('audio', {
       contentHash: hash('a'),
@@ -89,12 +122,17 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
 
     const descriptor = service.resolve(id);
     expect(descriptor).not.toBeNull();
-    expect(descriptor?.absPath).toBe(blobAbsPath(root, hash('a'), '.mp3'));
+    // A pinned, positive file descriptor on a regular file — NOT a path string.
+    expect(typeof descriptor?.fd).toBe('number');
+    expect(descriptor?.fd).toBeGreaterThanOrEqual(0);
+    expect(descriptor?.size).toBe('the sound of a voice'.length);
     expect(descriptor?.mimeType).toBe('audio/mpeg');
     expect(descriptor?.mediaType).toBe('audio');
+    closeDescriptor(descriptor);
   });
 
   it('resolves a video memory by id', () => {
+    writeBlob(root, hash('b'), '.mp4', Buffer.from('home movie'));
     const service = createMediaFileService({ db, root });
     const id = seedItem('video', {
       contentHash: hash('b'),
@@ -102,11 +140,14 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
       originalExt: '.mp4',
       kind: 'content_addressed',
     });
-    expect(service.resolve(id)?.mediaType).toBe('video');
-    expect(service.resolve(id)?.mimeType).toBe('video/mp4');
+    const descriptor = service.resolve(id);
+    expect(descriptor?.mediaType).toBe('video');
+    expect(descriptor?.mimeType).toBe('video/mp4');
+    closeDescriptor(descriptor);
   });
 
   it('resolves a photo memory by id (images open full-size through the same protocol)', () => {
+    writeBlob(root, hash('c'), '.jpg', Buffer.from('a photo'));
     const service = createMediaFileService({ db, root });
     const id = seedItem('photo', {
       contentHash: hash('c'),
@@ -114,11 +155,14 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
       originalExt: '.jpg',
       kind: 'content_addressed',
     });
-    expect(service.resolve(id)?.mediaType).toBe('photo');
-    expect(service.resolve(id)?.mimeType).toBe('image/jpeg');
+    const descriptor = service.resolve(id);
+    expect(descriptor?.mediaType).toBe('photo');
+    expect(descriptor?.mimeType).toBe('image/jpeg');
+    closeDescriptor(descriptor);
   });
 
   it('derives a sane content-type from the extension when the catalog stored none', () => {
+    writeBlob(root, hash('d'), '.m4a', Buffer.from('x'));
     const service = createMediaFileService({ db, root });
     const id = seedItem('audio', {
       contentHash: hash('d'),
@@ -126,7 +170,20 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
       originalExt: '.m4a',
       kind: 'content_addressed',
     });
-    expect(service.resolve(id)?.mimeType).toBe('audio/mp4');
+    const descriptor = service.resolve(id);
+    expect(descriptor?.mimeType).toBe('audio/mp4');
+    closeDescriptor(descriptor);
+  });
+
+  it('returns null for a content-addressed blob that is not on disk (nothing to serve)', () => {
+    const service = createMediaFileService({ db, root });
+    const id = seedItem('audio', {
+      contentHash: hash('9'),
+      mimeType: 'audio/mpeg',
+      kind: 'content_addressed',
+    });
+    // No blob written → no file to pin → a plain not-found, never a throw.
+    expect(service.resolve(id)).toBeNull();
   });
 
   it('returns null for non-playable media (document/message) WITHOUT resolving an original', () => {
@@ -163,13 +220,14 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
   it('makes NO network call while resolving a memory (AC-4)', () => {
     const spies = installEgressSpies();
     try {
+      writeBlob(root, hash('e'), '.bin', Buffer.from('bytes'));
       const service = createMediaFileService({ db, root });
       const id = seedItem('audio', {
         contentHash: hash('e'),
         mimeType: 'audio/mpeg',
         kind: 'content_addressed',
       });
-      service.resolve(id);
+      closeDescriptor(service.resolve(id));
       spies.assertNoEgress();
     } finally {
       spies.restore();
@@ -212,8 +270,90 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
 
       const descriptor = createMediaFileService({ db, root }).resolve(id);
       expect(descriptor).not.toBeNull();
-      expect(existsSync(descriptor?.absPath ?? '')).toBe(true);
-      expect(realpathSync(descriptor?.absPath ?? '')).toBe(realpathSync(file));
+      // A pinned fd on the validated regular file, sized from its fstat.
+      expect(typeof descriptor?.fd).toBe('number');
+      expect(fstatSync(descriptor?.fd ?? -1).isFile()).toBe(true);
+      expect(descriptor?.size).toBe('a loved one'.length);
+      closeDescriptor(descriptor);
+    });
+
+    it('PINS the fd so a swap of the validated path after resolution cannot redirect the read (TOCTOU)', async () => {
+      const sourceDir = join(root, 'watchedT');
+      const outsideDir = join(root, 'outsideT');
+      mkdirSync(sourceDir, { recursive: true });
+      mkdirSync(outsideDir, { recursive: true });
+      const srcId = repo.registerSource({
+        sourceKey: 'wt',
+        type: 'folder',
+        label: 'WatchedT',
+        originPath: sourceDir,
+        rootPath: sourceDir,
+      });
+      const clip = join(sourceDir, 'clip.mp4');
+      writeFileSync(clip, Buffer.from('ORIGINAL-VALIDATED-BYTES'));
+      const id = seedInPlace('video', srcId, clip);
+
+      const service = createMediaFileService({ db, root });
+      // The adversary swaps the validated path to a DIFFERENT inode (a secret file)
+      // in the gap AFTER the service validated it — exactly the validate-then-reopen
+      // race. A path-based re-open would now stream the secret; a pinned fd must not.
+      const handler = createMediaProtocolHandler({
+        resolve: (mediaId) => {
+          const descriptor = service.resolve(mediaId); // realpath + containment + OPEN (pin)
+          const secret = join(outsideDir, 'secret.mp4');
+          writeFileSync(secret, Buffer.from('SECRET-SWAPPED-BYTES!!'));
+          renameSync(secret, clip); // clip now points at the secret inode
+          return descriptor;
+        },
+      });
+
+      const res = await handler({ url: mediaUrl(id), headers: noRangeHeaders() });
+      expect(res.status).toBe(200);
+      const streamed = Buffer.from(await res.arrayBuffer()).toString();
+      // The pinned fd streams the ORIGINAL validated bytes; the secret NEVER leaks.
+      expect(streamed).toBe('ORIGINAL-VALIDATED-BYTES');
+      expect(streamed).not.toContain('SECRET');
+    });
+
+    it('REJECTS an in-place original that is not a regular file (e.g. a directory)', () => {
+      const sourceDir = join(root, 'watchedD');
+      mkdirSync(sourceDir, { recursive: true });
+      const subdir = join(sourceDir, 'a-directory');
+      mkdirSync(subdir, { recursive: true });
+      const srcId = repo.registerSource({
+        sourceKey: 'wd',
+        type: 'folder',
+        label: 'WatchedD',
+        originPath: sourceDir,
+        rootPath: sourceDir,
+      });
+      const id = seedInPlace('video', srcId, subdir);
+
+      expect(() => createMediaFileService({ db, root }).resolve(id)).toThrow(
+        ERR_ORIGINAL_PATH_ESCAPE,
+      );
+    });
+
+    it('serves a file under the SECOND servable root candidate (origin_path), not just the first', () => {
+      // root_path is left null; the file lives under origin_path — the resolver must
+      // OR across every source-root candidate, not only the first.
+      const originDir = join(root, 'chosenFolder');
+      mkdirSync(originDir, { recursive: true });
+      const file = join(originDir, 'clip.mp4');
+      writeFileSync(file, Buffer.from('second-root'));
+      const srcId = repo.registerSource({
+        sourceKey: 'w2r',
+        type: 'folder',
+        label: 'SecondRoot',
+        originPath: originDir,
+        // rootPath deliberately omitted (null) → only origin_path can allow it.
+      });
+      const id = seedInPlace('video', srcId, file);
+
+      const descriptor = createMediaFileService({ db, root }).resolve(id);
+      expect(descriptor).not.toBeNull();
+      expect(descriptor?.size).toBe('second-root'.length);
+      closeDescriptor(descriptor);
     });
 
     it('REJECTS an in-place path whose realpath ESCAPES the source root (symlink swap — TOCTOU)', () => {
@@ -349,5 +489,29 @@ describe('isServablePath — realpath allowlist (§2.4)', () => {
     const file = join(root, 'x.mp4');
     writeFileSync(file, Buffer.from('x'));
     expect(isServablePath(file, [])).toBe(false);
+  });
+
+  it('IGNORES an empty-string or non-absolute root entry (never "allow anything under cwd")', () => {
+    // An empty root would realpath to process.cwd(); a relative root is likewise
+    // ambiguous. The primitive itself must reject both — not rely on a pre-filter.
+    const file = join(root, 'y.mp4');
+    writeFileSync(file, Buffer.from('x'));
+    // A file under cwd, gated ONLY by an empty / relative root → must stay refused.
+    const underCwd = join(process.cwd(), 'package.json');
+    expect(isServablePath(underCwd, [''])).toBe(false);
+    expect(isServablePath(underCwd, ['.'])).toBe(false);
+    expect(isServablePath(underCwd, ['node_modules'])).toBe(false);
+    // And a legit absolute root still works alongside a junk entry.
+    expect(isServablePath(file, ['', root])).toBe(true);
+  });
+
+  it('allows a file under the SECOND servable root when the first does not match (OR logic)', () => {
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    mkdirSync(first, { recursive: true });
+    mkdirSync(second, { recursive: true });
+    const file = join(second, 'clip.mp4');
+    writeFileSync(file, Buffer.from('x'));
+    expect(isServablePath(file, [first, second])).toBe(true);
   });
 });
