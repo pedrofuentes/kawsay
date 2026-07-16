@@ -55,6 +55,22 @@ export interface MediaProtocolHandlerOptions {
   /** Resolve an opaque id → a confined file, or null. May THROW on a confinement
    *  rejection; the handler turns that into a 404 (never reads outside the store). */
   resolve: (id: string) => ResolvedMedia | null;
+  /**
+   * Privacy-preserving sink for a REJECTED serve (a confinement throw or a mid-stream
+   * read failure). Receives ONLY `{ name, code }` — never a filesystem path or the
+   * raw error — so a security event is observable in logs without leaking a path.
+   */
+  onRejected?: (info: { name: string; code?: string }) => void;
+}
+
+/** Reduce any thrown value to a privacy-preserving `{ name, code }` (no message, no
+ *  path, no stack) — mirrors the `diagnosticError` helpers elsewhere in main. */
+function diagnosticError(error: unknown): { name: string; code?: string } {
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    return { name: error.name, code: typeof code === 'string' ? code : undefined };
+  }
+  return { name: 'UnknownError' };
 }
 
 /**
@@ -136,9 +152,12 @@ export function createMediaProtocolHandler(
     let media: ResolvedMedia | null;
     try {
       media = options.resolve(id);
-    } catch {
-      // A confinement rejection (an escaping content-address) is refused BEFORE any
-      // read — surfaced as a plain not-found, never a path or error to the renderer.
+    } catch (error) {
+      // A confinement rejection (an escaping content-address, or an in-place file
+      // whose realpath escapes its source root) is refused BEFORE any read — surfaced
+      // as a plain not-found, never a path or error to the renderer, and logged with
+      // a privacy-preserving diagnostic so the security event stays observable.
+      options.onRejected?.(diagnosticError(error));
       return emptyResponse(404);
     }
     if (media === null) return emptyResponse(404);
@@ -157,12 +176,17 @@ export function createMediaProtocolHandler(
     const end = range?.end ?? Math.max(size - 1, 0);
     const length = size === 0 ? 0 : end - start + 1;
 
-    const body =
-      length > 0
-        ? (Readable.toWeb(
-            createReadStream(media.absPath, { start, end }),
-          ) as unknown as ReadableStream<Uint8Array>)
-        : null;
+    let body: ReadableStream<Uint8Array> | null = null;
+    if (length > 0) {
+      const nodeStream = createReadStream(media.absPath, { start, end });
+      // A mid-stream read failure (file truncated/removed while streaming) must be
+      // HANDLED, not crash the process: log a privacy-preserving diagnostic and let
+      // the web stream surface the error to the media element (a graceful load fail).
+      nodeStream.on('error', (error) => {
+        options.onRejected?.(diagnosticError(error));
+      });
+      body = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
+    }
 
     const headers = new Headers({
       'Content-Type': media.mimeType,

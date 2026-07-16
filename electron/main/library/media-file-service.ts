@@ -5,10 +5,12 @@
 //
 //   1. look up the item's media_type/mime_type by id — only photo/audio/video are
 //      playable; everything else short-circuits to null WITHOUT touching disk;
-//   2. resolve the original through `resolveOriginal`, the AC-14 confinement
-//      boundary, which THROWS on a hostile/escaping content-address rather than
-//      handing back a path outside the originals store (a renderer-supplied path is
-//      impossible — the renderer never provides one);
+//   2. resolve the original through `resolveServableOriginal`, the §2.4 SERVE-TIME
+//      confinement boundary: content-addressed blobs stay under the library root,
+//      and an in-place file's REAL path (symlinks resolved) must still sit inside a
+//      registered source root the user chose — closing the import→serve TOCTOU. It
+//      THROWS on an escaping path rather than handing back one (a renderer-supplied
+//      path is impossible — the renderer never provides one);
 //   3. return the confined absolute path + a content-type, so the protocol handler
 //      can stream the LOCAL file (with range support) and never opens a socket
 //      (AC-4).
@@ -16,7 +18,7 @@
 // Pure Node (no Electron), so the resolve→confine path unit-tests under Vitest
 // exactly as in production — mirroring the thumbnail service.
 import { extname } from 'node:path';
-import { resolveOriginal } from './originals-store';
+import { resolveServableOriginal } from './originals-store';
 import type { CatalogDatabase } from '../db/connection';
 import type { MediaType } from '@shared/catalog';
 
@@ -41,9 +43,10 @@ export interface MediaFileServiceOptions {
 export interface MediaFileService {
   /**
    * Resolve one memory's confined original + content-type by opaque id, or null
-   * (unknown id, non-playable media, or no surviving original). THROWS — exactly
-   * like {@link resolveOriginal} — if a stored content-address would escape the
-   * originals root, so a hostile row can never yield a servable path.
+   * (unknown id, non-playable media, or no surviving/servable original). THROWS —
+   * exactly like {@link resolveServableOriginal} — if the resolved path would escape
+   * its servable roots (a bad content-address, or an in-place symlink swap), so a
+   * hostile row can never yield a servable path.
    */
   resolve(id: string): MediaFileDescriptor | null;
 }
@@ -100,15 +103,16 @@ export function createMediaFileService(options: MediaFileServiceOptions): MediaF
       // resolved or read.
       if (!PLAYABLE_MEDIA.has(row.mediaType)) return null;
 
-      // resolveOriginal is the confinement boundary: it THROWS on an escaping
-      // content-address rather than returning a path outside the store, and that
-      // throw deliberately propagates (the handler turns it into a 404, no read).
-      const absPath = resolveOriginal(db, root, id);
-      if (absPath === null) return null;
+      // resolveServableOriginal is the SERVE-TIME confinement boundary: it THROWS on
+      // an escaping path (a bad content-address, or an in-place file whose realpath
+      // escapes its source root) rather than returning one, and that throw
+      // deliberately propagates (the handler turns it into a 404, no read).
+      const servable = resolveServableOriginal(db, root, id);
+      if (servable === null) return null;
 
       return {
-        absPath,
-        mimeType: contentTypeFor(row.mimeType, absPath),
+        absPath: servable.absPath,
+        mimeType: contentTypeFor(row.mimeType, servable.absPath),
         mediaType: row.mediaType,
       };
     },

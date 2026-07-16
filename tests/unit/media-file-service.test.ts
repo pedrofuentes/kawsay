@@ -212,8 +212,8 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
 
       const descriptor = createMediaFileService({ db, root }).resolve(id);
       expect(descriptor).not.toBeNull();
-      expect(existsSync(descriptor!.absPath)).toBe(true);
-      expect(realpathSync(descriptor!.absPath)).toBe(realpathSync(file));
+      expect(existsSync(descriptor?.absPath ?? '')).toBe(true);
+      expect(realpathSync(descriptor?.absPath ?? '')).toBe(realpathSync(file));
     });
 
     it('REJECTS an in-place path whose realpath ESCAPES the source root (symlink swap — TOCTOU)', () => {

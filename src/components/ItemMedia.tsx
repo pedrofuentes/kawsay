@@ -10,6 +10,11 @@
 //     renderer names ONLY the opaque catalog id (`mediaUrl(item.id)`), never a path;
 //     the main process resolves + confines the original and streams it. No filesystem
 //     path or network origin is ever involved here (AC-4).
+//
+// If a memory can't be served (an unreadable original, or a serve refused by the
+// confinement boundary), the player degrades to a CALM fallback line rather than a
+// broken element — the page stays reverent.
+import { useState } from 'react';
 import type { ReactElement } from 'react';
 import { mediaUrl } from '@shared/media';
 import type { ItemCardDTO } from '@shared/kawsay-api';
@@ -21,21 +26,27 @@ function accessibleName(item: ItemCardDTO, fallback: string): string {
   return caption.length > 0 ? caption : fallback;
 }
 
+function Fallback({ message }: { message: string }): ReactElement {
+  return (
+    <p role="status" className="font-body text-base leading-relaxed text-text-secondary">
+      {message}
+    </p>
+  );
+}
+
 export function ItemMedia({ item }: { item: ItemCardDTO }): ReactElement | null {
+  const [errored, setErrored] = useState(false);
   const src = mediaUrl(item.id);
 
-  // media-has-caption is disabled deliberately: an audio/video memory's text
-  // alternative is the read-only TRANSCRIPT panel shown alongside it in ItemView
-  // ("What was said", #136 / AC-13), not a separate caption file (we have none to
-  // point a <track> at). The transcript is the honest, screen-reader-readable
-  // equivalent for these recordings.
   if (item.mediaType === 'audio') {
+    if (errored) return <Fallback message="This voice note couldn't be played right now." />;
     return (
       // eslint-disable-next-line jsx-a11y/media-has-caption -- transcript panel is the text alternative (#136)
       <audio
         controls
         preload="metadata"
         src={src}
+        onError={() => setErrored(true)}
         aria-label={`Voice note: ${accessibleName(item, 'this recording')}`}
         className="w-full"
       />
@@ -43,6 +54,7 @@ export function ItemMedia({ item }: { item: ItemCardDTO }): ReactElement | null 
   }
 
   if (item.mediaType === 'video') {
+    if (errored) return <Fallback message="This video couldn't be played right now." />;
     return (
       // eslint-disable-next-line jsx-a11y/media-has-caption -- transcript panel is the text alternative (#136)
       <video
@@ -50,6 +62,7 @@ export function ItemMedia({ item }: { item: ItemCardDTO }): ReactElement | null 
         preload="metadata"
         playsInline
         src={src}
+        onError={() => setErrored(true)}
         aria-label={`Video: ${accessibleName(item, 'this recording')}`}
         className="max-h-[70vh] w-full rounded-2xl bg-black"
       />
@@ -57,10 +70,12 @@ export function ItemMedia({ item }: { item: ItemCardDTO }): ReactElement | null 
   }
 
   if (item.mediaType === 'photo') {
+    if (errored) return <Fallback message="This photo couldn't be shown right now." />;
     return (
       <img
         src={src}
         alt={accessibleName(item, 'Photo')}
+        onError={() => setErrored(true)}
         className="max-h-[70vh] w-full rounded-2xl object-contain"
       />
     );

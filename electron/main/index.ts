@@ -496,7 +496,14 @@ async function bootstrap(): Promise<void> {
   // whole path streams a local file with range support and opens no socket (AC-4).
   session.defaultSession.protocol.handle(
     MEDIA_PROTOCOL_SCHEME,
-    createMediaProtocolHandler({ resolve: (id) => catalogSession.resolveMedia(id) }),
+    createMediaProtocolHandler({
+      resolve: (id) => catalogSession.resolveMedia(id),
+      // A rejected serve (confinement escape / mid-stream read failure) is logged with
+      // a privacy-preserving diagnostic ONLY — never a filesystem path (AC-4 posture).
+      onRejected: (info) => {
+        console.warn('[kawsay] media serve rejected', info);
+      },
+    }),
   );
 
   // The model download flows through Electron `net` on the GUARDED session, so it
