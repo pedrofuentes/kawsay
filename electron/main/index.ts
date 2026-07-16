@@ -20,6 +20,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SETTINGS_GET,
+  SETTINGS_SET,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
   SUGGESTIONS_ACCEPT,
@@ -62,6 +64,7 @@ import {
   handleSuggestionsList,
   handleSuggestionsMerge,
 } from './ipc/handlers/suggestions';
+import { handleSettingsGet, handleSettingsSet } from './ipc/handlers/settings';
 import { registerIpcHandlers, type IpcHandlerMap } from './ipc/register';
 import { createEventSender } from './ipc/event-sender';
 import type { TrustedSenderOptions } from './ipc/sender';
@@ -91,6 +94,7 @@ import { createModelDownloader } from './transcription/model-download';
 import { createElectronModelFetcher } from './transcription/electron-net-fetcher';
 import { MODEL_FILE_NAME } from './transcription/model-source';
 import { createConsentStore, type ConsentStore } from './transcription/consent-store';
+import { createSettingsStore, type SettingsStore } from './settings/settings-store';
 import { createTranscriptionCoordinator } from './transcription/queue/coordinator';
 import { createWorkerThreadsSpawner as createTranscriptionWorkerThreadsSpawner } from './transcription/queue/worker-threads-transport';
 import { resolveWhisperCliPath } from './transcription/whisper-cli';
@@ -211,6 +215,18 @@ function requireCategorizationConsentStore(): ConsentStore {
     throw new Error('the categorization consent store is not initialised yet');
   }
   return categorizationConsentStore;
+}
+
+// The durable app-wide UX SETTINGS store (AC-13 / Journey G, #433): text size +
+// the reduced-motion override. Built in bootstrap() (it needs the `userData`
+// path), independent of every other consent store — its own file, no bearing on
+// any opt-in gate. Read/written lazily by the settings:get/set handlers.
+let settingsStore: SettingsStore | undefined;
+function requireSettingsStore(): SettingsStore {
+  if (settingsStore === undefined) {
+    throw new Error('the settings store is not initialised yet');
+  }
+  return settingsStore;
 }
 
 // The bundled-asset resolution inputs shared by the categorization factory + the
@@ -428,6 +444,8 @@ const ipcHandlers: IpcHandlerMap = {
     handleSuggestionsMerge({ getLibrary: () => catalogSession.suggestions() }, request),
   [SUGGESTIONS_DISMISS]: (request) =>
     handleSuggestionsDismiss({ getLibrary: () => catalogSession.suggestions() }, request),
+  [SETTINGS_GET]: () => handleSettingsGet({ settings: requireSettingsStore() }),
+  [SETTINGS_SET]: (request) => handleSettingsSet({ settings: requireSettingsStore() }, request),
 };
 
 function createMainWindow(): void {
@@ -548,6 +566,12 @@ async function bootstrap(): Promise<void> {
   // so no place/theme clustering runs until an explicit, well-formed opt-in.
   categorizationConsentStore = createCategorizationConsentStore({
     filePath: join(app.getPath('userData'), 'categorization-consent.json'),
+  });
+
+  // The app-wide UX settings (AC-13 / Journey G, #433): its own small JSON file,
+  // no bearing on any consent gate above.
+  settingsStore = createSettingsStore({
+    filePath: join(app.getPath('userData'), 'settings.json'),
   });
 
   registerIpcHandlers(ipcMain, ipcHandlers, senderOptions);

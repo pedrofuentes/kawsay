@@ -24,6 +24,8 @@ import {
   IMPORT_START,
   LIBRARY_CREATE,
   LIBRARY_OPEN,
+  SETTINGS_GET,
+  SETTINGS_SET,
   SMART_SEARCH_DOWNLOAD_MODEL,
   SMART_SEARCH_MODEL_STATUS,
   SUGGESTIONS_ACCEPT,
@@ -107,5 +109,8 @@ export function createKawsayApi(invoke: ValidatedInvoke, subscribe: ValidatedSub
     acceptSuggestion: (input) => invoke(SUGGESTIONS_ACCEPT, input),
     mergeSuggestion: (input) => invoke(SUGGESTIONS_MERGE, input),
     dismissSuggestion: (input) => invoke(SUGGESTIONS_DISMISS, input),
+
+    getSettings: () => invoke(SETTINGS_GET, {}),
+    setSettings: (input) => invoke(SETTINGS_SET, input),
   };
 }

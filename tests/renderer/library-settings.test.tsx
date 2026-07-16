@@ -44,10 +44,10 @@ describe('LibrarySettings — shows where the library lives', () => {
   it('shows the current library name and root path', async () => {
     const summary = makeLibrarySummary({ name: 'Elena', root: '/Users/elena/Kawsay — Elena' });
     const api = makeFakeApi({ openLibrary: vi.fn(() => Promise.resolve(summary)) });
-    await renderWithOpenLibrary(api, summary);
+    const { container } = await renderWithOpenLibrary(api, summary);
 
-    expect(await screen.findByText(/elena/i)).toBeInTheDocument();
-    expect(screen.getByText(/\/Users\/elena\/Kawsay — Elena/)).toBeInTheDocument();
+    await waitFor(() => expect(container.textContent ?? '').toContain('/Users/elena/Kawsay — Elena'));
+    expect(container.textContent ?? '').toMatch(/Elena.{0,3}s memories live at/);
   });
 });
 
