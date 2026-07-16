@@ -15,6 +15,14 @@ export const DEFAULT_TIMELINE_PAGE_SIZE = 60;
 
 export interface UseTimelineOptions {
   pageSize?: number;
+  /**
+   * A monotonic "catalog data changed" signal (owned by NavigationProvider).
+   * When it changes, the hook discards its pages and refetches page 1 — the
+   * mounted-timeline (#432) needs this because it no longer remounts to pick up
+   * a completed import. Left at its default (0) it never triggers a refetch, so
+   * a hook used without it behaves exactly as before.
+   */
+  dataVersion?: number;
 }
 
 export interface UseTimelineResult {
@@ -82,6 +90,7 @@ function reducer(state: TimelineState, action: Action): TimelineState {
 
 export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult {
   const pageSize = options.pageSize ?? DEFAULT_TIMELINE_PAGE_SIZE;
+  const dataVersion = options.dataVersion ?? 0;
   const api = useKawsayApi();
   const [state, dispatch] = useReducer(reducer, api !== undefined, initialState);
 
@@ -132,11 +141,17 @@ export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult
     [api, pageSize],
   );
 
+  // Fetch page 1 on mount, and again whenever `dataVersion` changes — a real
+  // catalog mutation (a completed import; #432 review). `fetchPage` is stable
+  // across `dataVersion` ticks (its deps are only api + pageSize), so this
+  // fires exactly once per genuine change, never on an incidental re-render. A
+  // consumer that passes no `dataVersion` pins it at 0, so this reduces to the
+  // original mount-only fetch.
   useEffect(() => {
     if (api !== undefined) {
       void fetchPage('initial');
     }
-  }, [api, fetchPage]);
+  }, [api, fetchPage, dataVersion]);
 
   const loadMore = useCallback(() => {
     void fetchPage('more');

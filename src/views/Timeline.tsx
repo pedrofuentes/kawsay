@@ -126,13 +126,30 @@ export interface TimelineProps {
 }
 
 export function Timeline({ active = true }: TimelineProps = {}): ReactElement {
-  const { navigate } = useNavigation();
+  const { navigate, favouriteOverrides, dataVersion } = useNavigation();
   const { library } = useLibrary();
-  const { items, status, hasMore, loadMore, reload } = useTimeline();
+  const { items: rawItems, status, hasMore, loadMore, reload } = useTimeline({ dataVersion });
 
   const who = library?.name?.trim() ?? '';
   const headingTitle = who.length > 0 ? `${who}'s timeline` : 'Timeline';
   const memoriesLabel = `${who.length > 0 ? `${who}'s` : 'Your'} memories`;
+
+  // Overlay the navigation-owned favourite OVERRIDES on top of the (possibly
+  // stale) cached page, exactly as ItemView does (#432 review regression A):
+  // MainApp keeps this timeline mounted across a round trip, so a heart marked
+  // on the item view would otherwise never show here (the cached `isFavourite`
+  // is frozen at fetch time). The override map is the single source of settled
+  // truth, so reading it here keeps the card honest without any refetch.
+  const items = useMemo<ItemCardDTO[]>(
+    () =>
+      rawItems.map((item) => {
+        const override = favouriteOverrides[item.id];
+        return override !== undefined && override !== item.isFavourite
+          ? { ...item, isFavourite: override }
+          : item;
+      }),
+    [rawItems, favouriteOverrides],
+  );
 
   const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
