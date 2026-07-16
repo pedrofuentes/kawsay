@@ -10,6 +10,8 @@ import {
   categorizationCorrectionSchema,
   categorizationStartResultSchema,
   categorizationStatusSchema,
+  collectionItemsPageSchema,
+  collectionsListSchema,
   itemCategoriesSchema,
   librarySummarySchema,
   pathSchema,
@@ -173,6 +175,20 @@ export const SUGGESTIONS_ACCEPT = 'suggestions:accept';
 export const SUGGESTIONS_MERGE = 'suggestions:merge';
 /** IPC channel: dismiss a suggestion (durable tombstone — not re-proposed); echoes the refreshed tray. */
 export const SUGGESTIONS_DISMISS = 'suggestions:dismiss';
+
+/**
+ * IPC channels for the COLLECTIONS BROWSER VIEW (#437). A NEW, self-contained
+ * section — deliberately kept separate from every other channel group so it
+ * merges cleanly alongside concurrent contract changes elsewhere in this file.
+ * Both channels are READ-ONLY: nothing here ever creates, renames, or deletes a
+ * collection — that stays the suggestions tray's curation actions above. A
+ * `dismissed` tombstone collection is never listed or fetchable (it carries no
+ * members and exists purely so the derivation never re-proposes it).
+ */
+/** IPC channel: list every browsable collection (hand-made or accepted-suggested), with member counts. */
+export const CATALOG_LIST_COLLECTIONS = 'catalog:listCollections';
+/** IPC channel: fetch ONE collection by opaque id — its summary plus an offset-paginated page of members. */
+export const CATALOG_GET_COLLECTION = 'catalog:getCollection';
 
 /**
  * IPC channels for the app-wide UX SETTINGS surface (AC-13 / Journey G, #433).
@@ -398,6 +414,23 @@ export const ipcContract = {
       name: z.string().min(1).max(CATEGORY_NAME_MAX_LENGTH).optional(),
     }),
     response: suggestionsViewSchema,
+  },
+  // ── Collections browser view (#437) — a NEW, self-contained section, kept
+  // separate from every other channel group so it merges cleanly alongside
+  // concurrent contract changes elsewhere in this file.
+  [CATALOG_LIST_COLLECTIONS]: {
+    request: z.strictObject({}),
+    response: collectionsListSchema,
+  },
+  [CATALOG_GET_COLLECTION]: {
+    // An opaque collection id (never a path — mirrors catalog:getTranscript) plus
+    // a bounded page window; offset defaults to 0 so a first fetch can omit it.
+    request: z.strictObject({
+      id: z.uuid(),
+      limit: z.number().int().min(1).max(PAGE_LIMIT_MAX),
+      offset: z.number().int().nonnegative().default(0),
+    }),
+    response: collectionItemsPageSchema,
   },
   // ── App-wide UX settings (AC-13 / Journey G, #433) — a NEW, self-contained
   // section, deliberately kept separate from every other channel group above so

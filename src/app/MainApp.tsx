@@ -8,6 +8,7 @@ import { AppShell } from '@renderer/components/AppShell';
 import { useLibrary } from '@renderer/lib/library';
 import { useNavigation } from '@renderer/lib/navigation';
 import { AddMemories } from '@renderer/views/AddMemories';
+import { CollectionDetail, Collections } from '@renderer/views/Collections';
 import { Search } from '@renderer/views/Search';
 import { Settings } from '@renderer/views/Settings';
 import { Timeline } from '@renderer/views/Timeline';
@@ -54,6 +55,13 @@ export function MainApp(): ReactElement {
         return <AddMemories key="add-memories" />;
       case 'settings':
         return <Settings key="settings" />;
+      case 'collections':
+        return <Collections key="collections" />;
+      case 'collection':
+        // Keyed by collection id so opening a different collection remounts the
+        // view (its <h1> auto-focus re-runs and the members re-fetch for the
+        // new id), mirroring the 'item' case below.
+        return <CollectionDetail key={`collection-${view.collectionId}`} />;
       case 'item':
         // Keyed by item id so opening a different memory remounts the view (its
         // <h1> auto-focus re-runs, and the transcript re-reads for the new id).

@@ -13,6 +13,15 @@ export type View =
   | { name: 'search' }
   | { name: 'add-memories' }
   | { name: 'settings' }
+  // The Collections browser view (#437) — a sidebar-reachable list of every
+  // browsable collection.
+  | { name: 'collections' }
+  // One collection opened on its own (#437). `collectionName` is the tile's
+  // already-known name, carried so the detail heading can render immediately
+  // (no blank-heading flash) while its own read confirms the current name and
+  // fetches the paginated members — mirrors how the 'item' case below carries
+  // the whole opened tile rather than re-fetching it.
+  | { name: 'collection'; collectionId: string; collectionName: string }
   // One memory opened on its own (#136) — carries the tile the user activated so
   // the view needs no re-fetch, plus where they came from so "back" returns there.
   //

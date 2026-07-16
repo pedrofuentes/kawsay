@@ -102,6 +102,22 @@ describe('Collections — the list view (#437)', () => {
 
     expect(screen.getByTestId('active-view')).toHaveTextContent('collection');
   });
+
+  it('shows a calm error banner with a working retry when the read fails', async () => {
+    const listCollections = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(collectionsView({ collections: [makeCollectionSummary({ name: 'Sunday drives' })] }));
+    const api = makeFakeApi({ listCollections });
+    const user = userEvent.setup();
+    render(wrapInProviders(<Collections />, api, { name: 'collections' }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+
+    expect(await screen.findByText('Sunday drives')).toBeInTheDocument();
+    expect(listCollections).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('CollectionDetail — opening one shows the memories inside (#437)', () => {
@@ -231,6 +247,25 @@ describe('CollectionDetail — opening one shows the memories inside (#437)', ()
     await user.click(await screen.findByRole('button', { name: /open a picnic by the river/i }));
 
     expect(screen.getByTestId('siblings')).toHaveTextContent('mem-1');
+  });
+
+  it('shows a calm error banner with a working retry when the read fails', async () => {
+    const item = makeItemCard({ id: 'mem-1', title: 'A picnic by the river' });
+    const getCollection = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(
+        collectionPage({ collection: makeCollectionSummary({ id: 'col-1' }), items: [item], total: 1 }),
+      );
+    const api = makeFakeApi({ getCollection });
+    const user = userEvent.setup();
+    renderDetail(api);
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /try again/i }));
+
+    expect(await screen.findByText('A picnic by the river')).toBeInTheDocument();
+    expect(getCollection).toHaveBeenCalledTimes(2);
   });
 });
 

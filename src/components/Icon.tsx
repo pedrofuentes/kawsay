@@ -18,7 +18,8 @@ export type IconName =
   | 'arrow-right'
   | 'check'
   | 'sparkle'
-  | 'search';
+  | 'search'
+  | 'collection';
 
 const PATHS: Record<IconName, ReactElement> = {
   lock: (
@@ -109,6 +110,15 @@ const PATHS: Record<IconName, ReactElement> = {
     <>
       <circle cx="11" cy="11" r="6" />
       <path d="m20 20-3.4-3.4" />
+    </>
+  ),
+  // A small stack of gathered photo tiles — collections group memories
+  // together, so the glyph is two overlapping rounded squares rather than a
+  // folder (kept away from any filing/document connotation).
+  collection: (
+    <>
+      <rect x="3" y="7.5" width="13" height="13" rx="2.5" />
+      <path d="M8 7.5V6a2.5 2.5 0 0 1 2.5-2.5h9A2.5 2.5 0 0 1 22 6v9a2.5 2.5 0 0 1-2.5 2.5H18" />
     </>
   ),
 };

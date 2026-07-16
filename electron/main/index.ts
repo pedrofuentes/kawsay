@@ -3,7 +3,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, session } from 'electron';
 import {
   APP_GET_VERSION,
+  CATALOG_GET_COLLECTION,
   CATALOG_GET_TRANSCRIPT,
+  CATALOG_LIST_COLLECTIONS,
   CATALOG_SEARCH,
   CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
@@ -391,6 +393,8 @@ const ipcHandlers: IpcHandlerMap = {
   [CATALOG_THUMBNAIL]: (request) => catalogSession.getThumbnail(request),
   [CATALOG_GET_TRANSCRIPT]: (request) => catalogSession.getTranscript(request),
   [CATALOG_SET_FAVOURITE]: (request) => catalogSession.setFavourite(request),
+  [CATALOG_LIST_COLLECTIONS]: () => catalogSession.listCollections(),
+  [CATALOG_GET_COLLECTION]: (request) => catalogSession.getCollection(request),
   [IMPORT_START]: (request) => catalogSession.beginImport(request),
   [IMPORT_CANCEL]: (request) => catalogSession.cancelImport(request),
   [CATALOG_UNDO_IMPORT]: (request) => catalogSession.undoImport(request),

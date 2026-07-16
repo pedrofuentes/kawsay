@@ -140,6 +140,11 @@ describe('CatalogRepo — listCollections / getCollection (#437 collections brow
   });
 });
 
+// Real collections always get a randomUUID() id in production (curation-repo);
+// the session's DTO projection enforces that shape (collectionSummarySchema),
+// so this fixture uses a real uuid rather than an arbitrary string id.
+const COLLECTION_ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+
 describe('createCatalogSession — listCollections / getCollection (#437, the IPC application service)', () => {
   let parent: string;
   let root: string;
@@ -163,15 +168,15 @@ describe('createCatalogSession — listCollections / getCollection (#437, the IP
       contentHash: 'h-seed',
       title: 'A quiet afternoon',
     });
-    insertCollection(db, { id: 'col-seed', name: 'A quiet season', origin: 'user' });
-    insertCollectionItem(db, { collectionId: 'col-seed', itemId });
+    insertCollection(db, { id: COLLECTION_ID, name: 'A quiet season', origin: 'user' });
+    insertCollectionItem(db, { collectionId: COLLECTION_ID, itemId });
     db.close();
-    return { collectionId: 'col-seed', itemId };
+    return { collectionId: COLLECTION_ID, itemId };
   }
 
   it('refuses collections reads when no library is open', () => {
     expect(() => session.listCollections()).toThrow();
-    expect(() => session.getCollection({ id: 'col-seed', limit: 10, offset: 0 })).toThrow();
+    expect(() => session.getCollection({ id: COLLECTION_ID, limit: 10, offset: 0 })).toThrow();
   });
 
   it('lists collections as renderer-safe summaries', () => {
@@ -182,7 +187,7 @@ describe('createCatalogSession — listCollections / getCollection (#437, the IP
 
     expect(view.collections).toHaveLength(1);
     expect(view.collections[0]).toMatchObject({
-      id: 'col-seed',
+      id: COLLECTION_ID,
       name: 'A quiet season',
       itemCount: 1,
     });
@@ -192,9 +197,9 @@ describe('createCatalogSession — listCollections / getCollection (#437, the IP
     session.createLibrary({ path: root });
     seedCollection(join(root, 'catalog.sqlite3'));
 
-    const page = session.getCollection({ id: 'col-seed', limit: 10, offset: 0 });
+    const page = session.getCollection({ id: COLLECTION_ID, limit: 10, offset: 0 });
 
-    expect(page.collection).toMatchObject({ id: 'col-seed', name: 'A quiet season', itemCount: 1 });
+    expect(page.collection).toMatchObject({ id: COLLECTION_ID, name: 'A quiet season', itemCount: 1 });
     expect(page.items).toHaveLength(1);
     expect(page.items[0]?.title).toBe('A quiet afternoon');
     expect(page.items[0]).not.toHaveProperty('contentHash');
