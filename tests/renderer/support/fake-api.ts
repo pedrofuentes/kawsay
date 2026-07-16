@@ -4,6 +4,9 @@
 import { vi } from 'vitest';
 import type {
   CategorizationProgressEvent,
+  CollectionItemsPageDTO,
+  CollectionsListDTO,
+  CollectionSummaryDTO,
   ImportProgressEvent,
   ImportSummaryDTO,
   ItemCardDTO,
@@ -194,6 +197,43 @@ export function makeSuggestionsView(over: Partial<SuggestionsViewDTO> = {}): Sug
   };
 }
 
+let collectionSeq = 0;
+
+/**
+ * Build a collection summary tile (the collections browser view, #437). The id
+ * is unique per call so list-key tests get distinct rows; pass `over` (e.g.
+ * `{ id }`) to pin any field — including a deterministic id — when a test
+ * asserts on it.
+ */
+export function makeCollectionSummary(over: Partial<CollectionSummaryDTO> = {}): CollectionSummaryDTO {
+  collectionSeq += 1;
+  return {
+    id: `30000000-0000-4000-8000-${String(collectionSeq).padStart(12, '0')}`,
+    name: 'A summer by the lake',
+    itemCount: 3,
+    coverItemId: null,
+    ...over,
+  };
+}
+
+/** Build a `catalog:listCollections` response. Empty by default. */
+export function makeCollectionsListView(over: Partial<CollectionsListDTO> = {}): CollectionsListDTO {
+  return { collections: over.collections ?? [] };
+}
+
+/** Build a `catalog:getCollection` response page; `total` defaults to the
+ *  number of items given (a single, un-paginated page). */
+export function makeCollectionItemsPage(
+  over: Partial<CollectionItemsPageDTO> = {},
+): CollectionItemsPageDTO {
+  const items = over.items ?? [];
+  return {
+    collection: over.collection ?? makeCollectionSummary(),
+    items,
+    total: over.total ?? items.length,
+  };
+}
+
 export interface FakeApi extends KawsayAPI {
   /** Push a progress event to every current onImportProgress subscriber. */
   emitProgress(event: ImportProgressEvent): void;
@@ -251,6 +291,8 @@ export interface FakeApiOptions {
   acceptSuggestion?: KawsayAPI['acceptSuggestion'];
   mergeSuggestion?: KawsayAPI['mergeSuggestion'];
   dismissSuggestion?: KawsayAPI['dismissSuggestion'];
+  listCollections?: KawsayAPI['listCollections'];
+  getCollection?: KawsayAPI['getCollection'];
 }
 
 /** A zero transcription tally (the calm default for status/start fakes). */
@@ -426,6 +468,19 @@ export function makeFakeApi(opts: FakeApiOptions = {}): FakeApi {
       opts.mergeSuggestion ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
     dismissSuggestion:
       opts.dismissSuggestion ?? vi.fn(() => Promise.resolve({ suggestions: [], collections: [] })),
+    // Collections browser view (#437) — both READ-ONLY. Defaults stay calm: an
+    // empty collections list, and a not-found-shaped page (collections tests
+    // inject their own list/page as needed).
+    listCollections: opts.listCollections ?? vi.fn(() => Promise.resolve({ collections: [] })),
+    getCollection:
+      opts.getCollection ??
+      vi.fn((input: { id: string; limit: number; offset?: number }) =>
+        Promise.resolve({
+          collection: makeCollectionSummary({ id: input.id, itemCount: 0 }),
+          items: [],
+          total: 0,
+        }),
+      ),
     emitProgress: (event) => {
       for (const listener of [...listeners]) listener(event);
     },
