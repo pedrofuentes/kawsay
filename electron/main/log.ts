@@ -47,7 +47,24 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 
   function emit(level: LogLevel, message: string, args: unknown[]): void {
     if (LEVEL_ORDER[level] < threshold) return;
-    sink[level](message, ...args.map(redactArg));
+    // Static dispatch (each console method called by its literal name) rather than a
+    // computed `sink[level]` lookup: identical behaviour, but statically analysable —
+    // no dynamic method resolution for a SAST pass to flag (unsafe-dynamic-method).
+    const redacted = args.map(redactArg);
+    switch (level) {
+      case 'debug':
+        sink.debug(message, ...redacted);
+        return;
+      case 'info':
+        sink.info(message, ...redacted);
+        return;
+      case 'warn':
+        sink.warn(message, ...redacted);
+        return;
+      case 'error':
+        sink.error(message, ...redacted);
+        return;
+    }
   }
 
   return {
