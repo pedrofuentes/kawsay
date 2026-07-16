@@ -37,33 +37,18 @@ export interface UseFavouriteResult {
 const SAVE_FAILURE_MESSAGE = "We couldn't save that change just now. Nothing was lost.";
 
 /**
- * How long to wait for `catalog:setFavourite` before treating the save as failed.
+ * How long to wait for `catalog:setFavourite` before assuming it will not settle.
  * The busy flag now lives in the always-mounted navigation provider and no longer
  * self-heals on ItemView's id-keyed remount (#458/#487), so an invoke that never
  * settles — e.g. the main process wedged on DB contention during an import — would
- * otherwise leave this item's toggle disabled for the rest of the session. The
- * timeout drives the normal revert path; a real reply arriving later is dropped by
- * the provider's per-id sequence gate (#489).
- */
+ * otherwise leave this item's toggle disabled for the rest of the session.
+ *
+ * On timeout we synthesize a failure settlement (revert + calm notice) so the control
+ * re-enables. Crucially we do NOT cancel the real invoke: if it lands later, its own
+ * settlement still runs, and the provider's per-id sequence gate reconciles the value
+ * to what actually persisted — putting right a save that was merely slow, not failed
+ * (#489). Generous by design: a healthy local SQLite write never approaches this. */
 export const FAVOURITE_SAVE_TIMEOUT_MS = 10_000;
-
-/** Reject `promise` with `onTimeout()`'s error if it has not settled within `ms`.
- *  Clears the timer on settle so a resolved save leaves nothing pending. */
-function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => Error): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(onTimeout()), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error as Error);
-      },
-    );
-  });
-}
 
 /**
  * Track and toggle ONE item's favourite flag. `itemId`/`initial` describe the
@@ -107,27 +92,54 @@ export function useFavourite(itemId: string, initial: boolean): UseFavouriteResu
     const current = favouriteStateFor(itemId)?.value ?? initial;
     const next = !current;
     const token = beginFavouriteSave(itemId, next);
-    setAnnouncement(next ? 'Added to favourites.' : 'Removed from favourites.');
-    void withTimeout(
-      api.setFavourite({ id: itemId, favourite: next }),
-      FAVOURITE_SAVE_TIMEOUT_MS,
-      () => new Error('catalog:setFavourite timed out'),
-    )
+    const optimisticNotice = next ? 'Added to favourites.' : 'Removed from favourites.';
+    setAnnouncement(optimisticNotice);
+
+    // Assume-failed after a bounded wait so the toggle re-enables instead of sticking
+    // disabled forever on a wedged invoke (#489). We do NOT cancel the real save — see
+    // below: if it lands late, its settlement reconciles the value to disk truth.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      const applied = settleFavouriteSave(itemId, token, { ok: false, revertTo: current });
+      if (!applied) {
+        console.debug('[kawsay] favourite timeout superseded by a newer toggle; dropping', itemId);
+        return;
+      }
+      if (!mountedRef.current) {
+        console.debug('[kawsay] favourite timed out after unmount; announcement skipped', itemId);
+        return;
+      }
+      console.warn('[kawsay] favourite save timed out; reverting', itemId);
+      setAnnouncement(SAVE_FAILURE_MESSAGE);
+    }, FAVOURITE_SAVE_TIMEOUT_MS);
+
+    void api
+      .setFavourite({ id: itemId, favourite: next })
       .then((result) => {
+        clearTimeout(timer);
         const applied = settleFavouriteSave(itemId, token, { ok: true, value: result.isFavourite });
         if (!applied) {
           // A newer toggle already settled — this reply is stale and was dropped.
           console.debug('[kawsay] favourite save settled after a newer toggle; dropping', itemId);
+          return;
+        }
+        // The save actually landed after we'd already assumed failure and shown the
+        // "couldn't save" notice — the sequence gate just reconciled the value to disk,
+        // so put the notice right too rather than leave a lie on screen.
+        if (timedOut && mountedRef.current) {
+          setAnnouncement(result.isFavourite ? 'Added to favourites.' : 'Removed from favourites.');
         }
       })
       .catch((error: unknown) => {
-        // Revert to the pre-toggle value — a failed (or timed-out) save persisted
-        // nothing, so the UI must not keep claiming the change. The provider drops
-        // this if a newer toggle already settled (an older reply must never regress
-        // the newer intent).
+        clearTimeout(timer);
+        // Revert to the pre-toggle value — a failed save persisted nothing, so the UI
+        // must not keep claiming the change. The provider drops this if a newer toggle
+        // already settled (an older reply must never regress the newer intent), or if
+        // the timeout already reverted this same token.
         const applied = settleFavouriteSave(itemId, token, { ok: false, revertTo: current });
         if (!applied) {
-          console.debug('[kawsay] favourite revert superseded by a newer toggle; dropping', itemId);
+          console.debug('[kawsay] favourite revert superseded; dropping', itemId);
           return;
         }
         // The value reverted on the always-mounted provider regardless; only the

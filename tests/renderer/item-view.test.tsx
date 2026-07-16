@@ -520,11 +520,54 @@ describe('ItemView — favourite save is bounded + busy-clear gate (#489, #490)'
         expect(result.current.isSaving).toBe(false);
         expect(result.current.isFavourite).toBe(false);
         expect(result.current.announcement).toBe(SAVE_FAILURE_COPY);
+        // The timeout took a reverting path (distinct message from a rejected save).
         expect(
-          warnSpy.mock.calls.some((call) =>
-            String(call[0]).includes('favourite toggle failed; reverting'),
-          ),
+          warnSpy.mock.calls.some((call) => String(call[0]).includes('timed out; reverting')),
         ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles a slow save that actually lands AFTER the timeout, instead of leaving a lie (#489)', async () => {
+    vi.useFakeTimers();
+    try {
+      // Start favourited on disk; un-favourite it. The write is merely SLOW (not
+      // failed): we cross the timeout and assume failure, then the success lands.
+      const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: true });
+      const pending = deferred<{ isFavourite: boolean }>();
+      const setFavourite = vi.fn(() => pending.promise);
+      const api = makeFakeApi({ setFavourite });
+      const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), {
+        wrapper: hookWrapper(api),
+      });
+
+      act(() => result.current.toggle());
+      expect(result.current.isFavourite).toBe(false); // optimistic un-favourite
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // Timeout first: assume failure, revert to the pre-toggle value, show the notice.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS);
+        });
+        expect(result.current.isSaving).toBe(false);
+        expect(result.current.isFavourite).toBe(true);
+        expect(result.current.announcement).toBe(SAVE_FAILURE_COPY);
+
+        // ...but the write ACTUALLY succeeded a moment later. The sequence gate must
+        // reconcile the value to disk truth, and the mistaken failure notice is put
+        // right — no lingering "couldn't save" over a change that did persist.
+        await act(async () => {
+          pending.resolve({ isFavourite: false });
+          await Promise.resolve();
+        });
+        expect(result.current.isFavourite).toBe(false);
+        expect(result.current.isSaving).toBe(false);
+        expect(result.current.announcement).toBe('Removed from favourites.');
       } finally {
         warnSpy.mockRestore();
       }
