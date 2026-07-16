@@ -281,7 +281,16 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
       closeDescriptor(descriptor);
     });
 
-    it('PINS the fd so a swap of the validated path after resolution cannot redirect the read (TOCTOU)', async () => {
+    // POSIX-only: the exploit renames a DIFFERENT inode ONTO the validated path while
+    // its fd is open. Windows LOCKS open files, so `renameSync` onto the open `clip`
+    // fails (EPERM/EBUSY) — the swap can't even be staged there, which is itself a
+    // (different) Windows mitigation, but it makes this specific rename-based
+    // assertion non-portable. The pinned-fd guarantee is fully asserted on POSIX;
+    // follow-up (#428): add a Windows-native swap (e.g. ReplaceFile semantics) if we
+    // want the same assertion on Windows.
+    it.skipIf(process.platform === 'win32')(
+      'PINS the fd so a swap of the validated path after resolution cannot redirect the read (TOCTOU)',
+      async () => {
       const sourceDir = join(root, 'watchedT');
       const outsideDir = join(root, 'outsideT');
       mkdirSync(sourceDir, { recursive: true });
@@ -317,7 +326,8 @@ describe('createMediaFileService (id-keyed, path-confined media resolution — #
       // The pinned fd streams the ORIGINAL validated bytes; the secret NEVER leaks.
       expect(streamed).toBe('ORIGINAL-VALIDATED-BYTES');
       expect(streamed).not.toContain('SECRET');
-    });
+      },
+    );
 
     it('REJECTS an in-place original that is not a regular file (e.g. a directory)', () => {
       const sourceDir = join(root, 'watchedD');
