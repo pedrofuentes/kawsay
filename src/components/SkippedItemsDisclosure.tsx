@@ -121,20 +121,32 @@ export function SkippedItemsDisclosure({ items }: SkippedItemsDisclosureProps): 
           className={open ? 'h-4 w-4 rotate-90 transition-transform' : 'h-4 w-4 transition-transform'}
         />
       </button>
+      {/*
+        The `<ul>` is ALWAYS present so the toggle's `aria-controls` never
+        dangles and its expand/collapse semantics stay valid — but its O(n)
+        rows are mounted only while expanded. A large export (many skipped
+        attachments) therefore pays no up-front DOM cost at import-complete;
+        collapsed, `hidden` also keeps the empty list out of the a11y tree.
+      */}
       <ul id={listId} hidden={!open} className="flex flex-col gap-2">
-        {items.map((item, index) => (
-          <li
-            // A skip's `ref` is not guaranteed unique (e.g. two archive entries
-            // can share a name after a failed extract), so the index anchors the key.
-            key={`${item.ref}-${index}`}
-            className="flex flex-col gap-0.5 rounded-lg bg-surface-sunken px-3 py-2"
-          >
-            <span className="font-body text-sm font-medium text-text-primary break-all">
-              {filenameOf(item.ref)}
-            </span>
-            <span className="font-body text-sm text-text-secondary">{describeSkip(item.code)}</span>
-          </li>
-        ))}
+        {open
+          ? items.map((item, index) => (
+              <li
+                // A skip's `ref` is not guaranteed unique (e.g. two archive
+                // entries can share a name after a failed extract), so the
+                // index anchors the key.
+                key={`${item.ref}-${index}`}
+                className="flex flex-col gap-0.5 rounded-lg bg-surface-sunken px-3 py-2"
+              >
+                <span className="font-body text-sm font-medium text-text-primary break-all">
+                  {filenameOf(item.ref)}
+                </span>
+                <span className="font-body text-sm text-text-secondary">
+                  {describeSkip(item.code)}
+                </span>
+              </li>
+            ))
+          : null}
       </ul>
     </div>
   );
