@@ -9,6 +9,7 @@ import { NavigationProvider } from '@renderer/lib/navigation';
 import { makeFakeApi, makeItemCard, makeSearchResult } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
 import { renderWithProviders, ViewProbe, wrapInProviders } from './support/render';
+import { expectNoAxeViolations } from './support/axe';
 
 /** Render the Search view inside the three renderer providers with a fake bridge. */
 function renderSearch(api: FakeApi = makeFakeApi()) {
@@ -436,6 +437,110 @@ describe('Search — a transcript match is made clear (AC-19)', () => {
     await screen.findByText(/found in what was said/i);
 
     expect(screen.getAllByRole('article')).toHaveLength(1);
+  });
+});
+
+describe('Search — filters narrow the whole library server-side (#431)', () => {
+  it('sends the chosen media types to the catalog instead of filtering in memory', async () => {
+    const searchCatalog = vi.fn(() => Promise.resolve(makeSearchResult({ items: [] })));
+    const api = makeFakeApi({ searchCatalog });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await waitFor(() => expect(searchCatalog).toHaveBeenCalledWith({ query: 'mama', limit: 50 }));
+
+    // Choosing a type re-runs the search server-side (a real searchCatalog param),
+    // so a match ranked past the first page is still reachable.
+    await user.click(screen.getByRole('button', { name: /videos/i }));
+    await waitFor(() =>
+      expect(searchCatalog).toHaveBeenLastCalledWith({
+        query: 'mama',
+        limit: 50,
+        types: ['video'],
+      }),
+    );
+  });
+
+  it('sends the date range to the catalog server-side', async () => {
+    const searchCatalog = vi.fn(() => Promise.resolve(makeSearchResult({ items: [] })));
+    const api = makeFakeApi({ searchCatalog });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await waitFor(() => expect(searchCatalog).toHaveBeenCalledWith({ query: 'mama', limit: 50 }));
+
+    fireEvent.change(screen.getByLabelText(/^from$/i), { target: { value: '2020-01-01' } });
+    await waitFor(() =>
+      expect(searchCatalog).toHaveBeenLastCalledWith({
+        query: 'mama',
+        limit: 50,
+        fromDate: '2020-01-01',
+      }),
+    );
+  });
+});
+
+describe('Search — truncation and "show more" (#431)', () => {
+  /** A first page of 50 tiles out of a larger true total, then a distinct second page. */
+  function twoServerPages() {
+    const first = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `First ${i}` }));
+    const second = Array.from({ length: 50 }, (_, i) => makeItemCard({ title: `Second ${i}` }));
+    const searchCatalog = vi.fn((input: { offset?: number }) =>
+      Promise.resolve(
+        makeSearchResult({ items: (input.offset ?? 0) === 0 ? first : second, total: 128 }),
+      ),
+    );
+    return { first, second, searchCatalog };
+  }
+
+  it('announces the TRUE filtered total, not just the number on the first page', async () => {
+    const { searchCatalog } = twoServerPages();
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+
+    // The count reflects the whole filtered library (128), even though only 50 are shown.
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/128 memories/i));
+  });
+
+  it('offers a gentle "show more" that loads and appends the next page', async () => {
+    const { searchCatalog } = twoServerPages();
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    expect(await screen.findByText(caption('First 0'))).toBeInTheDocument();
+    // Not everything fits on one page, so a way to see more is offered.
+    const more = await screen.findByRole('button', { name: /show more/i });
+
+    await user.click(more);
+
+    // The next page is fetched with an offset and APPENDED (the first page stays).
+    await waitFor(() => expect(searchCatalog).toHaveBeenLastCalledWith({ query: 'mama', limit: 50, offset: 50 }));
+    expect(await screen.findByText(caption('Second 0'))).toBeInTheDocument();
+    expect(screen.getByText(caption('First 0'))).toBeInTheDocument();
+  });
+
+  it('does not offer "show more" once the whole filtered set is on screen', async () => {
+    const api = makeFakeApi({
+      searchCatalog: vi.fn(() =>
+        Promise.resolve(makeSearchResult({ items: [makeItemCard({ title: 'Only one' })], total: 1 })),
+      ),
+    });
+    const { user } = renderSearch(api);
+
+    await user.type(screen.getByRole('searchbox'), 'one');
+    expect(await screen.findByText(caption('Only one'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show more/i })).not.toBeInTheDocument();
+  });
+
+  it('has no WCAG axe violations while showing the "show more" affordance', async () => {
+    const { searchCatalog } = twoServerPages();
+    const { user, container } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await screen.findByRole('button', { name: /show more/i });
+
+    await expectNoAxeViolations(container);
   });
 });
 

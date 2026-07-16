@@ -239,6 +239,102 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
     });
   });
 
+  describe('search — type/date filters server-side, past the page (#431)', () => {
+    // Seed a match set BIGGER than one search page so a filter that runs only over
+    // the first page (the old client-side bug) could never see a low-ranked match.
+    // Every item matches "familia"; the 60 photos carry a short, high-relevance body
+    // so bm25 ranks them first, while the ONE audio memory (the needle) carries a long,
+    // low-relevance body so it ranks LAST — well past the 50-row page. Its capture date
+    // is a distinct June-2019 day so the date filter can pin it too.
+    const NEEDLE_DATE = '2019-06-15T10:00:00.000Z';
+    let audioId: string;
+
+    beforeEach(() => {
+      const source = repo.registerSource({ sourceKey: 'big', type: 'folder', label: 'Big' });
+      for (let i = 0; i < 60; i += 1) {
+        const id = repo.insertItem({
+          mediaType: 'photo',
+          contentHash: `h-photo-${i}`,
+          description: 'familia',
+          captureDate: '2020-01-01T00:00:00.000Z',
+        });
+        repo.addOccurrence({ itemId: id, sourceId: source, sourceRef: `photo/${i}` });
+      }
+      // The needle: an audio memory that also matches "familia" but is buried in a long
+      // low-relevance body (bm25 field-length normalisation sinks it below the page).
+      audioId = repo.insertItem({
+        mediaType: 'audio',
+        contentHash: 'h-audio-needle',
+        description: `familia ${'palabra '.repeat(300)}`,
+        captureDate: NEEDLE_DATE,
+      });
+      repo.addOccurrence({ itemId: audioId, sourceId: source, sourceRef: 'audio/needle' });
+    });
+
+    it('buries the needle past the first unfiltered page (the bug premise)', () => {
+      const firstPage = repo.search({ query: 'familia', limit: 50, offset: 0 });
+      expect(firstPage.total).toBe(61);
+      // The low-relevance audio memory is NOT on the first page — a client-side filter
+      // over just these rows could never find it.
+      expect(firstPage.rows.map((r) => r.id)).not.toContain(audioId);
+    });
+
+    it('applies a media-type filter in the query, so a low-ranked match is still found', () => {
+      const res = repo.search({ query: 'familia', limit: 50, offset: 0, types: ['audio'] });
+      // The true filtered total is 1 (only the audio memory), not the 61 unfiltered rows.
+      expect(res.total).toBe(1);
+      expect(res.rows.map((r) => r.id)).toEqual([audioId]);
+      expect(res.rows.every((r) => r.mediaType === 'audio')).toBe(true);
+    });
+
+    it('accepts several media types at once (any-of)', () => {
+      const res = repo.search({ query: 'familia', limit: 100, offset: 0, types: ['audio', 'video'] });
+      // Only audio exists among {audio, video}, so the total is the one audio memory.
+      expect(res.total).toBe(1);
+      expect(res.rows.map((r) => r.id)).toEqual([audioId]);
+    });
+
+    it('applies an inclusive day-range filter in the query, finding a low-ranked match', () => {
+      const res = repo.search({
+        query: 'familia',
+        limit: 50,
+        offset: 0,
+        fromDate: '2019-06-15',
+        toDate: '2019-06-15',
+      });
+      expect(res.total).toBe(1);
+      expect(res.rows.map((r) => r.id)).toEqual([audioId]);
+    });
+
+    it('a from-bound is inclusive of items captured on that very day', () => {
+      // The needle is captured at 10:00 on 2019-06-15; a from-bound of that day includes it.
+      const res = repo.search({ query: 'familia', limit: 50, offset: 0, fromDate: '2019-06-15' });
+      expect(res.rows.map((r) => r.id)).toContain(audioId);
+      // The 2020 photos are also on/after the bound, so they remain in the (large) set.
+      expect(res.total).toBe(61);
+    });
+
+    it('a to-bound excludes later items but keeps items captured on the bound day', () => {
+      const res = repo.search({ query: 'familia', limit: 100, offset: 0, toDate: '2019-06-15' });
+      // Only the June-2019 needle is on/before the bound; the 2020 photos fall away.
+      expect(res.total).toBe(1);
+      expect(res.rows.map((r) => r.id)).toEqual([audioId]);
+    });
+
+    it('composes type + date + paging into one true filtered total', () => {
+      const res = repo.search({
+        query: 'familia',
+        limit: 50,
+        offset: 0,
+        types: ['audio'],
+        fromDate: '2019-01-01',
+        toDate: '2019-12-31',
+      });
+      expect(res.total).toBe(1);
+      expect(res.rows.map((r) => r.id)).toEqual([audioId]);
+    });
+  });
+
   describe('search — source filter (AC-7)', () => {
     let whatsapp: string;
     let folder: string;
