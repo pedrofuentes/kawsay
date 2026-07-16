@@ -1,8 +1,12 @@
 // The renderer's single map from a redacted IPC error CODE → calm, reverent,
-// non-technical copy (#440). The raw main-side message no longer crosses the
-// boundary — only a stable {code, name} does — so user-facing failure copy is
-// derived HERE from the code, never from raw error text. Tone mirrors the existing
-// "Nothing was lost — please try again" reassurances (use-categorization / favourite).
+// non-technical copy (#440). On the invoke error path, a main-process fault is
+// redacted to a stable {code, name} (the raw message/stack never crosses), so
+// user-facing failure copy is derived HERE from the code, never from raw error
+// text. (This map covers invoke rejections; the one-way import-progress error
+// channel applies its own redaction — a safe fixed string — in the ingestion
+// coordinator. It is not a claim that literally no channel anywhere crosses a raw
+// message.) Tone mirrors the existing "Nothing was lost — please try again"
+// reassurances (use-categorization / favourite).
 import { IPC_ERROR_CODES, ipcErrorCodeOf } from '@shared/ipc/error-envelope';
 
 /** The gentle catch-all: honest that the action didn't complete, calm that memories

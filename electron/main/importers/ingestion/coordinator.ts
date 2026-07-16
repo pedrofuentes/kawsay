@@ -35,10 +35,19 @@ export interface IngestionCoordinatorOptions {
  * surfaces this to the renderer as a terminal `import:progress` error and tears
  * the worker down — the import settles with a typed failure instead of hanging.
  */
+/**
+ * The ONE safe, renderer-facing copy for ANY ingestion worker failure — a lifecycle
+ * fault (crash/exit) OR a job `error` message. It NEVER carries the raw worker error
+ * text (a filesystem path, a parse detail, or item content, #440); the raw message
+ * goes only to the local diagnostic sink. Both fault paths deliver this same string,
+ * so the renderer's import-error copy is consistent and leak-free.
+ */
+export const WORKER_FAILURE_RENDERER_MESSAGE = 'ingestion worker crashed before completing';
+
 export class IngestionWorkerFaultError extends Error {
   readonly rendererMessage: string;
 
-  constructor(message: string, rendererMessage = 'ingestion worker crashed before completing') {
+  constructor(message: string, rendererMessage = WORKER_FAILURE_RENDERER_MESSAGE) {
     super(message);
     this.name = 'IngestionWorkerFaultError';
     this.rendererMessage = rendererMessage;
@@ -144,7 +153,12 @@ export function createIngestionCoordinator(
         teardown(job.jobId);
         return;
       case 'error':
-        emitProgress(errorEvent(job.jobId, message.message));
+        // A job-level failure the worker caught and reported. Mirror `settleFault`:
+        // the RAW worker message (which can embed a path / parse detail / item text)
+        // goes ONLY to the local diagnostic sink — the renderer-facing event carries
+        // the safe fixed copy, never the raw string (#440).
+        logWorkerFault(new Error(message.message));
+        emitProgress(errorEvent(job.jobId, WORKER_FAILURE_RENDERER_MESSAGE));
         teardown(job.jobId);
         return;
     }

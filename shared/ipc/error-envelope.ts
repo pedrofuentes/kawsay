@@ -1,9 +1,13 @@
-// The ONE redaction contract shared by main (which builds the error) and the
-// renderer/preload (which unwraps it). A main-process fault must NEVER forward its
-// raw `message`/`stack` across the IPC boundary — those can carry a filesystem path,
-// an opaque id, or item text (the #440 invariant). Instead the fault is reduced to a
-// stable `code` (the renderer switches on it for calm copy) plus the error class
-// `name`, and nothing else crosses.
+// The redaction contract for the INVOKE error path — shared by main (which builds
+// the error the IPC registrar throws) and the renderer/preload (which unwraps it). A
+// fault surfaced through this envelope must NEVER forward its raw `message`/`stack`
+// to the renderer — those can carry a filesystem path, an opaque id, or item text
+// (the #440 invariant). Instead the fault is reduced to a stable `code` (the renderer
+// switches on it for calm copy) plus the error class `name`, and nothing else rides
+// the envelope. (`projectError` is the single redaction projection reused by the
+// logger too; other one-way event channels apply their own redaction — e.g. the
+// import-progress error delivers a safe fixed string from the ingestion coordinator.
+// This module is the invoke path's contract, not a blanket claim about every channel.)
 //
 // TRANSPORT NOTE: the safe {code, name} payload travels ENCODED IN `Error.message`.
 // That is deliberate — `message` is the only error field that survives BOTH hops a
@@ -12,7 +16,7 @@
 // preload→page `contextBridge` crossing (which clones the error, keeping `message`
 // but stripping any custom subclass fields). So the envelope rides inside a tagged
 // message and the `stack` is scrubbed — the message itself is built ONLY from the
-// redacted {code, name}, so no raw text ever crosses.
+// redacted {code, name}, so no raw text crosses via this envelope.
 import { z } from 'zod';
 
 /** Prefix that tags an `Error.message` as a redacted IPC error payload. */
