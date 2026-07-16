@@ -98,6 +98,7 @@ export function AddMemories(): ReactElement {
           }}
           onRetry={retryImport}
           onSeeEverything={goToTimeline}
+          onUndo={() => importJob.undo()}
         />
       );
     default:

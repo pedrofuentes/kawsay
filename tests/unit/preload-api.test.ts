@@ -7,6 +7,7 @@ import {
   CATALOG_SET_FAVOURITE,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
+  CATALOG_UNDO_IMPORT,
   CATEGORIZE_APPLY_CORRECTION,
   CATEGORIZE_CANCEL,
   CATEGORIZE_LIST_FOR_ITEM,
@@ -50,8 +51,9 @@ function fakeInvoke() {
     [LIBRARY_OPEN]: { root: '/lib', name: 'Mum', createdAt: 't', schemaVersion: 1 },
     [CATALOG_TIMELINE]: { items: [], nextCursor: null },
     [CATALOG_SEARCH]: { items: [], total: 0 },
-    [IMPORT_START]: { jobId: UUID },
+    [IMPORT_START]: { jobId: UUID, sourceId: UUID },
     [IMPORT_CANCEL]: { cancelled: true },
+    [CATALOG_UNDO_IMPORT]: { itemsRemoved: 2, occurrencesRemoved: 2 },
     [DIALOG_OPEN_DIRECTORY]: '/picked/dir',
     [DIALOG_OPEN_FILE]: '/picked/file.zip',
     [CATALOG_THUMBNAIL]: 'data:image/png;base64,AAAA',
@@ -130,7 +132,10 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     });
     const catStart = await api.startCategorization();
     const catCancel = await api.cancelCategorization();
+    // Appended last so the ordered channel/payload indices above are unshifted (#429).
+    const undone = await api.undoImport({ sourceId: UUID });
 
+    expect(undone).toEqual({ itemsRemoved: 2, occurrencesRemoved: 2 });
     expect(pickedDir).toBe('/picked/dir');
     expect(pickedFile).toBe('/picked/file.zip');
     expect(thumbnail).toBe('data:image/png;base64,AAAA');
@@ -188,6 +193,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
       CATEGORIZE_APPLY_CORRECTION,
       CATEGORIZE_START,
       CATEGORIZE_CANCEL,
+      CATALOG_UNDO_IMPORT,
     ]);
     expect(calls[1].payload).toEqual({ path: '/lib', personName: 'Mum' });
     expect(calls[7].payload).toEqual({ title: 'Pick a folder' });
@@ -208,6 +214,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
     expect(calls[22].payload).toEqual({ kind: 'confirm', itemId: UUID, categoryId: UUID });
     expect(calls[23].payload).toEqual({});
     expect(calls[24].payload).toEqual({});
+    expect(calls[25].payload).toEqual({ sourceId: UUID });
   });
 
   it('maps each suggestions method to its exact channel and payload (#351 #7)', async () => {
@@ -339,6 +346,7 @@ describe('createKawsayApi (the contextBridge surface)', () => {
         'startCategorization',
         'startImport',
         'startTranscription',
+        'undoImport',
       ].sort(),
     );
     // No catch-all transport or Node escape hatch is reachable from the renderer.

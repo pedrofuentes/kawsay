@@ -3,6 +3,7 @@ import {
   CATALOG_GET_TRANSCRIPT,
   CATALOG_SEARCH,
   CATALOG_SET_FAVOURITE,
+  CATALOG_UNDO_IMPORT,
   CATALOG_THUMBNAIL,
   CATALOG_TIMELINE,
   CATEGORIZE_APPLY_CORRECTION,
@@ -391,8 +392,11 @@ describe('ipcContract — import:start / import:cancel', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'telegram', inputPath: '/Telegram Export' })).toBe(
       true,
     );
-    expect(resOk(IMPORT_START, { jobId: UUID })).toBe(true);
-    expect(resOk(IMPORT_START, { jobId: 'not-a-uuid' })).toBe(false);
+    expect(resOk(IMPORT_START, { jobId: UUID, sourceId: UUID })).toBe(true);
+    expect(resOk(IMPORT_START, { jobId: 'not-a-uuid', sourceId: UUID })).toBe(false);
+    // The undo handle (sourceId) is required and must be a uuid — never a path.
+    expect(resOk(IMPORT_START, { jobId: UUID })).toBe(false);
+    expect(resOk(IMPORT_START, { jobId: UUID, sourceId: 'not-a-uuid' })).toBe(false);
   });
   it('rejects an unknown sourceType, empty/oversized inputPath, or extra keys', () => {
     expect(reqOk(IMPORT_START, { sourceType: 'myspace', inputPath: '/x' })).toBe(false);
@@ -411,6 +415,16 @@ describe('ipcContract — import:start / import:cancel', () => {
     expect(reqOk(IMPORT_CANCEL, { jobId: 'nope' })).toBe(false);
     expect(resOk(IMPORT_CANCEL, { cancelled: true })).toBe(true);
     expect(resOk(IMPORT_CANCEL, { cancelled: 'yes' })).toBe(false);
+  });
+  it('undoImport takes ONLY a uuid sourceId (never a path) and returns removal counts (#429)', () => {
+    expect(reqOk(CATALOG_UNDO_IMPORT, { sourceId: UUID })).toBe(true);
+    // A path or non-uuid can never validate; extra keys are rejected (strictObject).
+    expect(reqOk(CATALOG_UNDO_IMPORT, { sourceId: '/etc/passwd' })).toBe(false);
+    expect(reqOk(CATALOG_UNDO_IMPORT, { sourceId: 'nope' })).toBe(false);
+    expect(reqOk(CATALOG_UNDO_IMPORT, { sourceId: UUID, rogue: 1 })).toBe(false);
+    expect(resOk(CATALOG_UNDO_IMPORT, { itemsRemoved: 3, occurrencesRemoved: 5 })).toBe(true);
+    expect(resOk(CATALOG_UNDO_IMPORT, { itemsRemoved: -1, occurrencesRemoved: 0 })).toBe(false);
+    expect(resOk(CATALOG_UNDO_IMPORT, { itemsRemoved: 1 })).toBe(false);
   });
 });
 

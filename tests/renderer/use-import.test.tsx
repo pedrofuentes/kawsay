@@ -3,7 +3,13 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { useImport } from '@renderer/lib/use-import';
-import { FAKE_JOB_ID, makeFakeApi, makeImportSummary, makeProgressEvent } from './support/fake-api';
+import {
+  FAKE_JOB_ID,
+  FAKE_SOURCE_ID,
+  makeFakeApi,
+  makeImportSummary,
+  makeProgressEvent,
+} from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
 
 function wrapper(api?: FakeApi) {
@@ -58,7 +64,7 @@ describe('useImport', () => {
           message: 'Reading the archive…',
         }),
       );
-      return { jobId: FAKE_JOB_ID };
+      return { jobId: FAKE_JOB_ID, sourceId: FAKE_SOURCE_ID };
     });
     const api = makeFakeApi({ startImport });
     const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });
@@ -88,7 +94,7 @@ describe('useImport', () => {
             message: 'Reading the first archive…',
           }),
         );
-        return { jobId: firstJobId };
+        return { jobId: firstJobId, sourceId: FAKE_SOURCE_ID };
       })
       .mockImplementationOnce(async () => {
         api.emitProgress(
@@ -99,7 +105,7 @@ describe('useImport', () => {
             message: 'Reading the second archive…',
           }),
         );
-        return { jobId: secondJobId };
+        return { jobId: secondJobId, sourceId: FAKE_SOURCE_ID };
       });
     const api = makeFakeApi({ startImport });
     const { result } = renderHook(() => useImport(), { wrapper: wrapper(api) });

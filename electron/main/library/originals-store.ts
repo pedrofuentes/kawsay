@@ -404,6 +404,136 @@ export function removeOccurrence(
   return { removed: true, blobDeleted, itemRemoved: plan.itemRemoved };
 }
 
+export interface RemoveSourceResult {
+  /** The source contributed at least one occurrence, so an undo actually happened. */
+  removed: boolean;
+  /** Occurrences deleted for this source (its whole provenance footprint). */
+  occurrencesRemoved: number;
+  /** Items left with NO other occurrence, dropped along with their derived rows. */
+  itemsRemoved: number;
+  /** Content-addressed blobs whose LAST reference was this source (deleted on disk). */
+  blobsDeleted: number;
+  /** Orphaned derived renditions (thumbnails/posters/waveforms) removed on disk. */
+  assetsDeleted: number;
+}
+
+interface SourceRemovalPlan {
+  blobsToDelete: string[];
+  derivedToDelete: string[];
+  occurrencesRemoved: number;
+  itemsRemoved: number;
+}
+
+/**
+ * Undo an import by removing EXACTLY one source's contribution (undo, §4.4 / AC-14 /
+ * #429). Undo is scoped to the `sources.id` this import wrote against — the EXISTING
+ * dedup-with-provenance schema (ADR-0003), so no migration is needed; for a fresh
+ * post-import undo the source IS this import run. All DB mutations run in ONE
+ * transaction (all-or-nothing — a fault mid-plan rolls everything back, leaving no
+ * partial state); disk cleanup follows commit:
+ *  - delete this source's occurrences, leaving every OTHER source's provenance intact
+ *    (so an item deduped into another source SURVIVES — the highest-risk invariant);
+ *  - an item with no remaining occurrence is dropped, cascading its FTS row (trigger),
+ *    embeddings/transcripts/categories/assets/tags (FK ON DELETE CASCADE);
+ *  - a content_addressed blob is deleted ONLY when no content_addressed occurrence
+ *    references its bytes any more (a deduped survivor keeps its file);
+ *  - in_place (folder) originals are the user's own files and are NEVER touched;
+ *  - the now-empty source row is dropped, so a later idempotent re-import brings the
+ *    very same memories back.
+ */
+export function removeSource(
+  db: CatalogDatabase,
+  root: string,
+  sourceId: string,
+): RemoveSourceResult {
+  const plan = db.transaction((id: string): SourceRemovalPlan => {
+    // Every occurrence this source contributed, with the item it points at and the
+    // content-addressing needed to reference-count its blob after deletion.
+    const occurrences = db
+      .prepare(
+        `SELECT o.item_id AS itemId, o.original_kind AS kind,
+                i.content_hash AS hash, i.original_ext AS ext
+         FROM item_occurrences o
+         JOIN items i ON i.id = o.item_id
+         WHERE o.source_id = @id`,
+      )
+      .all<{ itemId: string; kind: OriginalKind; hash: string | null; ext: string | null }>({ id });
+
+    // The distinct items this source touched (each re-checked for survival below) and
+    // the distinct content-addressed blobs it referenced (each reference-counted, so a
+    // blob still held by a surviving source is never removed).
+    const affectedItemIds = new Set<string>();
+    const blobs = new Map<string, { hash: string; ext: string | null }>();
+    for (const occ of occurrences) {
+      affectedItemIds.add(occ.itemId);
+      if (occ.kind === 'content_addressed' && occ.hash) {
+        blobs.set(`${occ.hash}\t${occ.ext ?? ''}`, { hash: occ.hash, ext: occ.ext });
+      }
+    }
+
+    // Remove exactly this source's occurrences — every other source's provenance stays
+    // (the dedup-survivor guarantee, ADR-0003 / AC-14).
+    db.prepare('DELETE FROM item_occurrences WHERE source_id = @id').run({ id });
+
+    // An item with NO remaining occurrence is now orphaned: gather its derived
+    // renditions, then drop it (cascading FTS + embeddings/transcripts/categories/
+    // assets/tags). A deduped survivor (occurrence from another source) is left alone.
+    const remainingForItem = db.prepare(
+      'SELECT COUNT(*) AS n FROM item_occurrences WHERE item_id = @itemId',
+    );
+    const assetsForItem = db.prepare('SELECT path FROM item_assets WHERE item_id = @itemId');
+    const deleteItem = db.prepare('DELETE FROM items WHERE id = @itemId');
+    const derivedToDelete: string[] = [];
+    let itemsRemoved = 0;
+    for (const itemId of affectedItemIds) {
+      if (Number(remainingForItem.get<{ n: number }>({ itemId })?.n ?? 0) > 0) continue;
+      for (const asset of assetsForItem.all<{ path: string }>({ itemId })) {
+        assertSafeAssetRelPath(asset.path);
+        derivedToDelete.push(assertWithinRoot(root, join(root, asset.path)));
+      }
+      deleteItem.run({ itemId });
+      itemsRemoved += 1;
+    }
+
+    // A content-addressed blob is deleted ONLY when no content_addressed occurrence
+    // references its bytes any more (mirrors removeOccurrence): undoing one source can
+    // never dangle a memory that still lives, deduped, in another source. content_hash
+    // is UNIQUE on items, so an orphaned item's hash yields 0 while a survivor's yields
+    // >0 — exactly the reference count we want.
+    const blobRefs = db.prepare(
+      `SELECT COUNT(*) AS n
+       FROM item_occurrences o
+       JOIN items i ON i.id = o.item_id
+       WHERE i.content_hash = @hash AND o.original_kind = 'content_addressed'`,
+    );
+    const blobsToDelete: string[] = [];
+    for (const { hash, ext } of blobs.values()) {
+      if (Number(blobRefs.get<{ n: number }>({ hash })?.n ?? 0) > 0) continue;
+      assertSafeHash(hash);
+      blobsToDelete.push(assertWithinRoot(root, blobAbsPath(root, hash, ext)));
+    }
+
+    // The source row is now empty provenance: drop it so the catalog is exactly its
+    // pre-import shape (a re-import registers a fresh source and re-adds it — AC-14).
+    db.prepare('DELETE FROM sources WHERE id = @id').run({ id });
+
+    return { blobsToDelete, derivedToDelete, occurrencesRemoved: occurrences.length, itemsRemoved };
+  })(sourceId);
+
+  let blobsDeleted = 0;
+  for (const blob of plan.blobsToDelete) if (deleteFileIfExists(blob)) blobsDeleted += 1;
+  let assetsDeleted = 0;
+  for (const derived of plan.derivedToDelete) if (deleteFileIfExists(derived)) assetsDeleted += 1;
+
+  return {
+    removed: plan.occurrencesRemoved > 0,
+    occurrencesRemoved: plan.occurrencesRemoved,
+    itemsRemoved: plan.itemsRemoved,
+    blobsDeleted,
+    assetsDeleted,
+  };
+}
+
 function deleteFileIfExists(absPath: string): boolean {
   if (!existsSync(absPath)) return false;
   rmSync(absPath, { force: true });

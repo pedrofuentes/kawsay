@@ -26,6 +26,8 @@ export interface StartImportInput {
 export interface ImportState {
   status: ImportStatus;
   jobId: string | null;
+  /** The `sources.id` this run wrote against — the handle a post-import undo removes (#429). */
+  sourceId: string | null;
   processed: number;
   total: number | null;
   message: string | null;
@@ -37,12 +39,19 @@ export interface ImportState {
 export interface UseImportResult extends ImportState {
   start: (input: StartImportInput) => Promise<void>;
   cancel: () => Promise<void>;
+  /**
+   * Undo this import (#429, AC-14): remove EXACTLY what it added. A no-op unless the
+   * run has settled and its `sourceId` is known. Resolves once the removal completes;
+   * the state is left on its summary face (the caller's UndoBanner shows the outcome).
+   */
+  undo: () => Promise<void>;
   reset: () => void;
 }
 
 const INITIAL_STATE: ImportState = {
   status: 'idle',
   jobId: null,
+  sourceId: null,
   processed: 0,
   total: null,
   message: null,
@@ -53,7 +62,7 @@ const INITIAL_STATE: ImportState = {
 
 type Action =
   | { type: 'start' }
-  | { type: 'started'; jobId: string }
+  | { type: 'started'; jobId: string; sourceId: string }
   | { type: 'progress'; event: ImportProgressEvent }
   | { type: 'cancelling' }
   | { type: 'failed'; error: string }
@@ -64,7 +73,7 @@ function reducer(state: ImportState, action: Action): ImportState {
     case 'start':
       return { ...INITIAL_STATE, status: 'starting' };
     case 'started':
-      return { ...state, status: 'running', jobId: action.jobId };
+      return { ...state, status: 'running', jobId: action.jobId, sourceId: action.sourceId };
     case 'cancelling':
       return state.status === 'running' || state.status === 'starting'
         ? { ...state, status: 'cancelling' }
@@ -106,6 +115,7 @@ export function useImport(): UseImportResult {
   const api = useKawsayApi();
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const jobIdRef = useRef<string | null>(null);
+  const sourceIdRef = useRef<string | null>(null);
   const startingRef = useRef(false);
   const pendingProgressRef = useRef<ImportProgressEvent[]>([]);
   // Live mirrors read by the unmount-only cleanup below (a cleanup closure can't
@@ -162,13 +172,15 @@ export function useImport(): UseImportResult {
       }
       pendingProgressRef.current = [];
       jobIdRef.current = null;
+      sourceIdRef.current = null;
       startingRef.current = true;
       dispatch({ type: 'start' });
       try {
-        const { jobId } = await api.startImport(input);
+        const { jobId, sourceId } = await api.startImport(input);
         jobIdRef.current = jobId;
+        sourceIdRef.current = sourceId;
         startingRef.current = false;
-        dispatch({ type: 'started', jobId });
+        dispatch({ type: 'started', jobId, sourceId });
         const pending = pendingProgressRef.current.filter((event) => event.jobId === jobId);
         pendingProgressRef.current = [];
         for (const event of pending) {
@@ -199,12 +211,23 @@ export function useImport(): UseImportResult {
     }
   }, [api]);
 
+  const undo = useCallback(async (): Promise<void> => {
+    const sourceId = sourceIdRef.current;
+    // Only a settled import has a source to undo; a still-running one has no summary
+    // face and thus no UndoBanner, so guarding here is belt-and-suspenders.
+    if (api === undefined || sourceId === null) {
+      return;
+    }
+    await api.undoImport({ sourceId });
+  }, [api]);
+
   const reset = useCallback((): void => {
     jobIdRef.current = null;
+    sourceIdRef.current = null;
     startingRef.current = false;
     pendingProgressRef.current = [];
     dispatch({ type: 'reset' });
   }, []);
 
-  return { ...state, start, cancel, reset };
+  return { ...state, start, cancel, undo, reset };
 }

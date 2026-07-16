@@ -14,7 +14,6 @@ import { openCatalog } from '../../electron/main/db/connection';
 import { runMigrations } from '../../electron/main/db/migrate';
 import { createCatalogRepo, type CatalogRepo } from '../../electron/main/db/catalog-repo';
 import {
-  blobAbsPath,
   putOriginal,
   removeSource,
   resolveOriginal,
@@ -154,7 +153,10 @@ describe('removeSource (undo import — AC-14, dedup survivors preserved)', () =
 
     removeSource(db, root, sourceB);
     expect(count('SELECT COUNT(*) AS n FROM items')).toBe(0);
-    expect(count('SELECT COUNT(*) AS n FROM sources')).toBe(0);
+    // Source B's now-empty row is gone (source A, the pre-import catalog, remains).
+    expect(
+      Number((db.prepare('SELECT COUNT(*) AS n FROM sources WHERE id = ?').get(sourceB) as { n: number }).n),
+    ).toBe(0);
 
     // Re-import: registering the same source_key mints a fresh source and re-adds it.
     const reB = repo.registerSource({ sourceKey: 'B', type: 'whatsapp', label: 'WhatsApp' });

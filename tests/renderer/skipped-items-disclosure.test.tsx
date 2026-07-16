@@ -128,6 +128,7 @@ describe('SkippedItemsDisclosure wired into the import summary (ImportStep)', ()
     return {
       status: 'complete',
       jobId: 'job-1',
+      sourceId: null,
       processed: 312,
       total: 312,
       message: null,

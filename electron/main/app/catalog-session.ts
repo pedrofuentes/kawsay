@@ -28,6 +28,7 @@ import {
   type LibrarySummary,
 } from '../library/library-service';
 import { openCatalog, type CatalogDatabase } from '../db/connection';
+import { removeSource } from '../library/originals-store';
 import {
   createCatalogRepo,
   type CatalogRepo,
@@ -155,8 +156,19 @@ export interface CatalogSession {
    * id names no item (an unknown id is never silently ignored).
    */
   setFavourite(input: { id: string; favourite: boolean }): { isFavourite: boolean };
-  beginImport(input: { sourceType: SourceType; inputPath: string }): { jobId: string };
+  beginImport(input: { sourceType: SourceType; inputPath: string }): {
+    jobId: string;
+    sourceId: string;
+  };
   cancelImport(input: { jobId: string }): { cancelled: boolean };
+  /**
+   * Undo an import (#429, AC-14): remove exactly the named source's occurrences,
+   * drop the items left with no other occurrence (cascading their derived rows), and
+   * reclaim only those orphans' copied originals/thumbnails — a memory deduped into
+   * another source (and its file) survives. One transaction (all-or-nothing). Throws
+   * {@link CatalogSessionError} when no library is open. Echoes the counts removed.
+   */
+  undoImport(input: { sourceId: string }): { itemsRemoved: number; occurrencesRemoved: number };
   /** The host-side transcription library port for the OPEN library (#157). */
   transcription(): TranscriptionLibraryPort;
   /**
@@ -521,10 +533,18 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         ffprobePath,
       };
       coordinator.start(job);
-      return { jobId };
+      return { jobId, sourceId };
     },
     cancelImport(input) {
       return { cancelled: coordinator.cancel(input.jobId) };
+    },
+    undoImport(input) {
+      const { db, summary } = requireOpen();
+      const result = removeSource(db, summary.root, input.sourceId);
+      return {
+        itemsRemoved: result.itemsRemoved,
+        occurrencesRemoved: result.occurrencesRemoved,
+      };
     },
     transcription() {
       return requireOpen().transcription;

@@ -124,6 +124,7 @@ export function OnboardingFlow(): ReactElement {
             }}
             onRetry={retryImport}
             onSeeEverything={enterApp}
+            onUndo={() => importJob.undo()}
           />
         );
       default:
