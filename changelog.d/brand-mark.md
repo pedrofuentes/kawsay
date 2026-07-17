@@ -1,0 +1,1 @@
+- Kawsay's sprout mark now appears inside the app — beside the title in the sidebar and on the welcome screen — so the brand feels present from the first moment, not just on the dock icon.
