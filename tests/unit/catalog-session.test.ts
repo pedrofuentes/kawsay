@@ -1114,6 +1114,134 @@ describe('createCatalogSession (the IPC application service)', () => {
       }
     });
 
+    // ── #482: snapshot-consistent "show more" pagination ──────────────────────
+    // Offset paging re-queries a LIVE corpus each page, so an import that inserts
+    // or removes matching rows BETWEEN page loads can skip, duplicate, or truncate
+    // "show more". These pin the fix: page 1 captures an opaque snapshot token, and
+    // every later page hydrates its slice from that FROZEN ordered id set — so the
+    // SET and ORDER never drift, and `total` stays the snapshot's total, even while
+    // the library changes underneath. (The merged exact+semantic order is computed
+    // ONCE per snapshot, not per page; moving that merge off-thread is #442.)
+
+    it('serves "show more" from a frozen snapshot: no dup/skip when the corpus changes between pages (#482)', async () => {
+      session.createLibrary({ path: root });
+      const catalogPath = join(root, 'catalog.sqlite3');
+      const db = openCatalog(catalogPath);
+      const repo = createCatalogRepo(db);
+      const src = repo.registerSource({ sourceKey: 'seed', type: 'folder', label: 'Seed' });
+      // Six items all matching "familia", each a 2-token description so bm25 rank
+      // ties and the (capture_date DESC, id DESC) tiebreak gives a fully
+      // deterministic newest-first order.
+      const months = ['06', '05', '04', '03', '02', '01'];
+      const words = ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis'];
+      const seeded = months.map((mm, i) => {
+        const id = repo.insertItem({
+          mediaType: 'message',
+          contentHash: `h-${i}`,
+          description: `familia ${words[i]}`,
+          captureDate: `2020-${mm}-01T00:00:00.000Z`,
+        });
+        repo.addOccurrence({ itemId: id, sourceId: src, sourceRef: `r/${i}` });
+        return id;
+      });
+      // Ground truth: the whole match set in one shot, newest-first.
+      const original = repo.search({ query: 'familia', limit: 100, offset: 0 }).rows.map((r) => r.id);
+      expect(original).toEqual(seeded);
+
+      const limit = 2;
+      const page1 = await session.search({ query: 'familia', limit, offset: 0 });
+      const token = page1.snapshotToken;
+      expect(page1.items.map((i) => i.id)).toEqual(original.slice(0, 2));
+      expect(page1.total).toBe(6);
+      expect(token).toBeTruthy(); // RED: no snapshot token is issued today
+
+      // A concurrent import mutates the match set between pages: TWO new "familia"
+      // memories that sort to the TOP (newest capture dates), and one existing match
+      // (the still-unreached tail) removed.
+      const inserted = ['08', '07'].map((mm, i) => {
+        const id = repo.insertItem({
+          mediaType: 'message',
+          contentHash: `h-new-${i}`,
+          description: `familia nuevo${i}`,
+          captureDate: `2020-${mm}-01T00:00:00.000Z`,
+        });
+        repo.addOccurrence({ itemId: id, sourceId: src, sourceRef: `n/${i}` });
+        return id;
+      });
+      db.prepare('DELETE FROM items WHERE id = ?').run(original[5]);
+
+      const page2 = await session.search({ query: 'familia', limit, offset: 2, snapshotToken: token });
+
+      const seen = [...page1.items, ...page2.items].map((i) => i.id);
+      // No duplicate: an offset re-query would re-serve original[0..1] after the two
+      // top-sorting inserts shifted the window (the RED behaviour). The snapshot never
+      // does — it pages the FROZEN order.
+      expect(new Set(seen).size).toBe(seen.length);
+      // No skip: the two pages tile the FIRST FOUR of the ORIGINAL snapshot order.
+      expect(seen).toEqual(original.slice(0, 4));
+      // total stays the snapshot's total — the live filtered count is now 7 (6 + 2 − 1).
+      expect(page2.total).toBe(page1.total);
+      expect(page2.total).toBe(6);
+      // The memories inserted mid-paging do NOT appear until a fresh search.
+      for (const id of inserted) expect(seen).not.toContain(id);
+
+      db.close();
+    });
+
+    it('freezes the merged exact+semantic set for "show more": computed once, no dup, frozen total under writes (#482)', async () => {
+      const embedded: string[][] = [];
+      const s = sessionWithEmbedder([1, 0, 0], (texts) => embedded.push([...texts]));
+      try {
+        s.createLibrary({ path: root });
+        const catalogPath = join(root, 'catalog.sqlite3');
+        const { exactIds, semanticIds } = seedPaginationCorpus(catalogPath);
+        const limit = 2;
+
+        const p0 = await s.search({ query: 'familia', limit, offset: 0 });
+        const token = p0.snapshotToken;
+        expect(token).toBeTruthy(); // RED: no snapshot token today
+        expect(p0.total).toBe(5);
+
+        // Concurrent import between pages: TWO new exact "familia" memories (would
+        // shift the merged set), and the lowest-scored still-unreached semantic-only
+        // extra removed.
+        const db = openCatalog(catalogPath);
+        const repo = createCatalogRepo(db);
+        const src = repo.registerSource({ sourceKey: 'seed2', type: 'folder', label: 'Seed2' });
+        const intruders = ['una', 'dos'].map((word, i) => {
+          const id = repo.insertItem({
+            mediaType: 'message',
+            contentHash: `h-intruder-${i}`,
+            description: `familia intrusa${word}`,
+          });
+          repo.addOccurrence({ itemId: id, sourceId: src, sourceRef: `i/${i}` });
+          return id;
+        });
+        db.prepare('DELETE FROM items WHERE id = ?').run(semanticIds[1]);
+        db.close();
+
+        const p1 = await s.search({ query: 'familia', limit, offset: 2, snapshotToken: token });
+        const p2 = await s.search({ query: 'familia', limit, offset: 4, snapshotToken: token });
+
+        const seen = [...p0.items, ...p1.items, ...p2.items].map((i) => i.id);
+        // No duplicate across the three pages.
+        expect(new Set(seen).size).toBe(seen.length);
+        // The memories inserted mid-paging never appear (the SET is frozen).
+        for (const id of intruders) expect(seen).not.toContain(id);
+        // total stays the snapshot's total on every page (not the mutated live count).
+        expect(p1.total).toBe(5);
+        expect(p2.total).toBe(5);
+        // The merged set is computed ONCE: the query is embedded a single time across
+        // the whole "show more" sequence (later pages reuse the frozen snapshot).
+        expect(embedded).toHaveLength(1);
+        // Every id served is one of the ORIGINAL matches (a deleted extra may be absent).
+        const originalIds = new Set([...exactIds, ...semanticIds]);
+        for (const id of seen) expect(originalIds.has(id)).toBe(true);
+      } finally {
+        s.dispose();
+      }
+    });
+
     it('applies a day-range filter to semantic hits (an out-of-range extra is never surfaced) (#431)', async () => {
       const s = sessionWithEmbedder([1, 0, 0]);
       try {
