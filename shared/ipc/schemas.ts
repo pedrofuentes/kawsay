@@ -84,11 +84,12 @@ export const MEDIA_TYPE_COUNT = MEDIA_TYPES.length;
 
 /**
  * A calendar day `YYYY-MM-DD`, the shape the Search date pickers emit and the catalog
- * compares capture dates against (#431). A strict format (a bounded, digits-only
- * pattern) so a free-form or adversarial string is refused at the trust boundary
- * rather than reaching a SQL comparison.
+ * compares capture dates against (#431). `z.iso.date()` is calendar-correct (not just
+ * a digit pattern): it refuses an impossible day like `2019-13-40` or a non-leap
+ * `2019-02-29`, so an adversarial/replayed request can't slip a nonsense bound past
+ * the trust boundary into `dateFilter`'s lexicographic SQL comparison (#482 review).
  */
-export const searchDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
+export const searchDaySchema = z.iso.date();
 
 /**
  * The library descriptor the renderer is allowed to see. NOTE the deliberate
