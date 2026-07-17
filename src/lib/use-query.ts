@@ -217,6 +217,12 @@ export function useQuery<T>(options: UseQueryOptions<T>): UseQueryResult<T> {
     [active, key, run],
   );
 
+  // Write through to the query's data (a synchronous, caller-driven update — e.g. an
+  // optimistic toggle or an action repaint). NOTE: `setData` does NOT bump the fetch
+  // generation, so a still-in-flight fetch settling AFTER a `setData` will overwrite
+  // it (the fetch is not treated as superseded). Reachable only when a caller composes
+  // `setData` with an outstanding fetch of the same key; a caller that gates its writes
+  // behind the fetch having settled (`status !== 'loading'`) is unaffected.
   const setData = useCallback(
     (updater: T | ((prev: T | undefined) => T)): void => {
       setState((prev) => {

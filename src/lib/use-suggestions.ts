@@ -85,7 +85,10 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
   // `data` untouched rather than guessing — the next open, or opt-in toggle,
   // tries again, mirroring the original hand-rolled catch).
   const view = listQuery.data ?? EMPTY_VIEW;
-  // True only while the FIRST (or a re-enabled) read is in flight.
+  // Reflects the list query's loading status — true while the first (or a re-enabled)
+  // read is in flight. (A curation action's write-through `setData` marks the query
+  // `success`, so this is not a general "any write pending" flag; the tray gates its
+  // actionable rows behind it, so an action can't fire while a read is still loading.)
   const loading = listQuery.status === 'loading';
 
   // The calm "couldn't save" hint. Deliberately a STICKY local flag rather than a
