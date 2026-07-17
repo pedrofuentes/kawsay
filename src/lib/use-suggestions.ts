@@ -6,6 +6,15 @@
 // collection on its own; every write is caller-initiated from a click, and each
 // action refreshes the tray straight from the returned view (no manual re-fetch), so
 // the acted-on suggestion simply drops out.
+//
+// The list read runs through the shared `useQuery` primitive (#443/#486 part 3):
+// the bespoke `active`-flag guard it used to hand-roll collapses into `useQuery`'s
+// own race guard. `view` is DERIVED from the query's `data` (falling back to the
+// calm `EMPTY_VIEW`) rather than a separately-owned `useState`, and each curation
+// action's `onSuccess` repaints it by writing THROUGH the same query via `setData`
+// — the identical seam `useCategorizationStatus`'s optimistic toggle uses — so the
+// list read and the action-repaint share one piece of state instead of two that
+// could drift apart.
 import { useCallback, useEffect, useState } from 'react';
 import type {
   KawsayAPI,
@@ -15,6 +24,7 @@ import type {
 } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
 import { useMutation } from './use-mutation';
+import { useQuery } from './use-query';
 
 /** One curation verb, deferred to call time: the accept/merge/dismiss click closes
  *  over its own input and runs against the live bridge. All three share ONE
@@ -48,8 +58,36 @@ export interface UseSuggestionsResult {
 
 export function useSuggestions(enabled: boolean): UseSuggestionsResult {
   const api = useKawsayApi();
-  const [view, setView] = useState<SuggestionsViewDTO>(EMPTY_VIEW);
-  const [loading, setLoading] = useState(false);
+  // `enabled` is false while the feature is off OR the bridge is absent — both
+  // the list read and every curation action gate on this ONE flag, so a toggle
+  // (or a missing bridge) disables both identically.
+  const actionsEnabled = enabled && api !== undefined;
+
+  // DEFAULT-OFF list read: `key` is null exactly when disabled, which keeps
+  // `useQuery` idle (never fetches) rather than merely skipping a call — the
+  // same shape `useCollections`/`useCategorizationStatus` use. Re-enabling
+  // hands back a fresh key, which `useQuery` treats as a fresh fetch.
+  const listQuery = useQuery<SuggestionsViewDTO>({
+    key: actionsEnabled ? 'suggestions' : null,
+    fetcher: () => {
+      // `key` is non-null exactly when `api` is defined, so this only ever runs
+      // with a live bridge.
+      if (api === undefined) {
+        return Promise.reject(new Error('bridge unavailable'));
+      }
+      return api.listSuggestions();
+    },
+  });
+  const { setData: setListData } = listQuery;
+
+  // The tray's view: the query's last committed data, or the calm EMPTY_VIEW
+  // while disabled, still loading, or after a failed read (a failure leaves
+  // `data` untouched rather than guessing — the next open, or opt-in toggle,
+  // tries again, mirroring the original hand-rolled catch).
+  const view = listQuery.data ?? EMPTY_VIEW;
+  // True only while the FIRST (or a re-enabled) read is in flight.
+  const loading = listQuery.status === 'loading';
+
   // The calm "couldn't save" hint. Deliberately a STICKY local flag rather than a
   // read of the mutation's transient status: once raised by a committed failure it
   // stays up CONTINUOUSLY — including through an in-flight retry — and is lowered
@@ -60,57 +98,32 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
   // still-enabled action (#407).
   const [actionError, setActionError] = useState(false);
 
+  // Disabling the feature lowers the calm hint at once — a hidden tray shows no
+  // lingering "couldn't save" notice (#407). (The list itself already resets to
+  // EMPTY_VIEW via the query above, driven by the same `actionsEnabled` flag.)
+  useEffect(() => {
+    if (!actionsEnabled) {
+      setActionError(false);
+    }
+  }, [actionsEnabled]);
+
   // The per-action latest-wins guard (#407) lives in the shared `useMutation`
   // primitive: each curation click captures a monotonic generation, and its
   // outcome commits ONLY if it is still the latest AND the tray is still enabled
   // AND still mounted. So a superseded action — a newer action began, or the
   // feature was toggled off (then possibly back on) while it was in flight — is
-  // dropped. `enabled` is false while the feature is off OR the bridge is absent,
-  // which both disables mutation AND (via the primitive) supersedes any in-flight
-  // action. On success we repaint the tray from the returned view and clear the
-  // hint; on failure we raise it.
-  const actionsEnabled = enabled && api !== undefined;
+  // dropped. On success we repaint the tray by writing the returned view THROUGH
+  // the list query's own `setData` (no manual re-fetch) and clear the hint; on
+  // failure we raise it.
   const { mutate: runAction } = useMutation<CurationTask, SuggestionsViewDTO>({
     mutationFn: (task) => task(api as KawsayAPI),
     enabled: actionsEnabled,
     onSuccess: (next) => {
-      setView(next);
+      setListData(next);
       setActionError(false);
     },
     onError: () => setActionError(true),
   });
-
-  useEffect(() => {
-    // DEFAULT-OFF: while disabled we never ask for suggestions, and we drop any we
-    // had so turning the feature off empties the tray at once. We also lower the
-    // calm hint — a hidden tray shows no lingering "couldn't save" notice (#407).
-    if (api === undefined || !enabled) {
-      setView(EMPTY_VIEW);
-      setLoading(false);
-      setActionError(false);
-      return undefined;
-    }
-    let active = true;
-    setLoading(true);
-    void api
-      .listSuggestions()
-      .then((next) => {
-        if (active) {
-          setView(next);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        // A failed read leaves the tray empty rather than guessing; the next open
-        // (or opt-in toggle) tries again.
-        if (active) {
-          setLoading(false);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [api, enabled]);
 
   const accept = useCallback(
     (input: { categoryId: string; name?: string }): void => {
