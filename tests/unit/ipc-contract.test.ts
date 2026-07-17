@@ -34,7 +34,7 @@ import {
   TRANSCRIPTION_PROGRESS,
   ipcEventContract,
 } from '@shared/ipc/events';
-import { itemCardSchema, pathSchema } from '@shared/ipc/schemas';
+import { itemCardSchema, MEDIA_TYPE_COUNT, pathSchema } from '@shared/ipc/schemas';
 
 const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
@@ -163,6 +163,60 @@ describe('ipcContract — catalog:search', () => {
   it('validates a SearchResult response', () => {
     expect(resOk(CATALOG_SEARCH, { items: [itemCard], total: 1 })).toBe(true);
     expect(resOk(CATALOG_SEARCH, { items: [], total: -1 })).toBe(false);
+  });
+
+  it('accepts a bounded any-of media-type filter and rejects an out-of-enum or malformed one (#482)', () => {
+    // The happy path: a known subset of media types still validates.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', types: ['photo', 'video'] })).toBe(true);
+    // An out-of-enum type value is rejected.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', types: ['bogus'] })).toBe(false);
+    // A non-array `types` is rejected (wrong shape entirely).
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', types: 'photo' })).toBe(false);
+    // An empty array violates `.min(1)` — an explicit empty filter is meaningless.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', types: [] })).toBe(false);
+    // More entries than media types exist violates `.max(MEDIA_TYPE_COUNT)`.
+    expect(
+      reqOk(CATALOG_SEARCH, {
+        query: 'beach',
+        types: Array(MEDIA_TYPE_COUNT + 1).fill('photo'),
+      }),
+    ).toBe(false);
+  });
+
+  it('accepts valid YYYY-MM-DD date bounds and rejects a malformed or adversarial day string (#482)', () => {
+    // The happy path: well-formed inclusive day bounds still validate.
+    expect(
+      reqOk(CATALOG_SEARCH, { query: 'beach', fromDate: '2019-06-14', toDate: '2019-06-15' }),
+    ).toBe(true);
+    // A free-form / non-date string is rejected outright by searchDaySchema's
+    // digits-only day pattern.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', toDate: 'not-a-date' })).toBe(false);
+    // A wrong-shaped or ISO-datetime string (not the bare YYYY-MM-DD day) is
+    // rejected too — the pattern is anchored and exact-length.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', fromDate: '2019-6-14' })).toBe(false);
+    expect(
+      reqOk(CATALOG_SEARCH, { query: 'beach', fromDate: '2019-06-14T00:00:00.000Z' }),
+    ).toBe(false);
+    // searchDaySchema is calendar-correct (z.iso.date), so an impossible day is refused
+    // at the trust boundary — never reaching dateFilter's lexicographic SQL comparison
+    // (an out-of-range month like '2019-13-40' would silently exclude valid rows).
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', fromDate: '2019-13-40' })).toBe(false);
+    // Non-leap Feb 29 is rejected; a real leap day is accepted.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', toDate: '2019-02-29' })).toBe(false);
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', toDate: '2020-02-29' })).toBe(true);
+  });
+
+  it('rejects an over-max limit (#482)', () => {
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', limit: 201 })).toBe(false);
+  });
+
+  it('rejects a huge offset, mirroring the limit upper bound (#482)', () => {
+    // A negative offset is already refused (see above); a HUGE positive one is
+    // nonsense past any real corpus and must be rejected at the trust boundary
+    // too, just like an over-max `limit` — offset currently has no upper bound.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', offset: 1_000_000_000 })).toBe(false);
+    // A modest, realistic offset still validates.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', offset: 500 })).toBe(true);
   });
 });
 

@@ -16,6 +16,14 @@ export const NAME_MAX_LENGTH = 200;
 export const QUERY_MAX_LENGTH = 512;
 export const CURSOR_MAX_LENGTH = 4096;
 export const PAGE_LIMIT_MAX = 200;
+/**
+ * Generous defence-in-depth ceiling on a search's `offset` (#482 — unlike `limit`,
+ * this had no upper bound at all). Mirrors the reasoning of the sibling corpus
+ * caps ({@link SUGGESTIONS_VIEW_MAX}/`COLLECTIONS_LIST_MAX`): far above any
+ * realistic loved-one's archive, so it never rejects a real "show more" click,
+ * only a huge/adversarial offset that could never correspond to a real page.
+ */
+export const SEARCH_OFFSET_MAX = 100_000;
 export const ITEM_CARD_TITLE_MAX_LENGTH = 200;
 export const ITEM_CARD_DESCRIPTION_MAX_LENGTH = 4096;
 
@@ -76,11 +84,12 @@ export const MEDIA_TYPE_COUNT = MEDIA_TYPES.length;
 
 /**
  * A calendar day `YYYY-MM-DD`, the shape the Search date pickers emit and the catalog
- * compares capture dates against (#431). A strict format (a bounded, digits-only
- * pattern) so a free-form or adversarial string is refused at the trust boundary
- * rather than reaching a SQL comparison.
+ * compares capture dates against (#431). `z.iso.date()` is calendar-correct (not just
+ * a digit pattern): it refuses an impossible day like `2019-13-40` or a non-leap
+ * `2019-02-29`, so an adversarial/replayed request can't slip a nonsense bound past
+ * the trust boundary into `dateFilter`'s lexicographic SQL comparison (#482 review).
  */
-export const searchDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
+export const searchDaySchema = z.iso.date();
 
 /**
  * The library descriptor the renderer is allowed to see. NOTE the deliberate
