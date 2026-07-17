@@ -1,0 +1,1 @@
+- You can now organize your memories into suggested collections whenever you like — a new “Organize now” button in Settings looks across your places and moments and gathers them, all on this computer.
