@@ -50,34 +50,44 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
   const api = useKawsayApi();
   const [view, setView] = useState<SuggestionsViewDTO>(EMPTY_VIEW);
   const [loading, setLoading] = useState(false);
+  // The calm "couldn't save" hint. Deliberately a STICKY local flag rather than a
+  // read of the mutation's transient status: once raised by a committed failure it
+  // stays up CONTINUOUSLY — including through an in-flight retry — and is lowered
+  // ONLY by a committed success or by disabling the feature. (Reading
+  // `status === 'error'` would blink it off the instant a retry goes pending, a
+  // spurious mid-retry reassurance.) It is set/cleared exclusively in the mutation
+  // callbacks below, which the primitive fires only for the latest, non-superseded,
+  // still-enabled action (#407).
+  const [actionError, setActionError] = useState(false);
 
-  // The per-action latest-wins guard (#407) now lives in the shared `useMutation`
+  // The per-action latest-wins guard (#407) lives in the shared `useMutation`
   // primitive: each curation click captures a monotonic generation, and its
   // outcome commits ONLY if it is still the latest AND the tray is still enabled
   // AND still mounted. So a superseded action — a newer action began, or the
   // feature was toggled off (then possibly back on) while it was in flight — is
-  // dropped instead of resurfacing a spurious "couldn't save" hint. `enabled` is
-  // false while the feature is off OR the bridge is absent, which both disables
-  // mutation AND (via the primitive) supersedes any in-flight action and clears
-  // the surfaced error back to calm. On success we repaint the tray straight from
-  // the returned view; `actionError` is simply the mutation's error status.
+  // dropped. `enabled` is false while the feature is off OR the bridge is absent,
+  // which both disables mutation AND (via the primitive) supersedes any in-flight
+  // action. On success we repaint the tray from the returned view and clear the
+  // hint; on failure we raise it.
   const actionsEnabled = enabled && api !== undefined;
-  const {
-    mutate: runAction,
-    status: actionStatus,
-  } = useMutation<CurationTask, SuggestionsViewDTO>({
+  const { mutate: runAction } = useMutation<CurationTask, SuggestionsViewDTO>({
     mutationFn: (task) => task(api as KawsayAPI),
     enabled: actionsEnabled,
-    onSuccess: (next) => setView(next),
+    onSuccess: (next) => {
+      setView(next);
+      setActionError(false);
+    },
+    onError: () => setActionError(true),
   });
-  const actionError = actionStatus === 'error';
 
   useEffect(() => {
     // DEFAULT-OFF: while disabled we never ask for suggestions, and we drop any we
-    // had so turning the feature off empties the tray at once.
+    // had so turning the feature off empties the tray at once. We also lower the
+    // calm hint — a hidden tray shows no lingering "couldn't save" notice (#407).
     if (api === undefined || !enabled) {
       setView(EMPTY_VIEW);
       setLoading(false);
+      setActionError(false);
       return undefined;
     }
     let active = true;
