@@ -41,14 +41,13 @@ describe('ipcErrorCopy (renderer maps codes → reverent copy, #440)', () => {
     expect(copy).not.toMatch(/ERR_IPC|CatalogSessionError|Error:/);
   });
 
-  it('never surfaces raw error text (there is none to surface)', () => {
-    const copy = ipcErrorCopy(new IpcError(IPC_ERROR_CODES.HANDLER_FAULT, 'Error'));
-    expect(copy).not.toContain(PII_PATH);
-    expect(copy).not.toContain(PII_ID);
-  });
-
-  it('falls back to reverent copy for a non-IpcError (e.g. a missing bridge)', () => {
-    expect(ipcErrorCopy(new Error(`boom ${PII_PATH}`))).not.toContain(PII_PATH);
+  it('falls back to reverent copy for a non-IpcError, never echoing its raw text (e.g. a missing bridge)', () => {
+    // Discriminating: a raw Error whose MESSAGE embeds PII — the fallback copy must not
+    // echo it (an impl that surfaced `String(error)` would leak the path). The removed
+    // tautological sibling (an IpcError carrying no PII in the first place) proved nothing
+    // beyond this; the per-hook #481 tests are the real regression guard for the mapping.
+    expect(ipcErrorCopy(new Error(`boom ${PII_PATH} ${PII_ID}`))).not.toContain(PII_PATH);
+    expect(ipcErrorCopy(new Error(`boom ${PII_PATH} ${PII_ID}`))).not.toContain(PII_ID);
     expect(ipcErrorCopy(new Error('boom'))).toMatch(/please try again/i);
   });
 });
