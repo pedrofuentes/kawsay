@@ -1242,6 +1242,52 @@ describe('createCatalogSession (the IPC application service)', () => {
       }
     });
 
+    it('does not serve a snapshot token across a library switch (no cross-library rows) (#482)', async () => {
+      // Library A: two "familia" matches → a real snapshot token.
+      session.createLibrary({ path: root });
+      seedMultiSource(join(root, 'catalog.sqlite3'));
+      const first = await session.search({ query: 'familia', limit: 10, offset: 0 });
+      const token = first.snapshotToken;
+      expect(token).toBeTruthy();
+      const libraryAIds = first.items.map((i) => i.id);
+      expect(libraryAIds.length).toBeGreaterThan(0);
+
+      // Switch to a DIFFERENT, empty library — the snapshot store is cleared on switch.
+      session.createLibrary({ path: join(parent, 'Dad') });
+
+      // Replaying library A's token must NOT resurrect A's rows: it degrades to a fresh
+      // search over library B, which holds no "familia" memories.
+      const replayed = await session.search({
+        query: 'familia',
+        limit: 10,
+        offset: 0,
+        snapshotToken: token,
+      });
+      expect(replayed.items).toEqual([]);
+      for (const id of libraryAIds) {
+        expect(replayed.items.map((i) => i.id)).not.toContain(id);
+      }
+    });
+
+    it('degrades an unknown snapshot token to a fresh search, minting its own (never errors) (#482)', async () => {
+      session.createLibrary({ path: root });
+      seedMultiSource(join(root, 'catalog.sqlite3'));
+      const bogus = '00000000-0000-4000-8000-000000000000';
+
+      const result = await session.search({
+        query: 'familia',
+        limit: 10,
+        offset: 0,
+        snapshotToken: bogus,
+      });
+
+      // A fresh search still answers correctly and issues its OWN new token.
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+      expect(result.snapshotToken).toBeTruthy();
+      expect(result.snapshotToken).not.toBe(bogus);
+    });
+
     it('applies a day-range filter to semantic hits (an out-of-range extra is never surfaced) (#431)', async () => {
       const s = sessionWithEmbedder([1, 0, 0]);
       try {
