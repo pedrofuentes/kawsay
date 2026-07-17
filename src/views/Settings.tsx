@@ -9,6 +9,7 @@
 // view is unchanged there.
 import type { ReactElement } from 'react';
 import { CategorizationConsent } from '@renderer/components/CategorizationConsent';
+import { CategorizationRun } from '@renderer/components/CategorizationRun';
 import { Heading } from '@renderer/components/Heading';
 import { LibrarySettings } from '@renderer/components/LibrarySettings';
 import { PrivacyNotice } from '@renderer/components/PrivacyNotice';
@@ -44,6 +45,7 @@ export function Settings(): ReactElement {
       <TranscriptionRun />
       <SmartSearchConsent />
       <CategorizationConsent />
+      <CategorizationRun />
       <SuggestionsTray />
       <PrivacyNotice />
       <footer className="font-body text-sm text-text-secondary">
