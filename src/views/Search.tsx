@@ -83,6 +83,17 @@ export function Search(): ReactElement {
   // Monotonic request id so a slow earlier search — or a stale "show more" — can never
   // overwrite a newer one.
   const requestIdRef = useRef(0);
+  // The opaque snapshot token the FIRST page returned (#482): "show more" echoes it so
+  // every page is drawn from the SAME frozen result set, and results stay consistent
+  // even while an import runs. A fresh search clears it; each response refreshes it (the
+  // main process may re-mint one if the snapshot was evicted).
+  const snapshotTokenRef = useRef<string | undefined>(undefined);
+  // The next page's ABSOLUTE offset into the frozen snapshot (#482). The snapshot is
+  // indexed absolutely, and a page can come back SHORT (a frozen id deleted after the
+  // freeze is dropped), so the offset must advance by the page limit per loaded page —
+  // NOT by `items.length`, which would lag a short page and re-read an overlapping
+  // slice (a duplicate). Reset to 0 on a fresh search / filter change.
+  const nextOffsetRef = useRef(0);
 
   // The active media types in a stable display order, sent to the catalogue so the
   // WHOLE library is narrowed by type, not just the page already on screen (#431).
@@ -96,6 +107,8 @@ export function Search(): ReactElement {
   useEffect(() => {
     if (query === '') {
       requestIdRef.current += 1;
+      snapshotTokenRef.current = undefined;
+      nextOffsetRef.current = 0;
       setItems([]);
       setTotal(0);
       setLoaded(false);
@@ -108,6 +121,10 @@ export function Search(): ReactElement {
       return;
     }
     const id = (requestIdRef.current += 1);
+    // A fresh search starts a NEW snapshot — drop any prior page's token and rewind the
+    // absolute offset so "show more" pages this search's frozen set from the top.
+    snapshotTokenRef.current = undefined;
+    nextOffsetRef.current = 0;
     setLoaded(false);
     setLoadMoreFailed(false);
     setPhase('searching');
@@ -124,6 +141,10 @@ export function Search(): ReactElement {
       })
       .then((page) => {
         if (id !== requestIdRef.current) return;
+        // Remember this search's snapshot so "show more" pages the SAME frozen set (#482),
+        // and advance the absolute offset past this first page.
+        snapshotTokenRef.current = page.snapshotToken;
+        nextOffsetRef.current = SEARCH_LIMIT;
         setItems(page.items);
         setTotal(page.total);
         setLoaded(true);
@@ -149,7 +170,11 @@ export function Search(): ReactElement {
     if (api === undefined || phase === 'searching' || phase === 'loadingMore') return;
     if (items.length >= total) return;
     const id = (requestIdRef.current += 1);
-    const offset = items.length;
+    // The snapshot is indexed ABSOLUTELY and a page may come back short (a deleted
+    // frozen id is dropped), so advance by the page limit — never by `items.length`,
+    // which would lag a short page and re-read an overlapping slice (#482). A failed
+    // page does NOT advance it, so the inline retry resumes from this same offset (#456).
+    const offset = nextOffsetRef.current;
     setLoadMoreFailed(false);
     setPhase('loadingMore');
     api
@@ -157,6 +182,11 @@ export function Search(): ReactElement {
         query,
         limit: SEARCH_LIMIT,
         offset,
+        // Page this "show more" from the FROZEN snapshot the first page opened (#482),
+        // so an import mid-scroll can't skip, duplicate, or re-count a match.
+        ...(snapshotTokenRef.current !== undefined
+          ? { snapshotToken: snapshotTokenRef.current }
+          : {}),
         ...(activeSource !== null ? { source: activeSource } : {}),
         ...(typesList.length > 0 ? { types: typesList } : {}),
         ...(fromDate !== '' ? { fromDate } : {}),
@@ -164,6 +194,11 @@ export function Search(): ReactElement {
       })
       .then((page) => {
         if (id !== requestIdRef.current) return;
+        // Keep the token fresh — the main process may re-mint it if the snapshot aged out.
+        snapshotTokenRef.current = page.snapshotToken;
+        // Advance the absolute offset past this page (only the winning request lands
+        // here; a stale double-click returns above, so the offset never double-advances).
+        nextOffsetRef.current = offset + SEARCH_LIMIT;
         setItems((prev) => [...prev, ...page.items]);
         setTotal(page.total);
         setPhase('idle');

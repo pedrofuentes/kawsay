@@ -149,6 +149,13 @@ export interface SearchQuery extends SearchFilters {
   offset: number;
 }
 
+/** A {@link SearchQuery} without an offset: {@link CatalogRepo.searchIds} always
+ *  reads the match set from the start, up to `limit` (the reachable-page bound). */
+export interface SearchIdsQuery extends SearchFilters {
+  query: string;
+  limit: number;
+}
+
 export interface SearchResult {
   rows: ItemRow[];
   total: number;
@@ -197,6 +204,14 @@ export interface CatalogRepo {
   registerSource(input: SourceInput): string;
   queryTimeline(query: TimelineQuery): TimelinePage;
   search(query: SearchQuery): SearchResult;
+  /**
+   * The ORDERED ids of a search's match set — the SAME relevance order as {@link
+   * search} (`rank, capture_date DESC, id DESC`) and the SAME {@link SearchFilters},
+   * but ids only and always from the start, capped at `limit`. Lets a caller FREEZE a
+   * "show more" snapshot cheaply (#482) without hydrating every matching row (and its
+   * per-row source subquery). Returns [] when the query has no tokenizable content.
+   */
+  searchIds(query: SearchIdsQuery): string[];
   /**
    * Hydrate a set of item ids into full {@link ItemRow}s (M4-1b semantic-hit
    * hydration, ADR-0029), using the SAME projection and the SAME {@link SearchFilters}
@@ -572,6 +587,19 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
     ORDER BY rank, i.capture_date DESC NULLS LAST, i.id DESC
     LIMIT @limit OFFSET @offset
   `);
+  // Ids only, in the SAME order as searchStmt, from the start up to @limit — the
+  // cheap primitive a "show more" snapshot freezes (#482): no projection, no per-row
+  // source subquery, so capturing the whole ordered match set stays light.
+  const searchIdsStmt = db.prepare(`
+    SELECT i.id FROM items_fts
+    JOIN items i ON i.rowid = items_fts.rowid
+    WHERE items_fts MATCH @match
+      AND ${sourceFilter('i')}
+      AND ${typeFilter('i')}
+      AND ${dateFilter('i')}
+    ORDER BY rank, i.capture_date DESC NULLS LAST, i.id DESC
+    LIMIT @limit
+  `);
   const searchCountStmt = db.prepare(`
     SELECT COUNT(*) AS n FROM items_fts
     JOIN items i ON i.rowid = items_fts.rowid
@@ -752,6 +780,13 @@ export function createCatalogRepo(db: CatalogDatabase): CatalogRepo {
       const total = Number(searchCountStmt.get<{ n: number }>({ match, ...params })?.n ?? 0);
       const raws = searchStmt.all<RawItemRow>({ match, limit, offset, ...params });
       return { rows: raws.map(mapItemRow), total };
+    },
+
+    searchIds({ query, limit, ...filters }) {
+      const match = toFtsMatchQuery(query);
+      if (match === null) return [];
+      const rows = searchIdsStmt.all<{ id: string }>({ match, limit, ...filterParams(filters) });
+      return rows.map((row) => row.id);
     },
 
     getItemsByIds(ids, filters = {}) {
