@@ -423,6 +423,39 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
       expect(res.total).toBe(1);
       expect(res.rows.map((r) => r.id)).toEqual([audioId]);
     });
+
+    it("dateFilter excludes a NULL capture_date item — an undated memory falls outside any date bound (#482)", () => {
+      // An undated memory (no capture_date at all) — still matches "familia" on
+      // description, so absent the date filter it would be in the unfiltered set.
+      const undatedId = repo.insertItem({
+        mediaType: 'document',
+        contentHash: 'h-undated',
+        description: 'familia sin fecha',
+        captureDate: null,
+      });
+
+      // Sanity: with NO date bound, the undated item is found like any other match.
+      const unfiltered = repo.search({ query: 'familia', limit: 100, offset: 0 });
+      expect(unfiltered.rows.map((r) => r.id)).toContain(undatedId);
+
+      // A from-bound excludes it: `capture_date >= @fromDate` fails on NULL.
+      const fromBounded = repo.search({
+        query: 'familia',
+        limit: 100,
+        offset: 0,
+        fromDate: '2000-01-01',
+      });
+      expect(fromBounded.rows.map((r) => r.id)).not.toContain(undatedId);
+
+      // A to-bound excludes it too: `capture_date <= @toDate…` also fails on NULL.
+      const toBounded = repo.search({
+        query: 'familia',
+        limit: 100,
+        offset: 0,
+        toDate: '2030-01-01',
+      });
+      expect(toBounded.rows.map((r) => r.id)).not.toContain(undatedId);
+    });
   });
 
   describe('search — source filter (AC-7)', () => {
