@@ -51,7 +51,16 @@ export function useCategorizationRun(): UseCategorizationRunResult {
     if (api === undefined) {
       return undefined;
     }
-    return api.onCategorizationProgress(setSnapshot);
+    return api.onCategorizationProgress((snap) => {
+      setSnapshot(snap);
+      // A live run reasserts authority over a stale start-rejection: if the
+      // backend actually began a run after startCategorization() rejected at the
+      // IPC boundary, a running/complete tick clears the latched failure so the
+      // UI reflects the real run rather than a misleading "nothing changed" (#519).
+      if (snap.state === 'running' || snap.state === 'complete') {
+        setStartError(false);
+      }
+    });
   }, [api]);
 
   const start = useCallback(async (): Promise<void> => {
