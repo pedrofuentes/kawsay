@@ -214,7 +214,7 @@ describe('useInfiniteQuery — error surfacing', () => {
   it('surfaces the RAW rejection and keeps prior items when a loadMore fails, then retries', async () => {
     let call = 0;
     const cause = new Error('mid-scroll glitch');
-    const fetchPage = vi.fn(({ mode }: { mode: 'initial' | 'more' }) => {
+    const fetchPage = vi.fn(() => {
       call += 1;
       if (call === 1) return Promise.resolve({ items: ['a'], cursor: 'c1', hasMore: true });
       if (call === 2) return Promise.reject(cause);
