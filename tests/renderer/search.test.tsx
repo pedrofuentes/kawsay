@@ -630,6 +630,49 @@ describe('Search — truncation and "show more" (#431)', () => {
   });
 });
 
+describe('Search — "show more" pages a frozen snapshot without repeating (#482)', () => {
+  it('never repeats a row when an item inside a later page is deleted between pages', async () => {
+    const LIMIT = 50; // mirrors Search.tsx SEARCH_LIMIT
+    const TOTAL = 128;
+    // A frozen, absolutely-indexed snapshot of unique tiles (a distinct id + title
+    // per index), the SAME set the session would freeze at page 1.
+    const frozen = Array.from({ length: TOTAL }, (_, i) => makeItemCard({ title: `Item ${i}` }));
+    // One item that falls INSIDE a later page's slice (not the tail) is removed after
+    // page 1 — so that page comes back SHORT (fewer than LIMIT rows), exactly what the
+    // session's pageFromSnapshot does when a frozen id was deleted (it pages by
+    // ABSOLUTE index and drops the missing id).
+    const deletedIndex = 60;
+    const searchCatalog = vi.fn((input: { offset?: number }) => {
+      const offset = input.offset ?? 0;
+      const window = frozen
+        .slice(offset, offset + LIMIT)
+        .filter((_item, i) => !(offset + i === deletedIndex && offset > 0));
+      return Promise.resolve(
+        makeSearchResult({ items: window, total: TOTAL, snapshotToken: 'snap-1' }),
+      );
+    });
+    const { user } = renderSearch(makeFakeApi({ searchCatalog }));
+
+    await user.type(screen.getByRole('searchbox'), 'mama');
+    await screen.findByText(caption('Item 0'));
+
+    // Page all the way through the snapshot (128 / 50 ⇒ two "show more" clicks).
+    for (let click = 0; click < 2; click += 1) {
+      await user.click(await screen.findByRole('button', { name: /show more/i }));
+      await waitFor(() => expect(searchCatalog).toHaveBeenCalledTimes(click + 2));
+    }
+
+    // With `offset = items.length` (displayed count), the short middle page makes the
+    // NEXT offset lag the absolute index already consumed, so frozen index 99 is read
+    // twice. Paging by ABSOLUTE offset must serve it EXACTLY once.
+    expect(screen.getAllByText(caption('Item 99'))).toHaveLength(1);
+    // The deleted item is simply absent (a gap), never resurrected.
+    expect(screen.queryByText(caption('Item 60'))).not.toBeInTheDocument();
+    // The frozen total is still announced — a gap does not change it.
+    expect(screen.getByRole('status')).toHaveTextContent(/128 memories/i);
+  });
+});
+
 describe('Search — opening a result', () => {
   it('opens a result in its own view when its card is activated', async () => {
     const api = makeFakeApi({
