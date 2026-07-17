@@ -17,6 +17,8 @@ import {
   collectionSummarySchema,
   itemCardSchema,
   transcriptViewSchema,
+  PAGE_LIMIT_MAX,
+  SEARCH_OFFSET_MAX,
   type CollectionItemsPageDTO,
   type CollectionsListDTO,
   type CollectionSummaryDTO,
@@ -66,6 +68,31 @@ import type { IngestionJobSpec } from '../importers/ingestion/protocol';
 
 const ITEM_CARD_TITLE_MAX_LENGTH = 200;
 const ITEM_CARD_DESCRIPTION_MAX_LENGTH = 4096;
+
+/**
+ * How many search snapshots one open library retains at once (#482). A user pages a
+ * single search at a time, so a handful covers rapid re-searches (each keystroke that
+ * changes the query mints a fresh snapshot) without holding stale id lists. Eviction
+ * is insertion-ordered with an LRU touch on read, so the actively-paged snapshot is
+ * the last to go under churn.
+ */
+const SEARCH_SNAPSHOT_CACHE_MAX = 8;
+/**
+ * Upper bound on the ids ONE snapshot retains (#482). `SEARCH_OFFSET_MAX +
+ * PAGE_LIMIT_MAX` is the last page a caller can reach — the IPC boundary refuses an
+ * `offset` above `SEARCH_OFFSET_MAX` — so every requestable slice is covered while the
+ * retained list stays bounded (an id is a uuid, so this caps a snapshot at a few MiB
+ * even for an implausibly broad match). Freezing a still-larger set off the main
+ * thread is #442's scope, cross-linked, not built here.
+ */
+const SEARCH_SNAPSHOT_ID_MAX = SEARCH_OFFSET_MAX + PAGE_LIMIT_MAX;
+
+/** A frozen search result set (#482): the ORDERED match ids and the total the page 1
+ *  response reported, held opaque behind a token so "show more" pages the same set. */
+interface SearchSnapshot {
+  readonly orderedIds: readonly string[];
+  readonly total: number;
+}
 
 /** A domain error the IPC layer surfaces to the renderer as a rejected invoke. */
 export class CatalogSessionError extends Error {
@@ -155,6 +182,12 @@ export interface CatalogSession {
     /** Inclusive `YYYY-MM-DD` day-bounds on capture date, applied server-side (#431). */
     fromDate?: string;
     toDate?: string;
+    /** A snapshot token from a prior page's response (#482). When it still names a
+     *  cached snapshot, "show more" hydrates its `offset`/`limit` slice from that
+     *  FROZEN ordered id set instead of re-querying the live corpus — so paging never
+     *  skips, duplicates, or re-counts a match while the library changes. Omitted (or
+     *  evicted) ⇒ a fresh search that mints a new snapshot. */
+    snapshotToken?: string;
   }): Promise<SearchResultDTO>;
   /** Render one memory's bounded thumbnail by opaque id (U4), or null. */
   getThumbnail(input: { id: string; size?: number }): Promise<string | null>;
@@ -332,10 +365,40 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
   const getEmbedder = (): EmbedderStatus => (embedderStatus ??= resolveEmbedder());
   let current: OpenLibrary | undefined;
 
+  // The per-session "show more" snapshot store (#482). Session-scoped and cleared on
+  // every library switch below — a snapshot's ids belong to exactly one open catalog.
+  const searchSnapshots = new Map<string, SearchSnapshot>();
+
+  /** Freeze an ordered result set under a fresh opaque uuid token, evicting the oldest
+   *  when full. The token is a uuid so it validates as `snapshotToken` on the way back
+   *  across the trust boundary and can never carry a path. */
+  function putSearchSnapshot(snapshot: SearchSnapshot): string {
+    const token = randomUUID();
+    if (searchSnapshots.size >= SEARCH_SNAPSHOT_CACHE_MAX) {
+      const oldest = searchSnapshots.keys().next().value;
+      if (oldest !== undefined) searchSnapshots.delete(oldest);
+    }
+    searchSnapshots.set(token, snapshot);
+    return token;
+  }
+
+  /** Look up a snapshot, LRU-touching it so an actively-paged search survives churn.
+   *  Returns undefined when the token is unknown or has been evicted. */
+  function getSearchSnapshot(token: string): SearchSnapshot | undefined {
+    const snapshot = searchSnapshots.get(token);
+    if (snapshot === undefined) return undefined;
+    searchSnapshots.delete(token);
+    searchSnapshots.set(token, snapshot);
+    return snapshot;
+  }
+
   function closeCurrent(): void {
     if (current === undefined) return;
     current.db.close();
     current = undefined;
+    // A snapshot's ids name rows in the catalog just closed — never serve them against
+    // the next library. Cleared on both close and (via adopt → closeCurrent) reopen.
+    searchSnapshots.clear();
   }
 
   function adopt(summary: LibrarySummary): LibrarySummaryDTO {
@@ -418,6 +481,30 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         fromDate: input.fromDate,
         toDate: input.toDate,
       };
+
+      // Build one page from a FROZEN snapshot (#482): hydrate the current rows for its
+      // [offset, offset+limit) id slice — a memory deleted after the snapshot is simply
+      // absent — then restore the frozen order (getItemsByIds returns rows in no set
+      // order). No filters here: the snapshot's SET was already filtered when frozen.
+      const pageFromSnapshot = (snapshot: SearchSnapshot, token: string): SearchResultDTO => {
+        const sliceIds = snapshot.orderedIds.slice(input.offset, input.offset + input.limit);
+        const rowById = new Map(repo.getItemsByIds(sliceIds).map((row) => [row.id, row] as const));
+        const items = sliceIds
+          .map((id) => rowById.get(id))
+          .filter((row): row is ItemRow => row !== undefined)
+          .map(toItemCard);
+        return { items, total: snapshot.total, snapshotToken: token };
+      };
+
+      // "show more" from a frozen snapshot: a still-cached token pages the FROZEN set,
+      // so an import between pages can't skip, duplicate, or re-count a match. An
+      // unknown / evicted token falls through to a fresh search (a new snapshot + token)
+      // — the same bounded degrade as a first search, never an error (#482).
+      if (input.snapshotToken !== undefined) {
+        const snapshot = getSearchSnapshot(input.snapshotToken);
+        if (snapshot !== undefined) return pageFromSnapshot(snapshot, input.snapshotToken);
+      }
+
       // The exact FTS page is ALWAYS the authoritative exact set (AC-7), correctly
       // paginated by offset/limit. It is the byte-identical fallback for every branch
       // below (no embedder, nothing embeddable, empty embed, no stored vectors, or a
@@ -428,21 +515,29 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         offset: input.offset,
         ...filters,
       });
-      const exactPageDto = (): SearchResultDTO => ({
-        items: exactPage.rows.map(toItemCard),
-        total: exactPage.total,
-      });
+      // A fresh exact-only result: serve this offset's rows (unchanged, cheap) AND
+      // freeze the whole ordered id set — a cheap id-only scan (#482) — so later "show
+      // more" pages tile it without drift instead of re-querying the live corpus.
+      const freshExact = (): SearchResultDTO => {
+        const orderedIds = repo.searchIds({
+          query: input.query,
+          limit: SEARCH_SNAPSHOT_ID_MAX,
+          ...filters,
+        });
+        const snapshotToken = putSearchSnapshot({ orderedIds, total: exactPage.total });
+        return { items: exactPage.rows.map(toItemCard), total: exactPage.total, snapshotToken };
+      };
 
       // Only a query with embeddable text can use the embedder — check that FIRST so a
       // blank / punctuation-only query stays pure exact FTS and never even resolves
       // (probes the filesystem for) the embedder.
-      if (!hasEmbeddableText(input.query)) return exactPageDto();
+      if (!hasEmbeddableText(input.query)) return freshExact();
       const embedder = getEmbedder();
-      if (!embedder.available) return exactPageDto();
+      if (!embedder.available) return freshExact();
 
       try {
         const [queryVector] = await embedder.embed([withQueryPrefix(input.query)]);
-        if (queryVector === undefined) return exactPageDto();
+        if (queryVector === undefined) return freshExact();
         // A fixed (page-independent) K = `limit` bounds the semantic augmentation to
         // at most `limit` best semantic-only extras. Because K does not grow with
         // `offset`, the merged set — and therefore `total` — is identical on every
@@ -452,16 +547,13 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         });
         // No stored embeddings yet (the case today, until the back-fill drain runs)
         // → exact FTS unchanged.
-        if (hits.length === 0) return exactPageDto();
+        if (hits.length === 0) return freshExact();
 
-        // Globally-merged pagination: rebuild the SAME merged ordering on every page
-        // and slice [offset, offset+limit) out of it, so paging can never duplicate or
-        // skip a semantic-only item and `total` is page-independent. The merge needs
-        // the WHOLE authoritative exact set (not just this page) to dedupe semantic
-        // hits against every exact match and rank exact ahead (AC-29); fetching it
-        // whole is consistent with the brute-force-at-v1-scale semantic path
-        // (ADR-0029), which already scans every stored vector. `exactPage` above keeps
-        // its cheap paginated read for the fallback, so exact search never regresses.
+        // The merge needs the WHOLE authoritative exact set (not just this page) to
+        // dedupe semantic hits against every exact match and rank exact ahead (AC-29);
+        // fetching it whole is consistent with the brute-force-at-v1-scale semantic
+        // path (ADR-0029), which already scans every stored vector. `exactPage` above
+        // keeps its cheap paginated read for the fallback, so exact never regresses.
         const exactAll = repo.search({
           query: input.query,
           limit: exactPage.total,
@@ -486,18 +578,24 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
         // AC-29: every exact result is preserved and ranked AHEAD of any semantic-only
         // match; an item in both appears once. The semantic-only extras (≤ limit)
         // EXTEND the exact set, so the merged length IS the page-independent `total`.
+        // The merge is computed ONCE here and FROZEN under a token (#482): "show more"
+        // reuses the ordered ids via that token — no re-embed, no re-merge (moving this
+        // scan off the main thread is #442's scope, cross-linked here).
         const merged = mergeSemanticAndExact(exactAll.rows, semanticHits);
+        const orderedIds = merged.slice(0, SEARCH_SNAPSHOT_ID_MAX).map((entry) => entry.item.id);
+        const snapshotToken = putSearchSnapshot({ orderedIds, total: merged.length });
         return {
           items: merged
             .slice(input.offset, input.offset + input.limit)
             .map((entry) => toItemCard(entry.item)),
           total: merged.length,
+          snapshotToken,
         };
       } catch (error) {
         // Resilience: a query-embed / KNN failure must NEVER fail the search — it
         // degrades silently to exact FTS (AC-7 no-regression).
         log.warn('[kawsay] smart search failed; falling back to exact FTS', error);
-        return exactPageDto();
+        return freshExact();
       }
     },
     async getThumbnail(input) {

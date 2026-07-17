@@ -141,6 +141,13 @@ export type TimelinePageDTO = z.infer<typeof timelinePageSchema>;
 export const searchResultSchema = z.strictObject({
   items: z.array(itemCardSchema),
   total: z.number().int().nonnegative(),
+  // An opaque token naming the FROZEN ordered result set this page was drawn from
+  // (#482). Echo it on a "show more" request and later pages hydrate their slice
+  // from the same snapshot — so paging never skips, duplicates, or re-counts a
+  // match while the library changes underneath. A uuid, so it can never smuggle a
+  // path across the trust boundary. Omitted only by a caller/handler that predates
+  // snapshots (the field is optional and backward-compatible).
+  snapshotToken: z.uuid().optional(),
 });
 export type SearchResultDTO = z.infer<typeof searchResultSchema>;
 

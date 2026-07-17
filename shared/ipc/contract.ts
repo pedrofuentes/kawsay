@@ -293,6 +293,13 @@ export const ipcContract = {
       // at the boundary; omitted ⇒ no bound on that side.
       fromDate: searchDaySchema.optional(),
       toDate: searchDaySchema.optional(),
+      // Optional snapshot token from a prior page's response (#482). When present and
+      // still cached, "show more" hydrates its `offset`/`limit` slice from that FROZEN
+      // ordered id set instead of re-querying the live corpus — so paging can't skip,
+      // duplicate, or re-count a match while an import runs. A uuid (id-only, no path);
+      // omitted ⇒ a fresh search that mints a new snapshot, so the channel stays
+      // backward-compatible.
+      snapshotToken: z.uuid().optional(),
     }),
     response: searchResultSchema,
   },

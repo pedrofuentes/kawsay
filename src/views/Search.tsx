@@ -83,6 +83,11 @@ export function Search(): ReactElement {
   // Monotonic request id so a slow earlier search — or a stale "show more" — can never
   // overwrite a newer one.
   const requestIdRef = useRef(0);
+  // The opaque snapshot token the FIRST page returned (#482): "show more" echoes it so
+  // every page is drawn from the SAME frozen result set, and results stay consistent
+  // even while an import runs. A fresh search clears it; each response refreshes it (the
+  // main process may re-mint one if the snapshot was evicted).
+  const snapshotTokenRef = useRef<string | undefined>(undefined);
 
   // The active media types in a stable display order, sent to the catalogue so the
   // WHOLE library is narrowed by type, not just the page already on screen (#431).
@@ -96,6 +101,7 @@ export function Search(): ReactElement {
   useEffect(() => {
     if (query === '') {
       requestIdRef.current += 1;
+      snapshotTokenRef.current = undefined;
       setItems([]);
       setTotal(0);
       setLoaded(false);
@@ -108,6 +114,8 @@ export function Search(): ReactElement {
       return;
     }
     const id = (requestIdRef.current += 1);
+    // A fresh search starts a NEW snapshot — drop any prior page's token first.
+    snapshotTokenRef.current = undefined;
     setLoaded(false);
     setLoadMoreFailed(false);
     setPhase('searching');
@@ -124,6 +132,8 @@ export function Search(): ReactElement {
       })
       .then((page) => {
         if (id !== requestIdRef.current) return;
+        // Remember this search's snapshot so "show more" pages the SAME frozen set (#482).
+        snapshotTokenRef.current = page.snapshotToken;
         setItems(page.items);
         setTotal(page.total);
         setLoaded(true);
@@ -157,6 +167,11 @@ export function Search(): ReactElement {
         query,
         limit: SEARCH_LIMIT,
         offset,
+        // Page this "show more" from the FROZEN snapshot the first page opened (#482),
+        // so an import mid-scroll can't skip, duplicate, or re-count a match.
+        ...(snapshotTokenRef.current !== undefined
+          ? { snapshotToken: snapshotTokenRef.current }
+          : {}),
         ...(activeSource !== null ? { source: activeSource } : {}),
         ...(typesList.length > 0 ? { types: typesList } : {}),
         ...(fromDate !== '' ? { fromDate } : {}),
@@ -164,6 +179,8 @@ export function Search(): ReactElement {
       })
       .then((page) => {
         if (id !== requestIdRef.current) return;
+        // Keep the token fresh — the main process may re-mint it if the snapshot aged out.
+        snapshotTokenRef.current = page.snapshotToken;
         setItems((prev) => [...prev, ...page.items]);
         setTotal(page.total);
         setPhase('idle');
