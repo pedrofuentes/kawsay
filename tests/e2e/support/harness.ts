@@ -163,10 +163,25 @@ export async function nativeCatalogAvailable(): Promise<boolean> {
       );
       if (outcome.ok) return true;
       // A NATIVE-addon load/ABI failure means the library-backed journeys cannot run
-      // here — degrade to a skip (never a hard CI failure). Recognised by the stable
-      // `ERR_NATIVE_MODULE` code the DB layer tags and the #440 envelope preserves.
-      // A non-native error (a genuine logic regression) is NOT swallowed: it re-throws.
+      // here. The DEFAULT policy is to degrade to a skip (never a hard failure) —
+      // recognised by the stable `ERR_NATIVE_MODULE` code the DB layer tags and the
+      // #440 envelope preserves — so a developer without an Electron-ABI build still
+      // gets a green local run. A non-native error (a genuine logic regression) is
+      // NOT swallowed: it re-throws.
       if (outcome.code === 'ERR_NATIVE_MODULE') {
+        // CI opts OUT of the skip: it sets KAWSAY_E2E_REQUIRE_NATIVE=1 to turn an
+        // unavailable native catalog into a HARD failure, mirroring this repo's
+        // "assert the invariant is active, fail if not" convention (the AC-4 jobs
+        // each assert their deny rule is active; renderer-egress.spec asserts the
+        // renderer actually loaded). Without this, a silently-failed ABI rebuild on
+        // some OS would let all four library specs `test.skip` and the leg still
+        // exit 0 — green while proving nothing. The flag makes a green leg PROOF the
+        // journeys ran, not merely that Playwright exited cleanly.
+        if (process.env['KAWSAY_E2E_REQUIRE_NATIVE'] === '1') {
+          throw new Error(
+            `KAWSAY_E2E_REQUIRE_NATIVE=1 but better-sqlite3 is not built for this Electron ABI — the library journeys would vacuously skip. ${NATIVE_DB_SKIP_REASON}`,
+          );
+        }
         return false;
       }
       throw new Error(`unexpected library:create failure during ABI probe: code=${outcome.code}`);

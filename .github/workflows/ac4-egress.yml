@@ -334,19 +334,42 @@ jobs:
           Remove-NetFirewallRule -DisplayName 'AC4-Deny-Whisper' -ErrorAction SilentlyContinue
 
   # The renderer-stack layer of the zero-egress proof (ARCHITECTURE §6.2 / issue
-  # #40). The OS-deny jobs above prove the MAIN process, worker threads and
-  # subprocesses make no egress under a real OS firewall; this job proves the
-  # remaining surface — the Electron/Chromium RENDERER. It builds the app and drives
-  # the REAL packaged renderer through Playwright's Electron API, attempting outbound
-  # fetch / WebSocket / <img> to a routable host and asserting each is refused by the
-  # app's own Content-Security-Policy (`connect-src 'none'`, `img-src 'self' data:`)
-  # with ZERO external requests dispatched. Defense-in-depth: it needs no firewall —
-  # the app's OWN CSP is the thing under test — so it stays a focused
-  # build + virtual-display + Playwright run.
+  # #40) AND the user-journey e2e suite (#445). The OS-deny jobs above prove the
+  # MAIN process, worker threads and subprocesses make no egress under a real OS
+  # firewall; this job proves the remaining surface — the Electron/Chromium
+  # RENDERER — and drives the real user journeys through it. It builds the app and
+  # drives the REAL packaged renderer through Playwright's Electron API: the
+  # renderer-egress spec attempts outbound fetch / WebSocket / <img> to a routable
+  # host and asserts each is refused by the app's own Content-Security-Policy
+  # (`connect-src 'none'`, `img-src 'self' data:`) with ZERO external requests
+  # dispatched, while the journey specs script onboarding, import, search,
+  # favourites and the tour end-to-end. Defense-in-depth: it needs no firewall —
+  # the app's OWN CSP is the thing under test.
+  #
+  # Cross-OS (#445 AC): the job runs on ubuntu + macOS + Windows (fail-fast off) so
+  # the journeys are exercised headless on every shipped platform, and it rebuilds
+  # the `better-sqlite3` native addon for Electron's ABI FIRST — without that the
+  # library-backed journeys can't open a catalog and auto-skip. On failure it
+  # uploads the Playwright traces + screenshots per-OS. (The rebuild switches the
+  # addon to the Electron ABI, so this job runs ONLY `test:e2e`, never the
+  # Node-ABI vitest suite — that runs in the jobs above, before any rebuild.)
   renderer-egress:
-    name: Chromium renderer-egress (Playwright)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: E2E journeys + renderer-egress (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      # Assert the invariant is active, fail if not — this repo's convention (the
+      # AC-4 jobs each assert their deny rule is active; renderer-egress.spec asserts
+      # the renderer actually loaded). Here it turns an unavailable native catalog
+      # into a HARD failure instead of the default skip: without it, a silently-failed
+      # ABI rebuild on any OS would let the four library-backed specs `test.skip` and
+      # the leg still exit 0 — green while proving nothing. With it, a green leg is
+      # PROOF the journeys actually ran, and a broken rebuild turns that leg RED.
+      KAWSAY_E2E_REQUIRE_NATIVE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -372,8 +395,51 @@ jobs:
       - name: Build the app
         run: pnpm build
 
+      # Rebuild the `better-sqlite3` native addon against ELECTRON's ABI. `pnpm
+      # install` compiles it for the host Node's NODE_MODULE_VERSION, but the
+      # journeys open a real catalog under Electron, which embeds a different ABI —
+      # without this rebuild `openCatalog` throws and the library-backed journeys
+      # auto-skip. `-o better-sqlite3` scopes the rebuild to that one addon and
+      # `@electron/rebuild` auto-detects the installed electron version.
+      #
+      #   • `-f` (force) is REQUIRED under pnpm's isolated store: without it the
+      #     rebuild inspects the symlinked module, decides it is "already built"
+      #     and reports "Rebuild Complete" while leaving the Node-ABI binary in
+      #     place — a silent no-op, so the journeys would keep skipping. `-f`
+      #     unconditionally swaps in the Electron-ABI build (verified locally:
+      #     without `-f` 12 specs skip; with it all 18 run).
+      #   • `pnpm dlx` (not `npx`) matches the workflow's package manager and
+      #     resolves the addon through pnpm's node_modules layout.
+      #
+      # This MUST come after `pnpm build` and before `test:e2e`, and MUST NOT
+      # appear in any job that runs the Node-ABI vitest suite (it would then fail
+      # to load) — the vitest jobs above run BEFORE any rebuild.
+      - name: Rebuild better-sqlite3 for the Electron ABI
+        run: pnpm dlx @electron/rebuild -f -o better-sqlite3
+
       # Electron opens a real window, so Linux Chromium needs a display — xvfb-run
-      # supplies a headless one. The spec launches with ELECTRON_RENDERER_URL unset,
+      # supplies a headless one. macOS + Windows runners have a native display, so
+      # they run Playwright directly. Every launch sets ELECTRON_RENDERER_URL unset,
       # so the app loads the built file:// renderer under the PRODUCTION CSP.
-      - name: Prove the renderer cannot egress
+      - name: Run the e2e journeys + renderer-egress probe (Linux)
+        if: runner.os == 'Linux'
         run: xvfb-run -a pnpm test:e2e
+
+      - name: Run the e2e journeys + renderer-egress probe (macOS/Windows)
+        if: runner.os != 'Linux'
+        run: pnpm test:e2e
+
+      # Failure artifacts (#445 AC): on a failed run keep the Playwright HTML report
+      # (traces captured on first retry) and the test-results dir (screenshots
+      # captured only-on-failure). Per-OS artifact name so the three matrix legs
+      # never collide.
+      - name: Upload Playwright traces + screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore
