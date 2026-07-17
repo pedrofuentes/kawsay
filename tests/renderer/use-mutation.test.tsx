@@ -55,7 +55,7 @@ describe('useMutation — error surfacing (raw rejection preserved)', () => {
     const cause = new Error('write failed');
     const onError = vi.fn();
     const mutationFn = vi.fn(() => Promise.reject(cause));
-    const { result } = renderHook(() => useMutation<void, unknown>({ mutationFn, onError }));
+    const { result } = renderHook(() => useMutation<undefined, unknown>({ mutationFn, onError }));
 
     act(() => result.current.mutate(undefined));
     await waitFor(() => expect(result.current.status).toBe('error'));
