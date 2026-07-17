@@ -14,3 +14,8 @@
 *.css text eol=lf
 *.html text eol=lf
 *.sql text eol=lf
+
+# Binary fixtures — never apply text/eol normalization (would corrupt the bytes).
+*.jpg binary
+*.jpeg binary
+*.png binary
