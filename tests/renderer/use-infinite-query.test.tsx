@@ -130,12 +130,20 @@ describe('useInfiniteQuery — out-of-order race guard (latest-wins stale-drop)'
 });
 
 describe('useInfiniteQuery — unmount guard', () => {
-  it('does not commit (or warn) when a page resolves after unmount', async () => {
+  it('does not commit a page that resolves after unmount (no post-unmount render)', async () => {
     const pending = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const fetchPage = vi.fn(() => pending.promise);
-    const { result, unmount } = renderHook(() => useInfiniteQuery<string, string>({ key: 'k', fetchPage }));
+    // Record the `items` of EVERY render so we can assert no commit reflects the
+    // post-unmount page (rather than only checking for an absent console warning).
+    const rendered: string[][] = [];
+    const { result, unmount } = renderHook(() => {
+      const query = useInfiniteQuery<string, string>({ key: 'k', fetchPage });
+      rendered.push(query.items);
+      return query;
+    });
     expect(result.current.isFetching).toBe(true);
+    const rendersBeforeUnmount = rendered.length;
 
     unmount();
     await act(async () => {
@@ -143,6 +151,15 @@ describe('useInfiniteQuery — unmount guard', () => {
       await pending.promise;
       await Promise.resolve();
     });
+
+    // The fetch DID resolve — its resolution path ran, so the mounted-guard is
+    // what stopped the commit, not a never-settled promise.
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+    // No render ever reflected the resolved-after-unmount page: it was dropped.
+    expect(rendered.some((items) => items.includes('after-unmount'))).toBe(false);
+    // And no additional render happened after unmount at all.
+    expect(rendered.length).toBe(rendersBeforeUnmount);
+    // Belt-and-suspenders: no React "unmounted" warning either.
     const warned = errorSpy.mock.calls.some(
       (args) => typeof args[0] === 'string' && /unmounted/i.test(args[0]),
     );
@@ -360,5 +377,66 @@ describe('useInfiniteQuery — success-path generation guard (no pending-reload 
     });
     expect(result.current.items).toEqual(['LATER-wins']);
     expect(result.current.items).not.toContain('EARLIER-stale');
+  });
+});
+
+describe('useInfiniteQuery — page meta surfacing and reset', () => {
+  // The per-response metadata (e.g. a collection summary riding alongside its
+  // members) must be surfaced on the result, PERSIST while a loadMore is in
+  // flight (not blank out during more-loading), and be RESET to undefined the
+  // moment a reload/key-change starts refetching page 1.
+  it('surfaces meta, persists it across a loadMore, and resets it on reload', async () => {
+    interface Summary {
+      id: string;
+      name: string;
+    }
+    const summary: Summary = { id: 'c1', name: 'Sunday drives' };
+    const more = deferred<{ items: string[]; cursor: string | null; hasMore: boolean; meta: Summary }>();
+    const reloadPage = deferred<{ items: string[]; cursor: string | null; hasMore: boolean; meta: Summary }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve({ items: ['a'], cursor: 'c1', hasMore: true, meta: summary });
+      }
+      if (call === 2) return more.promise;
+      return reloadPage.promise;
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string, string, Summary>({ key: 'k', fetchPage }));
+
+    // Surfaced from the first page.
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.meta).toEqual(summary);
+
+    // A loadMore is in flight (loadingMore): meta must PERSIST, not reset.
+    act(() => {
+      result.current.loadMore();
+    });
+    expect(result.current.status).toBe('loadingMore');
+    expect(result.current.meta).toEqual(summary);
+
+    // The next page (carrying meta again) commits — meta stays surfaced.
+    await act(async () => {
+      more.resolve({ items: ['b'], cursor: null, hasMore: false, meta: summary });
+      await more.promise;
+    });
+    expect(result.current.items).toEqual(['a', 'b']);
+    expect(result.current.meta).toEqual(summary);
+
+    // A reload discards page 1: meta is RESET to undefined while the fresh first
+    // page loads (it must not linger from the previous view).
+    act(() => {
+      result.current.reload();
+    });
+    expect(result.current.status).toBe('loading');
+    expect(result.current.meta).toBeUndefined();
+
+    // Once the fresh page lands, its meta is surfaced again.
+    await act(async () => {
+      reloadPage.resolve({ items: ['fresh'], cursor: null, hasMore: false, meta: summary });
+      await reloadPage.promise;
+    });
+    expect(result.current.items).toEqual(['fresh']);
+    expect(result.current.meta).toEqual(summary);
   });
 });
