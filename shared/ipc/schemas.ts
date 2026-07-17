@@ -16,6 +16,14 @@ export const NAME_MAX_LENGTH = 200;
 export const QUERY_MAX_LENGTH = 512;
 export const CURSOR_MAX_LENGTH = 4096;
 export const PAGE_LIMIT_MAX = 200;
+/**
+ * Generous defence-in-depth ceiling on a search's `offset` (#482 — unlike `limit`,
+ * this had no upper bound at all). Mirrors the reasoning of the sibling corpus
+ * caps ({@link SUGGESTIONS_VIEW_MAX}/`COLLECTIONS_LIST_MAX`): far above any
+ * realistic loved-one's archive, so it never rejects a real "show more" click,
+ * only a huge/adversarial offset that could never correspond to a real page.
+ */
+export const SEARCH_OFFSET_MAX = 100_000;
 export const ITEM_CARD_TITLE_MAX_LENGTH = 200;
 export const ITEM_CARD_DESCRIPTION_MAX_LENGTH = 4096;
 

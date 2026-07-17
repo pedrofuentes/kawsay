@@ -20,6 +20,7 @@ import {
   pathSchema,
   searchResultSchema,
   searchDaySchema,
+  SEARCH_OFFSET_MAX,
   settingsPatchSchema,
   settingsSchema,
   sourceTypeSchema,
@@ -276,7 +277,9 @@ export const ipcContract = {
     request: z.strictObject({
       query: z.string().min(1).max(QUERY_MAX_LENGTH),
       limit: z.number().int().min(1).max(PAGE_LIMIT_MAX).default(50),
-      offset: z.number().int().nonnegative().default(0),
+      // Bounded like `limit` (#482) — a huge offset can never correspond to a real
+      // page and is refused at the trust boundary rather than reaching the query.
+      offset: z.number().int().nonnegative().max(SEARCH_OFFSET_MAX).default(0),
       // Optional connector filter (AC-7) — narrows the match set to one source.
       // Omitted ⇒ every source, so the channel stays backward-compatible.
       source: sourceTypeSchema.optional(),
