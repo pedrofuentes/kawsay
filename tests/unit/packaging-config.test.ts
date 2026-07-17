@@ -849,6 +849,18 @@ describe('workflow checkout steps carry persist-credentials: false (defense-in-d
       assertPersistCredentialsFalse(block);
     }
   });
+
+  it('pins @electron/rebuild to an explicit version in the ac4-egress rebuild step (supply-chain: no floating dlx)', () => {
+    // `pnpm dlx @electron/rebuild` with no version resolves "latest" at job time,
+    // ignoring the lockfile pin — a supply-chain gap on the renderer-egress leg,
+    // which (unlike the os-deny legs) runs under no OS egress firewall. Pin the
+    // version to track the lockfile (@electron/rebuild@4.0.4). Sentinel #511.
+    const invocations = ac4EgressYml.match(/pnpm dlx @electron\/rebuild\S*/g) ?? [];
+    expect(invocations.length).toBeGreaterThan(0);
+    for (const cmd of invocations) {
+      expect(cmd).toMatch(/^pnpm dlx @electron\/rebuild@\d+\.\d+\.\d+$/);
+    }
+  });
 });
 
 describe('inline huggingface_hub install guard resists bypass forms (#391)', () => {
