@@ -259,3 +259,106 @@ describe('useInfiniteQuery — disabled/idle', () => {
     expect(fetchPage).not.toHaveBeenCalled();
   });
 });
+
+describe('useInfiniteQuery — single-fetch mutex holds under supersession', () => {
+  // A superseded fetch that settles late must NOT clear the `inFlight` mutex out
+  // from under the newer fetch that now owns it — otherwise the "at most one fetch
+  // in flight" invariant breaks and a reload spawns a redundant concurrent fetch
+  // instead of deferring as a pending reload. Reachable via a mid-flight
+  // disable→re-enable (the disable force-clears the mutex, re-enable starts a
+  // second fetch, and the ORIGINAL's late settle would clear the mutex again).
+  it('a superseded fetch settling after a disable/re-enable does not open the mutex under the live fetch', async () => {
+    const first = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    const second = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      if (call === 1) return first.promise;
+      if (call === 2) return second.promise;
+      return Promise.resolve({ items: ['third'], cursor: null, hasMore: false });
+    });
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useInfiniteQuery<string, string>({ key: 'k', enabled, fetchPage }),
+      { initialProps: { enabled: true } },
+    );
+
+    // The mount fetch (call 1) is in flight.
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+
+    // Disable mid-flight (force-clears the mutex), then re-enable: a fresh fetch
+    // (call 2) starts and now owns the mutex.
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+
+    // The ORIGINAL (superseded) fetch settles last. Its `finally` must NOT touch
+    // the mutex the live second fetch holds.
+    await act(async () => {
+      first.resolve({ items: ['stale'], cursor: null, hasMore: false });
+      await first.promise;
+    });
+
+    // A reload must now DEFER behind the live second fetch — not spawn a concurrent
+    // third fetch. With the mutex intact, no new fetch fires yet.
+    act(() => {
+      result.current.reload();
+    });
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+
+    // Settling the second fetch clears the mutex and runs the remembered reload —
+    // exactly ONE further fetch, whose page wins.
+    await act(async () => {
+      second.resolve({ items: ['second'], cursor: null, hasMore: false });
+      await second.promise;
+    });
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current.items).toEqual(['third']));
+  });
+});
+
+describe('useInfiniteQuery — success-path generation guard (no pending-reload masking)', () => {
+  // Independently pins the SUCCESS-path drop of a superseded settle, WITHOUT a
+  // pending-reload re-run masking the transient. Two fetches run concurrently
+  // (via a mid-flight disable→re-enable, so no reload/pendingReload is involved);
+  // the LATER one commits, and when the EARLIER one resolves last it must be
+  // dropped by the generation guard alone — never clobbering the newer result.
+  it('an earlier fetch resolving after a later one is dropped by the guard, not committed', async () => {
+    const slowEarlier = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    const fastLater = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      return call === 1 ? slowEarlier.promise : fastLater.promise;
+    });
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useInfiniteQuery<string, string>({ key: 'k', enabled, fetchPage }),
+      { initialProps: { enabled: true } },
+    );
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+
+    // Disable then re-enable mid-flight: the earlier fetch is superseded (its
+    // generation is now stale) and a second, concurrent fetch starts.
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+
+    // The LATER fetch resolves first — its result is committed.
+    await act(async () => {
+      fastLater.resolve({ items: ['LATER-wins'], cursor: null, hasMore: false });
+      await fastLater.promise;
+    });
+    expect(result.current.items).toEqual(['LATER-wins']);
+
+    // The EARLIER fetch resolves last. No reload was ever requested, so nothing
+    // re-runs to mask a bug: the success-path generation guard is the ONLY thing
+    // that must drop this stale settle. If it were removed, this commit would
+    // clobber the newer result.
+    await act(async () => {
+      slowEarlier.resolve({ items: ['EARLIER-stale'], cursor: null, hasMore: false });
+      await slowEarlier.promise;
+      await Promise.resolve();
+    });
+    expect(result.current.items).toEqual(['LATER-wins']);
+    expect(result.current.items).not.toContain('EARLIER-stale');
+  });
+});
