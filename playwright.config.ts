@@ -13,12 +13,21 @@ export default defineConfig({
   // One worker: the spec launches a real Electron process and asserts on a shared
   // window, so serial execution keeps the run deterministic.
   workers: 1,
-  reporter: process.env['CI'] ? 'github' : 'list',
+  // In CI, pair the inline GitHub annotations with the HTML reporter so a failed
+  // run ships a browsable `playwright-report/` (embedding the on-first-retry trace
+  // + only-on-failure screenshot) as an uploadable artifact (#445). `open: 'never'`
+  // keeps it from trying to spawn a browser on the headless runner.
+  reporter: process.env['CI']
+    ? [['github'], ['html', { open: 'never' }]]
+    : 'list',
   // Electron launch + first-window load is heavier than a bare browser page.
   timeout: 60_000,
   expect: { timeout: 15_000 },
   use: {
     trace: 'on-first-retry',
+    // Keep a screenshot of the exact failing state so a red CI run ships a visual
+    // artifact alongside the trace (#445). No cost on green runs.
+    screenshot: 'only-on-failure',
   },
   // A single Electron project. Tests call `_electron.launch()` directly, so no
   // browser `use: { browserName }` is set and no browser binary is downloaded.
