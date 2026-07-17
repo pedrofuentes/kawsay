@@ -1,0 +1,442 @@
+// Direct tests for the shared `useInfiniteQuery` accumulator primitive (#486). The
+// append/paginated sibling of `useQuery`: a fetch-on-key read whose `loadMore`
+// APPENDS the next page onto the accumulated list, with the SAME monotonic
+// generation + mounted + abort race guard (a superseded in-flight page is dropped
+// on settle, never clobbering a newer result). The load-bearing behaviours pinned
+// here are the ones the migrated hooks (useTimeline #432, useCollectionItems)
+// depend on: append across pages, latest-wins stale-drop, the unmount guard,
+// reload-from-page-1, and the pending-refetch-while-in-flight re-run (#432).
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { useInfiniteQuery } from '@renderer/lib/use-infinite-query';
+
+/** A hand-rolled deferred so a test can hold a page fetch IN FLIGHT on demand. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: Error) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('useInfiniteQuery — append pagination', () => {
+  it('appends each page onto the accumulated list across loadMore, threading the cursor', async () => {
+    const fetchPage = vi.fn(async ({ mode, cursor }: { mode: 'initial' | 'more'; cursor: string | null }) => {
+      if (mode === 'initial') return { items: ['a1', 'a2'], cursor: 'c1', hasMore: true };
+      if (cursor === 'c1') return { items: ['b1'], cursor: 'c2', hasMore: true };
+      return { items: ['d1'], cursor: null, hasMore: false };
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string, string>({ key: 'k', fetchPage }));
+
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.items).toEqual(['a1', 'a2']);
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['a1', 'a2', 'b1']));
+    expect(result.current.hasMore).toBe(true);
+    // The second page was requested with the cursor the first page returned.
+    expect(fetchPage.mock.calls[1]?.[0]).toMatchObject({ mode: 'more', cursor: 'c1' });
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['a1', 'a2', 'b1', 'd1']));
+    expect(result.current.hasMore).toBe(false);
+  });
+
+  it('loadMore is inert once hasMore is exhausted', async () => {
+    const fetchPage = vi.fn(async () => ({ items: ['only'], cursor: null, hasMore: false }));
+    const { result } = renderHook(() => useInfiniteQuery<string, string>({ key: 'k', fetchPage }));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useInfiniteQuery — offset accumulator shape (collections)', () => {
+  it('passes the accumulated item count as `loaded` so an offset fetcher can page', async () => {
+    const fetchPage = vi.fn(async ({ mode, loaded }: { mode: 'initial' | 'more'; loaded: number }) => {
+      const offset = mode === 'more' ? loaded : 0;
+      const items = offset === 0 ? ['m1', 'm2'] : ['m3'];
+      const total = 3;
+      return { items, cursor: null, hasMore: offset + items.length < total };
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string>({ key: 'k', fetchPage }));
+    await waitFor(() => expect(result.current.items).toEqual(['m1', 'm2']));
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['m1', 'm2', 'm3']));
+    expect(fetchPage.mock.calls[1]?.[0]).toMatchObject({ mode: 'more', loaded: 2 });
+    expect(result.current.hasMore).toBe(false);
+  });
+});
+
+describe('useInfiniteQuery — out-of-order race guard (latest-wins stale-drop)', () => {
+  it('drops a superseded in-flight loadMore whose reload started after it', async () => {
+    const more = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    const reloadPage = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      if (call === 1) return Promise.resolve({ items: ['p1'], cursor: 'c1', hasMore: true });
+      if (call === 2) return more.promise;
+      return reloadPage.promise;
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string, string>({ key: 'k', fetchPage }));
+    await waitFor(() => expect(result.current.items).toEqual(['p1']));
+
+    // A loadMore is kicked off and held in flight.
+    act(() => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+
+    // A reload arrives while that loadMore is still pending: it must supersede it
+    // (bump the generation) and be remembered, not fired immediately.
+    act(() => {
+      result.current.reload();
+    });
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+
+    // Settle the now-superseded loadMore: its page must NOT be appended.
+    await act(async () => {
+      more.resolve({ items: ['STALE'], cursor: null, hasMore: false });
+      await more.promise;
+    });
+    // The remembered reload now runs.
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      reloadPage.resolve({ items: ['fresh'], cursor: null, hasMore: false });
+      await reloadPage.promise;
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['fresh']));
+    expect(result.current.items).not.toContain('STALE');
+  });
+});
+
+describe('useInfiniteQuery — unmount guard', () => {
+  it('does not commit a page that resolves after unmount (no post-unmount render)', async () => {
+    const pending = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchPage = vi.fn(() => pending.promise);
+    // Record the `items` of EVERY render so we can assert no commit reflects the
+    // post-unmount page (rather than only checking for an absent console warning).
+    const rendered: string[][] = [];
+    const { result, unmount } = renderHook(() => {
+      const query = useInfiniteQuery<string, string>({ key: 'k', fetchPage });
+      rendered.push(query.items);
+      return query;
+    });
+    expect(result.current.isFetching).toBe(true);
+    const rendersBeforeUnmount = rendered.length;
+
+    unmount();
+    await act(async () => {
+      pending.resolve({ items: ['after-unmount'], cursor: null, hasMore: false });
+      await pending.promise;
+      await Promise.resolve();
+    });
+
+    // The fetch DID resolve — its resolution path ran, so the mounted-guard is
+    // what stopped the commit, not a never-settled promise.
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+    // No render ever reflected the resolved-after-unmount page: it was dropped.
+    expect(rendered.some((items) => items.includes('after-unmount'))).toBe(false);
+    // And no additional render happened after unmount at all.
+    expect(rendered.length).toBe(rendersBeforeUnmount);
+    // Belt-and-suspenders: no React "unmounted" warning either.
+    const warned = errorSpy.mock.calls.some(
+      (args) => typeof args[0] === 'string' && /unmounted/i.test(args[0]),
+    );
+    expect(warned).toBe(false);
+  });
+});
+
+describe('useInfiniteQuery — reload from page 1', () => {
+  it('reload discards the accumulated pages and refetches from the first page', async () => {
+    let call = 0;
+    const fetchPage = vi.fn(({ mode }: { mode: 'initial' | 'more' }) => {
+      call += 1;
+      if (mode === 'initial' && call === 1) return Promise.resolve({ items: ['a'], cursor: 'c1', hasMore: true });
+      if (mode === 'more') return Promise.resolve({ items: ['b'], cursor: 'c2', hasMore: true });
+      return Promise.resolve({ items: ['fresh'], cursor: null, hasMore: false });
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string, string>({ key: 'k', fetchPage }));
+    await waitFor(() => expect(result.current.items).toEqual(['a']));
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['a', 'b']));
+
+    await act(async () => {
+      result.current.reload();
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['fresh']));
+    expect(result.current.hasMore).toBe(false);
+  });
+});
+
+describe('useInfiniteQuery — pending-refetch-while-in-flight re-run (#432)', () => {
+  it('re-runs a reload requested while the initial fetch is still in flight', async () => {
+    const mount = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      if (call === 1) return mount.promise;
+      return Promise.resolve({ items: ['refreshed'], cursor: null, hasMore: false });
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string, string>({ key: 'k', fetchPage }));
+
+    // The mount fetch is in flight (deferred).
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe('loading');
+
+    // A reload arrives while the mount fetch is still pending. The mutex must not
+    // silently drop it — it must be remembered and re-run once the fetch settles.
+    act(() => {
+      result.current.reload();
+    });
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+
+    // Settle the in-flight mount fetch: its result is superseded and dropped.
+    await act(async () => {
+      mount.resolve({ items: ['stale'], cursor: null, hasMore: false });
+      await mount.promise;
+    });
+
+    // The remembered reload now runs and its page wins.
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.items).toEqual(['refreshed']));
+    expect(result.current.items).not.toContain('stale');
+  });
+});
+
+describe('useInfiniteQuery — error surfacing', () => {
+  it('surfaces the RAW rejection and keeps prior items when a loadMore fails, then retries', async () => {
+    let call = 0;
+    const cause = new Error('mid-scroll glitch');
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      if (call === 1) return Promise.resolve({ items: ['a'], cursor: 'c1', hasMore: true });
+      if (call === 2) return Promise.reject(cause);
+      return Promise.resolve({ items: ['b'], cursor: null, hasMore: false });
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string, string>({ key: 'k', fetchPage }));
+    await waitFor(() => expect(result.current.items).toEqual(['a']));
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    // Raw cause surfaced verbatim; the already-loaded page and cursor are kept so
+    // the same next page can be retried.
+    expect(result.current.error).toBe(cause);
+    expect(result.current.items).toEqual(['a']);
+    expect(result.current.hasMore).toBe(true);
+
+    await act(async () => {
+      result.current.loadMore();
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['a', 'b']));
+    expect(result.current.status).toBe('ready');
+    expect(result.current.error).toBeUndefined();
+  });
+});
+
+describe('useInfiniteQuery — disabled/idle', () => {
+  it('does not fetch while key is null and stays idle', async () => {
+    const fetchPage = vi.fn(async () => ({ items: ['x'], cursor: null, hasMore: false }));
+    const { result } = renderHook(() => useInfiniteQuery<string, string>({ key: null, fetchPage }));
+
+    expect(result.current.status).toBe('idle');
+    await Promise.resolve();
+    expect(fetchPage).not.toHaveBeenCalled();
+    expect(result.current.items).toEqual([]);
+    // Inert actions never throw or fetch while disabled.
+    act(() => {
+      result.current.loadMore();
+      result.current.reload();
+    });
+    expect(fetchPage).not.toHaveBeenCalled();
+  });
+});
+
+describe('useInfiniteQuery — single-fetch mutex holds under supersession', () => {
+  // A superseded fetch that settles late must NOT clear the `inFlight` mutex out
+  // from under the newer fetch that now owns it — otherwise the "at most one fetch
+  // in flight" invariant breaks and a reload spawns a redundant concurrent fetch
+  // instead of deferring as a pending reload. Reachable via a mid-flight
+  // disable→re-enable (the disable force-clears the mutex, re-enable starts a
+  // second fetch, and the ORIGINAL's late settle would clear the mutex again).
+  it('a superseded fetch settling after a disable/re-enable does not open the mutex under the live fetch', async () => {
+    const first = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    const second = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      if (call === 1) return first.promise;
+      if (call === 2) return second.promise;
+      return Promise.resolve({ items: ['third'], cursor: null, hasMore: false });
+    });
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useInfiniteQuery<string, string>({ key: 'k', enabled, fetchPage }),
+      { initialProps: { enabled: true } },
+    );
+
+    // The mount fetch (call 1) is in flight.
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+
+    // Disable mid-flight (force-clears the mutex), then re-enable: a fresh fetch
+    // (call 2) starts and now owns the mutex.
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+
+    // The ORIGINAL (superseded) fetch settles last. Its `finally` must NOT touch
+    // the mutex the live second fetch holds.
+    await act(async () => {
+      first.resolve({ items: ['stale'], cursor: null, hasMore: false });
+      await first.promise;
+    });
+
+    // A reload must now DEFER behind the live second fetch — not spawn a concurrent
+    // third fetch. With the mutex intact, no new fetch fires yet.
+    act(() => {
+      result.current.reload();
+    });
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+
+    // Settling the second fetch clears the mutex and runs the remembered reload —
+    // exactly ONE further fetch, whose page wins.
+    await act(async () => {
+      second.resolve({ items: ['second'], cursor: null, hasMore: false });
+      await second.promise;
+    });
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current.items).toEqual(['third']));
+  });
+});
+
+describe('useInfiniteQuery — success-path generation guard (no pending-reload masking)', () => {
+  // Independently pins the SUCCESS-path drop of a superseded settle, WITHOUT a
+  // pending-reload re-run masking the transient. Two fetches run concurrently
+  // (via a mid-flight disable→re-enable, so no reload/pendingReload is involved);
+  // the LATER one commits, and when the EARLIER one resolves last it must be
+  // dropped by the generation guard alone — never clobbering the newer result.
+  it('an earlier fetch resolving after a later one is dropped by the guard, not committed', async () => {
+    const slowEarlier = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    const fastLater = deferred<{ items: string[]; cursor: string | null; hasMore: boolean }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      return call === 1 ? slowEarlier.promise : fastLater.promise;
+    });
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useInfiniteQuery<string, string>({ key: 'k', enabled, fetchPage }),
+      { initialProps: { enabled: true } },
+    );
+    expect(fetchPage).toHaveBeenCalledTimes(1);
+
+    // Disable then re-enable mid-flight: the earlier fetch is superseded (its
+    // generation is now stale) and a second, concurrent fetch starts.
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    await waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(2));
+
+    // The LATER fetch resolves first — its result is committed.
+    await act(async () => {
+      fastLater.resolve({ items: ['LATER-wins'], cursor: null, hasMore: false });
+      await fastLater.promise;
+    });
+    expect(result.current.items).toEqual(['LATER-wins']);
+
+    // The EARLIER fetch resolves last. No reload was ever requested, so nothing
+    // re-runs to mask a bug: the success-path generation guard is the ONLY thing
+    // that must drop this stale settle. If it were removed, this commit would
+    // clobber the newer result.
+    await act(async () => {
+      slowEarlier.resolve({ items: ['EARLIER-stale'], cursor: null, hasMore: false });
+      await slowEarlier.promise;
+      await Promise.resolve();
+    });
+    expect(result.current.items).toEqual(['LATER-wins']);
+    expect(result.current.items).not.toContain('EARLIER-stale');
+  });
+});
+
+describe('useInfiniteQuery — page meta surfacing and reset', () => {
+  // The per-response metadata (e.g. a collection summary riding alongside its
+  // members) must be surfaced on the result, PERSIST while a loadMore is in
+  // flight (not blank out during more-loading), and be RESET to undefined the
+  // moment a reload/key-change starts refetching page 1.
+  it('surfaces meta, persists it across a loadMore, and resets it on reload', async () => {
+    interface Summary {
+      id: string;
+      name: string;
+    }
+    const summary: Summary = { id: 'c1', name: 'Sunday drives' };
+    const more = deferred<{ items: string[]; cursor: string | null; hasMore: boolean; meta: Summary }>();
+    const reloadPage = deferred<{ items: string[]; cursor: string | null; hasMore: boolean; meta: Summary }>();
+    let call = 0;
+    const fetchPage = vi.fn(() => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve({ items: ['a'], cursor: 'c1', hasMore: true, meta: summary });
+      }
+      if (call === 2) return more.promise;
+      return reloadPage.promise;
+    });
+    const { result } = renderHook(() => useInfiniteQuery<string, string, Summary>({ key: 'k', fetchPage }));
+
+    // Surfaced from the first page.
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(result.current.meta).toEqual(summary);
+
+    // A loadMore is in flight (loadingMore): meta must PERSIST, not reset.
+    act(() => {
+      result.current.loadMore();
+    });
+    expect(result.current.status).toBe('loadingMore');
+    expect(result.current.meta).toEqual(summary);
+
+    // The next page (carrying meta again) commits — meta stays surfaced.
+    await act(async () => {
+      more.resolve({ items: ['b'], cursor: null, hasMore: false, meta: summary });
+      await more.promise;
+    });
+    expect(result.current.items).toEqual(['a', 'b']);
+    expect(result.current.meta).toEqual(summary);
+
+    // A reload discards page 1: meta is RESET to undefined while the fresh first
+    // page loads (it must not linger from the previous view).
+    act(() => {
+      result.current.reload();
+    });
+    expect(result.current.status).toBe('loading');
+    expect(result.current.meta).toBeUndefined();
+
+    // Once the fresh page lands, its meta is surfaced again.
+    await act(async () => {
+      reloadPage.resolve({ items: ['fresh'], cursor: null, hasMore: false, meta: summary });
+      await reloadPage.promise;
+    });
+    expect(result.current.items).toEqual(['fresh']);
+    expect(result.current.meta).toEqual(summary);
+  });
+});

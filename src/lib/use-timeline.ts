@@ -3,10 +3,17 @@
 // the opaque cursor the main process returns; the renderer never builds offsets
 // or touches the database. A missing bridge (browser preview) resolves to a calm
 // `unavailable` state rather than throwing, mirroring useImport/useLibrary.
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+//
+// The append accumulator, the inFlight+generation race guard, and the #432
+// pending-refetch-while-in-flight re-run now all live in the shared
+// {@link useInfiniteQuery} primitive (#486). `dataVersion` is folded into the
+// query key, so a "catalog data changed" bump becomes a key change that discards
+// the pages and refetches page 1 — deferred behind any in-flight fetch and
+// re-run once it settles, exactly the #432 behaviour, now audited in one place.
 import type { ItemCardDTO } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
 import { ipcErrorCopy } from './ipc-error-copy';
+import { useInfiniteQuery } from './use-infinite-query';
 
 export type TimelineStatus = 'unavailable' | 'loading' | 'loadingMore' | 'ready' | 'error';
 
@@ -37,178 +44,53 @@ export interface UseTimelineResult {
   reload: () => void;
 }
 
-interface TimelineState {
-  items: ItemCardDTO[];
-  status: TimelineStatus;
-  error: string | null;
-  cursor: string | null;
-  hasMore: boolean;
-}
-
-type Action =
-  | { type: 'load-start' }
-  | { type: 'load-more-start' }
-  | { type: 'page'; items: ItemCardDTO[]; nextCursor: string | null; append: boolean }
-  | { type: 'fail'; error: string };
-
-function initialState(available: boolean): TimelineState {
-  return {
-    items: [],
-    status: available ? 'loading' : 'unavailable',
-    error: null,
-    cursor: null,
-    hasMore: false,
-  };
-}
-
-function reducer(state: TimelineState, action: Action): TimelineState {
-  switch (action.type) {
-    case 'load-start':
-      return { items: [], status: 'loading', error: null, cursor: null, hasMore: false };
-    case 'load-more-start':
-      // Allow a retry from the error state too: a mid-scroll page failed but the
-      // cursor was preserved, so the same next page can be re-requested. Clear the
-      // stale message while the retry is in flight.
-      return (state.status === 'ready' || state.status === 'error') && state.hasMore
-        ? { ...state, status: 'loadingMore', error: null }
-        : state;
-    case 'page': {
-      const items = action.append ? [...state.items, ...action.items] : action.items;
-      return {
-        items,
-        status: 'ready',
-        error: null,
-        cursor: action.nextCursor,
-        hasMore: action.nextCursor !== null,
-      };
-    }
-    case 'fail':
-      return { ...state, status: 'error', error: action.error };
-    default:
-      return state;
-  }
-}
-
 export function useTimeline(options: UseTimelineOptions = {}): UseTimelineResult {
   const pageSize = options.pageSize ?? DEFAULT_TIMELINE_PAGE_SIZE;
   const dataVersion = options.dataVersion ?? 0;
   const api = useKawsayApi();
-  const [state, dispatch] = useReducer(reducer, api !== undefined, initialState);
 
-  // Mirror state into a ref so the fetcher reads fresh cursor/status without being
-  // re-created on every render (which would re-trigger the mount effect).
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const inFlight = useRef(false);
-  // A page-1 refetch (`dataVersion` bump, or `reload`) requested WHILE a fetch is
-  // already in flight must not be lost to the `inFlight` mutex: remember it and
-  // run it once the in-flight fetch settles (#432 race). Without this the
-  // just-imported memories stay invisible until an app relaunch.
-  const pendingRefetch = useRef(false);
-  // Monotonic fetch generation, bumped the moment a refetch SUPERSEDES an
-  // in-flight fetch. Each fetch captures its generation when it starts; a result
-  // whose generation is no longer current is dropped on settle, so a stale
-  // in-flight page (e.g. a background `loadMore`) can never clobber the newer
-  // refetch's result (the seq-guard idiom from use-favourite/use-categorization).
-  const generation = useRef(0);
-  // A stable indirection so `fetchPage` can re-invoke itself from its own
-  // `finally` (to run a pending refetch) without listing itself as a dep.
-  const fetchPageRef = useRef<(mode: 'initial' | 'more') => Promise<void>>();
-
-  const fetchPage = useCallback(
-    async (mode: 'initial' | 'more'): Promise<void> => {
+  const query = useInfiniteQuery<ItemCardDTO, string>({
+    // `null` while the bridge is missing keeps the query idle (mapped to
+    // `unavailable`). Folding `dataVersion` into the key turns a catalog-changed
+    // bump into a page-1 refetch (deferred behind any in-flight fetch, #432).
+    key: api === undefined ? null : `timeline:${dataVersion}`,
+    fetchPage: async ({ mode, cursor }) => {
+      // `key` is non-null exactly when `api` is defined, so this only runs with a
+      // live bridge.
       if (api === undefined) {
-        return;
+        return Promise.reject(new Error('bridge unavailable'));
       }
-      if (inFlight.current) {
-        // A fetch is already running. A page-1 refetch can't be dropped: remember
-        // it and invalidate the in-flight fetch's generation so its (now stale)
-        // result won't clobber the reload we run once it settles. A `more` during
-        // flight is still an inert no-op — the initial fetch owns page 1.
-        if (mode === 'initial') {
-          pendingRefetch.current = true;
-          generation.current += 1;
-        }
-        return;
-      }
-      const current = stateRef.current;
-      if (
-        mode === 'more' &&
-        (!current.hasMore ||
-          current.cursor === null ||
-          // 'ready' is the normal case; 'error' lets the user retry a page that
-          // failed mid-scroll (the cursor was kept). 'loading'/'loadingMore' are
-          // already covered by the inFlight guard above.
-          (current.status !== 'ready' && current.status !== 'error'))
-      ) {
-        return;
-      }
-
-      inFlight.current = true;
-      const myGeneration = generation.current;
-      dispatch(mode === 'initial' ? { type: 'load-start' } : { type: 'load-more-start' });
-      try {
-        const request =
-          mode === 'more' && current.cursor !== null
-            ? { limit: pageSize, cursor: current.cursor }
-            : { limit: pageSize };
-        const result = await api.getTimeline(request);
-        // Drop a superseded fetch's result entirely: a refetch requested while we
-        // were in flight already bumped the generation, so applying this page
-        // would clobber the newer reload with stale data.
-        if (myGeneration === generation.current) {
-          dispatch({
-            type: 'page',
-            items: result.items,
-            nextCursor: result.nextCursor,
-            append: mode === 'more',
-          });
-        }
-      } catch (cause) {
-        if (myGeneration === generation.current) {
-          dispatch({ type: 'fail', error: ipcErrorCopy(cause) });
-        }
-      } finally {
-        inFlight.current = false;
-        // A refetch that arrived mid-flight was remembered, not run — run it now
-        // that the mutex is clear. It starts a fresh page-1 fetch at the current
-        // (already-bumped) generation, so it strictly succeeds the stale one.
-        if (pendingRefetch.current) {
-          pendingRefetch.current = false;
-          void fetchPageRef.current?.('initial');
-        }
-      }
+      const request =
+        mode === 'more' && cursor !== null ? { limit: pageSize, cursor } : { limit: pageSize };
+      const result = await api.getTimeline(request);
+      return {
+        items: result.items,
+        cursor: result.nextCursor,
+        hasMore: result.nextCursor !== null,
+      };
     },
-    [api, pageSize],
-  );
-  fetchPageRef.current = fetchPage;
+  });
 
-  // Fetch page 1 on mount, and again whenever `dataVersion` changes — a real
-  // catalog mutation (a completed import; #432 review). `fetchPage` is stable
-  // across `dataVersion` ticks (its deps are only api + pageSize), so this
-  // fires exactly once per genuine change, never on an incidental re-render. A
-  // consumer that passes no `dataVersion` pins it at 0, so this reduces to the
-  // original mount-only fetch.
-  useEffect(() => {
-    if (api !== undefined) {
-      void fetchPage('initial');
-    }
-  }, [api, fetchPage, dataVersion]);
-
-  const loadMore = useCallback(() => {
-    void fetchPage('more');
-  }, [fetchPage]);
-
-  const reload = useCallback(() => {
-    void fetchPage('initial');
-  }, [fetchPage]);
+  // Map the generic status onto the timeline's calm vocabulary. `idle` only arises
+  // when the bridge is missing, so it reads as `unavailable`.
+  const status: TimelineStatus =
+    api === undefined
+      ? 'unavailable'
+      : query.status === 'ready'
+        ? 'ready'
+        : query.status === 'loadingMore'
+          ? 'loadingMore'
+          : query.status === 'error'
+            ? 'error'
+            : 'loading';
 
   return {
-    items: state.items,
-    status: state.status,
-    error: state.error,
-    hasMore: state.hasMore,
-    loadMore,
-    reload,
+    items: query.items,
+    status,
+    // Map the raw cause to copy the same way the bespoke reducer did.
+    error: query.error != null ? ipcErrorCopy(query.error) : null,
+    hasMore: query.hasMore,
+    loadMore: query.loadMore,
+    reload: query.reload,
   };
 }
