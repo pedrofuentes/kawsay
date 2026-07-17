@@ -72,6 +72,33 @@ describe('ipcErrorPayload encode/decode (redacted wire shape, #440)', () => {
     expect(decodeIpcErrorMessage(smuggled)).toBeNull();
     expect(ipcErrorPayloadSchema.safeParse({ code: 'x', name: 'y', message: 'z' }).success).toBe(false);
   });
+
+  it('accepts every stable code (ERR_SCREAMING_SNAKE) and a Node errno-style code (#481)', () => {
+    for (const code of Object.values(IPC_ERROR_CODES)) {
+      expect(ipcErrorPayloadSchema.safeParse({ code, name: 'Error' }).success).toBe(true);
+    }
+    // Node errno-style codes the redaction gate also carries verbatim (#440) — plain
+    // uppercase + digits + underscore, same charset as the static codes above.
+    expect(ipcErrorPayloadSchema.safeParse({ code: 'EACCES', name: 'Error' }).success).toBe(true);
+    expect(ipcErrorPayloadSchema.safeParse({ code: 'ERR_NATIVE_MODULE', name: 'Error' }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects a code outside the ERR_SCREAMING_SNAKE charset (#481 defense-in-depth)', () => {
+    // Only `code` is charset-guarded — `name` legitimately varies (PascalCase error
+    // class names like `CatalogSessionError`/`ZodError`), so it stays length-only.
+    expect(
+      ipcErrorPayloadSchema.safeParse({ code: 'ERR_IPC_BAD-REQUEST', name: 'Error' }).success,
+    ).toBe(false);
+    expect(ipcErrorPayloadSchema.safeParse({ code: 'err_ipc_handler_fault', name: 'Error' }).success).toBe(
+      false,
+    );
+    expect(
+      ipcErrorPayloadSchema.safeParse({ code: 'ERR_IPC_HANDLER_FAULT\n/Users/alice', name: 'Error' })
+        .success,
+    ).toBe(false);
+  });
 });
 
 describe('makeIpcError (main-side redaction gate, #440)', () => {

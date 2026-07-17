@@ -307,6 +307,37 @@ describe('registerIpcHandlers (central IPC trust boundary, ARCHITECTURE §2.3/§
     }
   });
 
+  it('rejects a response-schema violation with a REDACTED BAD_RESPONSE envelope (#481 D2)', async () => {
+    // The handler answers with a shape the response schema forbids (an empty
+    // `version` fails the contract's `min(1)`) — main must redact the fault
+    // before it crosses, exactly like the BAD_REQUEST/HANDLER_FAULT branches (#440).
+    const badHandler = vi.fn(() => ({ version: '' }));
+    const ipcMain = fakeIpcMain();
+    registerIpcHandlers(
+      ipcMain,
+      { ...otherHandlers, [APP_GET_VERSION]: badHandler },
+      trustedSenderOptions,
+    );
+    const listener = ipcMain.listeners.get(APP_GET_VERSION);
+
+    const rejection = await (listener?.(trustedEvent, {}) ?? Promise.resolve()).then(
+      () => {
+        throw new Error('expected the listener to reject');
+      },
+      (e: unknown) => e,
+    );
+    expect(rejection).toBeInstanceOf(Error);
+    const payload = decodeIpcErrorMessage((rejection as Error).message);
+    expect(payload?.code).toBe(IPC_ERROR_CODES.BAD_RESPONSE);
+    const rejectionSerialized = `${(rejection as Error).message}\n${(rejection as Error).stack ?? ''}`;
+    // Never the raw zod validation detail (the offending field/constraint) —
+    // only the redacted {code, name} rides the envelope.
+    expect(rejectionSerialized).not.toContain('too_small');
+    expect(rejectionSerialized).not.toContain('String must contain');
+    expect(rejectionSerialized).not.toMatch(/"version"/);
+    expect(badHandler).toHaveBeenCalledTimes(1);
+  });
+
   it('registers exactly the contract channel set — the log shim adds no channel (#373)', () => {
     const ipcMain = fakeIpcMain();
     registerIpcHandlers(ipcMain, handlers, trustedSenderOptions);
