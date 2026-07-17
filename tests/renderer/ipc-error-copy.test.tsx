@@ -4,6 +4,9 @@ import type { ReactNode } from 'react';
 import { KawsayApiProvider } from '@renderer/lib/kawsay-api';
 import { LibraryProvider, useLibrary } from '@renderer/lib/library';
 import { ipcErrorCopy } from '@renderer/lib/ipc-error-copy';
+import { useTimeline } from '@renderer/lib/use-timeline';
+import { useCollectionItems } from '@renderer/lib/use-collections';
+import { useImport } from '@renderer/lib/use-import';
 import { IPC_ERROR_CODES, IpcError } from '@shared/ipc/error-envelope';
 import { makeFakeApi } from './support/fake-api';
 import type { FakeApi } from './support/fake-api';
@@ -15,6 +18,14 @@ function wrapper(api?: FakeApi) {
         <LibraryProvider>{children}</LibraryProvider>
       </KawsayApiProvider>
     );
+  };
+}
+
+/** A bare `KawsayApiProvider`-only wrapper for hooks that don't need Library
+ *  context (useTimeline / useCollectionItems / useImport). */
+function apiWrapper(api?: FakeApi) {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <KawsayApiProvider api={api}>{children}</KawsayApiProvider>;
   };
 }
 
@@ -30,14 +41,13 @@ describe('ipcErrorCopy (renderer maps codes → reverent copy, #440)', () => {
     expect(copy).not.toMatch(/ERR_IPC|CatalogSessionError|Error:/);
   });
 
-  it('never surfaces raw error text (there is none to surface)', () => {
-    const copy = ipcErrorCopy(new IpcError(IPC_ERROR_CODES.HANDLER_FAULT, 'Error'));
-    expect(copy).not.toContain(PII_PATH);
-    expect(copy).not.toContain(PII_ID);
-  });
-
-  it('falls back to reverent copy for a non-IpcError (e.g. a missing bridge)', () => {
-    expect(ipcErrorCopy(new Error(`boom ${PII_PATH}`))).not.toContain(PII_PATH);
+  it('falls back to reverent copy for a non-IpcError, never echoing its raw text (e.g. a missing bridge)', () => {
+    // Discriminating: a raw Error whose MESSAGE embeds PII — the fallback copy must not
+    // echo it (an impl that surfaced `String(error)` would leak the path). The removed
+    // tautological sibling (an IpcError carrying no PII in the first place) proved nothing
+    // beyond this; the per-hook #481 tests are the real regression guard for the mapping.
+    expect(ipcErrorCopy(new Error(`boom ${PII_PATH} ${PII_ID}`))).not.toContain(PII_PATH);
+    expect(ipcErrorCopy(new Error(`boom ${PII_PATH} ${PII_ID}`))).not.toContain(PII_ID);
     expect(ipcErrorCopy(new Error('boom'))).toMatch(/please try again/i);
   });
 });
@@ -53,6 +63,65 @@ describe('useLibrary surfaces reverent copy from a rejected invoke (#440)', () =
 
     await act(async () => {
       await result.current.openLibrary({ path: '/lib/elena' });
+    });
+
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.error).toMatch(/please try again/i);
+    expect(result.current.error).not.toMatch(/ERR_IPC|CatalogSessionError/);
+  });
+});
+
+// #481 D1 — the following three mirror the useLibrary case above for the other
+// hooks that route an invoke rejection through `ipcErrorCopy`. Each was checked
+// by a mutation probe (temporarily swapping the hook's `ipcErrorCopy(cause)` for
+// `String(cause)`): the assertion below goes RED on that mutation because
+// `String(cause)` on an IpcError renders its `.message`, which IS the tagged
+// `KAWSAY_IPC_ERR:{...}` envelope — exactly what `.not.toMatch(/ERR_IPC/)` catches.
+
+describe('useTimeline surfaces reverent copy from a rejected invoke (#440, #481)', () => {
+  it('shows code-mapped copy, NOT the raw main-side message, on a failed page fetch', async () => {
+    const api = makeFakeApi({
+      getTimeline: vi.fn(() =>
+        Promise.reject(new IpcError(IPC_ERROR_CODES.HANDLER_FAULT, 'CatalogSessionError')),
+      ),
+    });
+    const { result } = renderHook(() => useTimeline(), { wrapper: apiWrapper(api) });
+
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.error).toMatch(/please try again/i);
+    expect(result.current.error).not.toMatch(/ERR_IPC|CatalogSessionError/);
+  });
+});
+
+describe('useCollectionItems surfaces reverent copy from a rejected invoke (#440, #481)', () => {
+  it('shows code-mapped copy, NOT the raw main-side message, on a failed page fetch', async () => {
+    const api = makeFakeApi({
+      getCollection: vi.fn(() =>
+        Promise.reject(new IpcError(IPC_ERROR_CODES.HANDLER_FAULT, 'CatalogSessionError')),
+      ),
+    });
+    const { result } = renderHook(() => useCollectionItems('col-1'), { wrapper: apiWrapper(api) });
+
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.error).toMatch(/please try again/i);
+    expect(result.current.error).not.toMatch(/ERR_IPC|CatalogSessionError/);
+  });
+});
+
+describe('useImport surfaces reverent copy from a rejected invoke (#440, #481)', () => {
+  it('shows code-mapped copy, NOT the raw main-side message, when starting the import fails', async () => {
+    const api = makeFakeApi({
+      startImport: vi.fn(() =>
+        Promise.reject(new IpcError(IPC_ERROR_CODES.HANDLER_FAULT, 'CatalogSessionError')),
+      ),
+    });
+    const { result } = renderHook(() => useImport(), { wrapper: apiWrapper(api) });
+
+    await act(async () => {
+      await result.current.start({ sourceType: 'whatsapp', inputPath: '/exports/chat.zip' });
     });
 
     await waitFor(() => expect(result.current.status).toBe('error'));
