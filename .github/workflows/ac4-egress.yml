@@ -410,12 +410,15 @@ jobs:
       #     without `-f` 12 specs skip; with it all 18 run).
       #   • `pnpm dlx` (not `npx`) matches the workflow's package manager and
       #     resolves the addon through pnpm's node_modules layout.
+      #   • Pinned to @electron/rebuild@4.0.4 (tracks the pnpm-lock.yaml pin) so
+      #     `pnpm dlx` cannot resolve a floating "latest" at job time on this
+      #     renderer-egress leg, which runs under no OS egress firewall (#511).
       #
       # This MUST come after `pnpm build` and before `test:e2e`, and MUST NOT
       # appear in any job that runs the Node-ABI vitest suite (it would then fail
       # to load) — the vitest jobs above run BEFORE any rebuild.
       - name: Rebuild better-sqlite3 for the Electron ABI
-        run: pnpm dlx @electron/rebuild -f -o better-sqlite3
+        run: pnpm dlx @electron/rebuild@4.0.4 -f -o better-sqlite3
 
       # Electron opens a real window, so Linux Chromium needs a display — xvfb-run
       # supplies a headless one. macOS + Windows runners have a native display, so
