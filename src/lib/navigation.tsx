@@ -174,9 +174,15 @@ export function NavigationProvider({
       }
       favouriteSeqRef.current.set(id, { attempt: seq.attempt, settled: token });
       const isNewestAttempt = token === seq.attempt;
-      const value = outcome.ok ? outcome.value : outcome.revertTo;
       setFavourites((prev) => {
         const current = prev[id];
+        // A FAILED save reverts to the last SETTLED value known AT SETTLE TIME — not a
+        // baseline frozen when the toggle was clicked. Disk truth can advance between
+        // click and settle (a slow save that commits after a timeout+retry), and reading
+        // it here keeps the revert honest — no phantom un-favourite. Fall back to the
+        // caller's baseline (which carries `initial`) only when nothing has settled this
+        // session (#493 review, F1). A successful save uses its persisted value.
+        const value = outcome.ok ? outcome.value : (current?.settledValue ?? outcome.revertTo);
         // Only the newest in-flight save clears the busy flag; an older reply must not
         // re-enable the control while a newer save is still pending (#490).
         const saving = isNewestAttempt ? false : (current?.saving ?? false);
