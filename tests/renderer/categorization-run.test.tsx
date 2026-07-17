@@ -147,7 +147,10 @@ describe('CategorizationRun', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Organize now' }));
 
-    expect(await screen.findByText(/nothing new to gather/i)).toBeInTheDocument();
+    // Assert copy UNIQUE to the complete-with-zero face ("All done — …"); the
+    // shared "nothing new to gather" phrase also appears in the `nothing` face,
+    // so it would not discriminate the two (#520).
+    expect(await screen.findByText(/All done/i)).toBeInTheDocument();
   });
 
   it('shows the completed count and reassures when some memories failed', async () => {
@@ -216,6 +219,29 @@ describe('CategorizationRun', () => {
 
     expect(start).toHaveBeenCalledTimes(2);
     expect(await screen.findByText(/1 memory/)).toBeInTheDocument();
+    warn.mockRestore();
+  });
+
+  it('lets a live run reassert authority after a rejected start', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // The start request rejects at the IPC boundary, latching the failure face…
+    const start = vi.fn().mockRejectedValueOnce(new Error('boom'));
+    const { api, user } = setup(offeredApi({ startCategorization: start }));
+
+    await user.click(await screen.findByRole('button', { name: 'Organize now' }));
+    expect(await screen.findByText(/Something interrupted organizing/i)).toBeInTheDocument();
+
+    // …but a real progress tick proves the backend began a run after all. The live
+    // stream must reassert authority over the stale rejection (#519), not stay
+    // stuck on "nothing was changed".
+    act(() => {
+      api.emitCategorizationProgress(
+        snapshot({ state: 'running', counts: counts({ categorized: 4 }) }),
+      );
+    });
+
+    expect(await screen.findByText(/4 gathered so far/)).toBeInTheDocument();
+    expect(screen.queryByText(/Something interrupted organizing/i)).not.toBeInTheDocument();
     warn.mockRestore();
   });
 
