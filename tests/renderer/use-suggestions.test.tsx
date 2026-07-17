@@ -135,4 +135,36 @@ describe('useSuggestions — per-action generation guard on the error notice (#4
     });
     await waitFor(() => expect(result.current.actionError).toBe(false));
   });
+
+  it('keeps actionError up CONTINUOUSLY while a retry is pending (clears only on committed success)', async () => {
+    const retryPending = deferred<SuggestionsViewDTO>();
+    const api = makeFakeApi({
+      listSuggestions: vi.fn(() => Promise.resolve(oneSuggestionView())),
+      // First attempt fails; the retry stays in flight until we resolve it.
+      acceptSuggestion: vi
+        .fn<() => Promise<SuggestionsViewDTO>>()
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockReturnValueOnce(retryPending.promise),
+    });
+    const { result } = renderHook(() => useSuggestions(true), { wrapper: wrapper(api) });
+    await waitFor(() => expect(result.current.suggestions.length).toBeGreaterThan(0));
+
+    // The first attempt fails and raises the calm "couldn't save" hint.
+    await act(async () => {
+      result.current.accept({ categoryId: CATEGORY });
+    });
+    await waitFor(() => expect(result.current.actionError).toBe(true));
+
+    // A retry starts but has NOT settled yet. The hint must stay up throughout —
+    // nothing on disk changed and the retry has not yet succeeded, so blinking the
+    // banner off mid-retry would be a spurious reassurance (a bereavement-app
+    // regression). It clears ONLY when the retry actually commits a success.
+    act(() => result.current.accept({ categoryId: CATEGORY }));
+    expect(result.current.actionError).toBe(true);
+
+    await act(async () => {
+      retryPending.resolve(makeSuggestionsView());
+    });
+    expect(result.current.actionError).toBe(false);
+  });
 });

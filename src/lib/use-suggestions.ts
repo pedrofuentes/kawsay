@@ -6,13 +6,20 @@
 // collection on its own; every write is caller-initiated from a click, and each
 // action refreshes the tray straight from the returned view (no manual re-fetch), so
 // the acted-on suggestion simply drops out.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type {
+  KawsayAPI,
   SuggestionDTO,
   SuggestionMergeTargetDTO,
   SuggestionsViewDTO,
 } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
+import { useMutation } from './use-mutation';
+
+/** One curation verb, deferred to call time: the accept/merge/dismiss click closes
+ *  over its own input and runs against the live bridge. All three share ONE
+ *  latest-wins mutation guard (below), so a superseded outcome is dropped (#407). */
+type CurationTask = (client: KawsayAPI) => Promise<SuggestionsViewDTO>;
 
 /** The calm empty tray — a stable reference so repeated resets never re-render. */
 const EMPTY_VIEW: SuggestionsViewDTO = { suggestions: [], collections: [] };
@@ -43,27 +50,40 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
   const api = useKawsayApi();
   const [view, setView] = useState<SuggestionsViewDTO>(EMPTY_VIEW);
   const [loading, setLoading] = useState(false);
+  // The calm "couldn't save" hint. Deliberately a STICKY local flag rather than a
+  // read of the mutation's transient status: once raised by a committed failure it
+  // stays up CONTINUOUSLY — including through an in-flight retry — and is lowered
+  // ONLY by a committed success or by disabling the feature. (Reading
+  // `status === 'error'` would blink it off the instant a retry goes pending, a
+  // spurious mid-retry reassurance.) It is set/cleared exclusively in the mutation
+  // callbacks below, which the primitive fires only for the latest, non-superseded,
+  // still-enabled action (#407).
   const [actionError, setActionError] = useState(false);
 
-  // Monotonic per-action generation. Each curation action (accept/merge/dismiss)
-  // captures its own value at call time; the resolve/reject applies its outcome
-  // ONLY if that value still matches the latest generation. It is bumped both by
-  // every action AND whenever this effect re-runs (enable/disable/api change), so
-  // an outcome belonging to a superseded action — a newer action began, or the
+  // The per-action latest-wins guard (#407) lives in the shared `useMutation`
+  // primitive: each curation click captures a monotonic generation, and its
+  // outcome commits ONLY if it is still the latest AND the tray is still enabled
+  // AND still mounted. So a superseded action — a newer action began, or the
   // feature was toggled off (then possibly back on) while it was in flight — is
-  // dropped instead of resurfacing a spurious "couldn't save" hint (#407).
-  const actionGenerationRef = useRef(0);
-  // Mirrors `enabled` for the async callbacks: a rejection that lands after the
-  // feature was disabled must never re-flag the calm notice on a hidden tray.
-  const enabledRef = useRef(enabled);
+  // dropped. `enabled` is false while the feature is off OR the bridge is absent,
+  // which both disables mutation AND (via the primitive) supersedes any in-flight
+  // action. On success we repaint the tray from the returned view and clear the
+  // hint; on failure we raise it.
+  const actionsEnabled = enabled && api !== undefined;
+  const { mutate: runAction } = useMutation<CurationTask, SuggestionsViewDTO>({
+    mutationFn: (task) => task(api as KawsayAPI),
+    enabled: actionsEnabled,
+    onSuccess: (next) => {
+      setView(next);
+      setActionError(false);
+    },
+    onError: () => setActionError(true),
+  });
 
   useEffect(() => {
-    enabledRef.current = enabled;
-    // Any action still in flight belongs to the previous enabled-state; supersede
-    // it so its late outcome cannot set state after this reset (#407).
-    actionGenerationRef.current += 1;
     // DEFAULT-OFF: while disabled we never ask for suggestions, and we drop any we
-    // had so turning the feature off empties the tray at once.
+    // had so turning the feature off empties the tray at once. We also lower the
+    // calm hint — a hidden tray shows no lingering "couldn't save" notice (#407).
     if (api === undefined || !enabled) {
       setView(EMPTY_VIEW);
       setLoading(false);
@@ -91,43 +111,6 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
       active = false;
     };
   }, [api, enabled]);
-
-  // The shared runner behind accept/merge/dismiss. They are independent verbs but
-  // share ONE curation contract: on success repaint the tray and clear the notice;
-  // on failure surface the calm retry hint — UNLESS this attempt has been
-  // superseded (a newer action began) or the feature was disabled meanwhile, in
-  // which case its stale outcome is dropped (#407). Centralising it keeps the guard
-  // identical across all three callbacks.
-  const runAction = useCallback(
-    (perform: (client: NonNullable<typeof api>) => Promise<SuggestionsViewDTO>): void => {
-      if (api === undefined) {
-        return;
-      }
-      const generation = ++actionGenerationRef.current;
-      void perform(api)
-        .then((next) => {
-          if (actionGenerationRef.current !== generation || !enabledRef.current) {
-            // Superseded or post-disable success — a newer action (or a toggle)
-            // owns the current tray, so applying this stale view would regress it.
-            return;
-          }
-          setView(next);
-          setActionError(false);
-        })
-        .catch(() => {
-          if (actionGenerationRef.current !== generation || !enabledRef.current) {
-            // Superseded or post-disable rejection — dropping it keeps a stale
-            // failure from resurfacing the notice after a later success cleared it
-            // or after the feature was turned off (#407).
-            return;
-          }
-          // A rejected action leaves the tray untouched and nothing on disk changed
-          // (the action is atomic); surface a calm hint so the user can retry.
-          setActionError(true);
-        });
-    },
-    [api],
-  );
 
   const accept = useCallback(
     (input: { categoryId: string; name?: string }): void => {
