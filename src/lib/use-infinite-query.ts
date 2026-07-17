@@ -223,13 +223,23 @@ export function useInfiniteQuery<TItem, TCursor = unknown, TMeta = unknown>(
         // the same next page can be retried; the owning hook maps the cause to copy.
         setState((prev) => ({ ...prev, status: 'error', error: cause, isFetching: false }));
       } finally {
-        inFlightRef.current = false;
-        // A reload remembered mid-flight runs now that the mutex is clear. It
-        // starts a fresh page-1 fetch at the already-bumped generation, so it
-        // strictly succeeds the stale one.
-        if (pendingReloadRef.current) {
-          pendingReloadRef.current = false;
-          runRef.current?.('initial');
+        // Only release the mutex / run a pending reload if THIS fetch still owns
+        // it. A superseded fetch that a newer one has replaced (its controller is
+        // no longer current — e.g. a disable force-cleared the mutex mid-flight
+        // and a re-enable started a fresh fetch) must not clear the mutex out from
+        // under the live fetch, or "at most one fetch in flight" breaks and a
+        // reload would spawn a redundant concurrent fetch. This is a no-op for a
+        // superseded old fetch, and still fires for the #432 pending-reload path
+        // (which aborts the controller but does not replace it).
+        if (controllerRef.current === controller) {
+          inFlightRef.current = false;
+          // A reload remembered mid-flight runs now that the mutex is clear. It
+          // starts a fresh page-1 fetch at the already-bumped generation, so it
+          // strictly succeeds the stale one.
+          if (pendingReloadRef.current) {
+            pendingReloadRef.current = false;
+            runRef.current?.('initial');
+          }
         }
       }
     })();
