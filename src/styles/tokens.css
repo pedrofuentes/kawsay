@@ -76,6 +76,9 @@
   --color-clay-800: #371f0f;
   --color-clay-900: #1c0f05;
 
+  /* ── Colour: brand (the logo terracotta — the sprout mark) ───────────── */
+  --color-brand: #c96f43;
+
   /* ── Colour: parchment (gentle amber warmth, used sparingly) ─────────── */
   --color-parchment-100: #fdf8f0;
   --color-parchment-200: #faf0de;

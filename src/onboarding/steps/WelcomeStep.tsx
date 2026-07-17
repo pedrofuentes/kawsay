@@ -3,8 +3,8 @@
 // the only step that does not pull focus to its heading (it's the first screen,
 // so the natural document start is fine).
 import type { ReactElement } from 'react';
+import { BrandMark } from '@renderer/components/BrandMark';
 import { Button } from '@renderer/components/Button';
-import { Icon } from '@renderer/components/Icon';
 import { StepContainer } from '../StepContainer';
 
 export interface WelcomeStepProps {
@@ -17,9 +17,9 @@ export function WelcomeStep({ onStart, onTour }: WelcomeStepProps): ReactElement
     <StepContainer>
       <span
         aria-hidden
-        className="flex h-14 w-14 items-center justify-center rounded-full bg-sage-50 text-sage-600"
+        className="flex h-16 w-16 items-center justify-center rounded-full bg-clay-100 text-brand"
       >
-        <Icon name="heart" className="h-7 w-7" />
+        <BrandMark className="h-9 w-auto" />
       </span>
       <h1 className="font-display text-4xl font-semibold leading-tight text-text-primary">
         A calm place to gather the memories of someone you love.

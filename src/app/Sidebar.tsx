@@ -2,6 +2,7 @@
 // U2 add the timeline and search screens behind these sections; the routing here is
 // just the typed navigation context.
 import type { ReactElement } from 'react';
+import { BrandMark } from '@renderer/components/BrandMark';
 import { Icon } from '@renderer/components/Icon';
 import type { IconName } from '@renderer/components/Icon';
 import { useNavigation } from '@renderer/lib/navigation';
@@ -26,7 +27,10 @@ export function Sidebar(): ReactElement {
   const { view, navigate } = useNavigation();
   return (
     <nav aria-label="Sections" className="flex flex-col gap-1 p-4">
-      <p className="px-3 py-2 font-display text-lg font-semibold text-text-primary">Kawsay</p>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <BrandMark className="h-7 w-auto text-brand" />
+        <span className="font-display text-lg font-semibold text-text-primary">Kawsay</span>
+      </div>
       {ITEMS.map((item) => {
         const active = item.view.name === view.name;
         return (
