@@ -14,6 +14,15 @@
 // ./search/SearchResults for how it is kept to escaped text, never markup
 // (AC-4 posture; USER_FLOWS rubric R12). The `source` value is a validated enum,
 // shown via the shared source set.
+//
+// DEFERRED from the #486 read-hook migration: this data path (the fresh-search
+// effect below plus `loadMore`'s page accumulator) is NOT yet migrated onto the
+// `useInfiniteQuery`-style paginated primitive (#503). It carries the #456
+// shared monotonic request id (one guard spanning BOTH a fresh search and
+// "show more", so a stale response from either can't clobber a newer one) and
+// is coupled to the #482 snapshot-consistent offset pagination on the IPC side —
+// migrating it needs the accumulator variant to model both without regressing
+// either. Tracked as a separate follow-up.
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import type { ItemCardDTO, MediaType, SourceType } from '@shared/kawsay-api';

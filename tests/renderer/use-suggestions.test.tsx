@@ -168,3 +168,54 @@ describe('useSuggestions — per-action generation guard on the error notice (#4
     expect(result.current.actionError).toBe(false);
   });
 });
+
+describe('useSuggestions — DEFAULT-OFF list read (#486 part 3)', () => {
+  // This pins the list read's DEFAULT-OFF contract directly against the hook
+  // (previously only exercised indirectly, via the tray never calling
+  // `listSuggestions` while disabled) ahead of migrating the read onto
+  // `useQuery`: toggling the feature off must empty the tray AT ONCE — not a
+  // stale suggestion left showing — and toggling it back on must re-fetch.
+  it('empties suggestions and collections the instant the feature is disabled, and re-fetches on re-enable', async () => {
+    const api = makeFakeApi({
+      listSuggestions: vi.fn(() => Promise.resolve(oneSuggestionView())),
+    });
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useSuggestions(enabled),
+      { wrapper: wrapper(api), initialProps: { enabled: true } },
+    );
+    await waitFor(() => expect(result.current.suggestions.length).toBeGreaterThan(0));
+    expect(api.listSuggestions).toHaveBeenCalledTimes(1);
+
+    rerender({ enabled: false });
+    expect(result.current.suggestions).toEqual([]);
+    expect(result.current.collections).toEqual([]);
+    expect(result.current.loading).toBe(false);
+
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.suggestions.length).toBeGreaterThan(0));
+    expect(api.listSuggestions).toHaveBeenCalledTimes(2);
+  });
+
+  it('never fetches, and starts with an empty tray, while disabled from the first render', () => {
+    const api = makeFakeApi({
+      listSuggestions: vi.fn(() => Promise.resolve(oneSuggestionView())),
+    });
+    const { result } = renderHook(() => useSuggestions(false), { wrapper: wrapper(api) });
+
+    expect(result.current.suggestions).toEqual([]);
+    expect(result.current.collections).toEqual([]);
+    expect(result.current.loading).toBe(false);
+    expect(api.listSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('leaves the tray empty (not stuck loading) when the initial read fails', async () => {
+    const api = makeFakeApi({
+      listSuggestions: vi.fn(() => Promise.reject(new Error('read failed'))),
+    });
+    const { result } = renderHook(() => useSuggestions(true), { wrapper: wrapper(api) });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.suggestions).toEqual([]);
+    expect(result.current.collections).toEqual([]);
+  });
+});

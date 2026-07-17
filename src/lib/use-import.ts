@@ -3,6 +3,14 @@
 // (complete / cancelled / error). The subscription is set up once and torn down
 // on unmount so we never leak listeners. Raw error codes are stored for the UI
 // to translate — they are never meant to be shown verbatim.
+//
+// INTENTIONALLY NOT migrated onto `useQuery`/`useMutation` (#486): this hook is
+// an EVENT-STREAM JOB DRIVER, not a keyed fetch or a one-shot imperative write.
+// It subscribes once to `onImportProgress` and folds a long-lived series of
+// push events (queued → running → complete/cancelled/error) into state over the
+// life of one job; there is no "result" a single fetch/mutate call resolves to,
+// and no key whose change should trigger a fresh request. Neither primitive's
+// generation-guarded request/response model fits — keep this hand-rolled.
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { ImportProgressEvent, ImportSummaryDTO, SourceType } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
