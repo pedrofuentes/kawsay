@@ -361,6 +361,15 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      # Assert the invariant is active, fail if not — this repo's convention (the
+      # AC-4 jobs each assert their deny rule is active; renderer-egress.spec asserts
+      # the renderer actually loaded). Here it turns an unavailable native catalog
+      # into a HARD failure instead of the default skip: without it, a silently-failed
+      # ABI rebuild on any OS would let the four library-backed specs `test.skip` and
+      # the leg still exit 0 — green while proving nothing. With it, a green leg is
+      # PROOF the journeys actually ran, and a broken rebuild turns that leg RED.
+      KAWSAY_E2E_REQUIRE_NATIVE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
