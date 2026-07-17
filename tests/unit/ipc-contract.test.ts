@@ -197,11 +197,13 @@ describe('ipcContract — catalog:search', () => {
     expect(
       reqOk(CATALOG_SEARCH, { query: 'beach', fromDate: '2019-06-14T00:00:00.000Z' }),
     ).toBe(false);
-    // NOTE: searchDaySchema is a FORMAT check (`\d{4}-\d{2}-\d{2}`), not a calendar
-    // validator — an impossible day like '2019-13-40' matches the digit pattern and
-    // so is *accepted* here; it lexicographically compares as a harmless bound in
-    // `dateFilter` (no crash, no injection — see catalog-repo.ts's dateFilter doc).
-    expect(reqOk(CATALOG_SEARCH, { query: 'beach', fromDate: '2019-13-40' })).toBe(true);
+    // searchDaySchema is calendar-correct (z.iso.date), so an impossible day is refused
+    // at the trust boundary — never reaching dateFilter's lexicographic SQL comparison
+    // (an out-of-range month like '2019-13-40' would silently exclude valid rows).
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', fromDate: '2019-13-40' })).toBe(false);
+    // Non-leap Feb 29 is rejected; a real leap day is accepted.
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', toDate: '2019-02-29' })).toBe(false);
+    expect(reqOk(CATALOG_SEARCH, { query: 'beach', toDate: '2020-02-29' })).toBe(true);
   });
 
   it('rejects an over-max limit (#482)', () => {
