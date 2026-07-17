@@ -64,6 +64,11 @@ export const MODEL_DOWNLOAD_ERROR_KINDS = ['network', 'disk', 'integrity', 'http
  * state is folded into the same stream (phase `done`/`already-present`/`error`)
  * so a subscriber sees one ordered sequence. `error` is non-null ONLY on the
  * `error` phase and carries a typed `kind` plus whether a retry may help.
+ *
+ * REDACTION (#480): the error payload carries NO raw `message`. A download failure's
+ * `error.message` can embed a filesystem path (or other local detail), and this is a
+ * one-way `webContents.send` channel into the renderer world, so only the typed
+ * `{kind, retryable}` — which the renderer hooks branch on — crosses the boundary.
  */
 export const modelDownloadProgressEventSchema = z.strictObject({
   phase: z.enum(MODEL_DOWNLOAD_PHASES),
@@ -72,7 +77,6 @@ export const modelDownloadProgressEventSchema = z.strictObject({
   error: z
     .strictObject({
       kind: z.enum(MODEL_DOWNLOAD_ERROR_KINDS),
-      message: z.string(),
       retryable: z.boolean(),
     })
     .nullable(),

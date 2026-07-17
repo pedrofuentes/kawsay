@@ -17,3 +17,30 @@ rules:
     pattern-either:
       - pattern: 'exec($CMD, ...)'
       - pattern: 'execSync($CMD, ...)'
+
+  - id: kawsay-no-raw-error-on-event-boundary
+    message: >-
+      Redaction invariant (#440/#480): a raw error.message/error.stack must not reach
+      a renderer event payload, and an event contract's error field must not carry a
+      raw z.string() message/stack. Project the error to a safe {kind} or {name, code}
+      (see projectError / the redacting logger) before it crosses the boundary.
+    languages: [typescript, javascript]
+    severity: ERROR
+    pattern-either:
+      # (a) a raw error.message / error.stack lexically inside a webContents.send(...).
+      - patterns:
+          - pattern-inside: $WC.send(...)
+          - metavariable-regex:
+              metavariable: $ERR
+              regex: ^(error|err|e|cause)$
+          - pattern-either:
+              - pattern: $ERR.message
+              - pattern: $ERR.stack
+      # (b) a raw z.string() message/stack field on an event contract's `error` object
+      #     (the regression class #480 closes: a redacted channel re-widened to a string).
+      - patterns:
+          - pattern-inside: |
+              error: z.strictObject({...}).nullable()
+          - pattern-either:
+              - pattern: 'message: z.string()'
+              - pattern: 'stack: z.string()'

@@ -67,14 +67,19 @@ export type ModelDownloadPhase =
   | 'already-present'
   | 'error';
 
-/** One progress tick. Terminal phases (`done`/`already-present`/`error`) end the stream. */
+/**
+ * One progress tick. Terminal phases (`done`/`already-present`/`error`) end the
+ * stream. The `error` payload carries ONLY the typed `{kind, retryable}` — never the
+ * raw `error.message` (which can embed a filesystem path): this tick is forwarded
+ * verbatim onto the one-way IPC event channel into the renderer world, so it must
+ * stay redacted at the source (#480).
+ */
 export interface ModelDownloadProgress {
   readonly phase: ModelDownloadPhase;
   readonly bytesDownloaded: number;
   readonly totalBytes: number;
   readonly error: {
     readonly kind: ModelDownloadErrorKind;
-    readonly message: string;
     readonly retryable: boolean;
   } | null;
 }
@@ -383,7 +388,9 @@ export function createModelDownloader(options: ModelDownloaderOptions): ModelDow
         phase: 'error',
         bytesDownloaded,
         totalBytes: expectedSize,
-        error: { kind: error.kind, message: error.message, retryable: error.retryable },
+        // Redacted at the source (#480): only the typed {kind, retryable} crosses the
+        // one-way IPC boundary — never `error.message`, which can embed a local path.
+        error: { kind: error.kind, retryable: error.retryable },
       });
       throw error;
     };

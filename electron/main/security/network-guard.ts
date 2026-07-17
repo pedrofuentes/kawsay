@@ -160,6 +160,20 @@ export const MODEL_DOWNLOAD_ALLOWLIST: readonly ModelDownloadAllowlistEntry[] = 
   { originUrl: EMBED_MODEL_DOWNLOAD_URL, redirectHost: EMBED_MODEL_DOWNLOAD_REDIRECT_HOST },
 ];
 
+/**
+ * The BOUNDED, log-safe label for a cancelled request: its origin (scheme + host +
+ * port) only — never the path, query, or any embedded credential/token (#480). Even
+ * the dev-only local-console breadcrumb must not dump an arbitrary full URL. An
+ * unparseable URL collapses to a fixed placeholder rather than being echoed.
+ */
+function requestOrigin(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return '[unparseable-url]';
+  }
+}
+
 /** True iff the request carries no upload body (the model download is a pure GET). */
 function hasEmptyUploadBody(uploadData: readonly unknown[] | undefined): boolean {
   return uploadData === undefined || uploadData.length === 0;
@@ -242,7 +256,9 @@ export function installNetworkGuard(
     if (!allowed && !options.isPackaged) {
       // Dev breadcrumb: surface anything the guard cancels while iterating, so a
       // mistakenly-remote asset is noticed immediately. Silent in packaged builds.
-      log.error(`[kawsay] network guard cancelled non-local request: ${details.url}`); // nosemgrep: unsafe-formatstring
+      // The URL is projected to its BOUNDED origin and passed as a structured arg —
+      // never interpolated into the template — so no path/query/token is logged (#480).
+      log.error('[kawsay] network guard cancelled non-local request', requestOrigin(details.url));
     }
     callback({ cancel: !allowed });
   });

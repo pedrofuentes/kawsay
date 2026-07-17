@@ -190,7 +190,7 @@ describe('useSmartSearchModel', () => {
         makeModelDownloadProgressEvent({
           phase: 'error',
           bytesDownloaded: 12,
-          error: { kind: 'network', message: 'getaddrinfo ENOTFOUND raw.host', retryable: true },
+          error: { kind: 'network', retryable: true },
         }),
       );
     });
@@ -213,7 +213,7 @@ describe('useSmartSearchModel', () => {
       api.emitSmartSearchModelDownloadProgress(
         makeModelDownloadProgressEvent({
           phase: 'error',
-          error: { kind: 'network', message: 'offline', retryable: true },
+          error: { kind: 'network', retryable: true },
         }),
       );
     });

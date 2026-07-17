@@ -9,6 +9,7 @@
 // whole thing is unit-testable with a fake worker and no real thread.
 
 import type { ImportProgressEvent } from '@shared/ipc/events';
+import { log } from '../../log';
 import type { IngestionSummary } from '../ingest';
 import type { ImportProgress } from '../types';
 import type {
@@ -111,10 +112,13 @@ export function createIngestionCoordinator(
   options: IngestionCoordinatorOptions,
 ): IngestionCoordinator {
   const { spawn, emitProgress } = options;
+  // Default sink routes through THE redacting logger (#440/#480): the Error is passed
+  // as a structured ARG, so `projectError` reduces it to {name, code} — a raw stack /
+  // message (which can embed a path or item text) never reaches the local console.
   const logWorkerFault =
     options.logWorkerFault ??
     ((error: Error) => {
-      console.error(error.stack ?? error.message);
+      log.error('[kawsay] import worker faulted', error);
     });
   const handles = new Map<string, IngestionWorkerHandle>();
 
