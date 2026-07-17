@@ -7,10 +7,11 @@
 // `useTimeline` streams timeline pages, just keyed by offset instead of an
 // opaque cursor (a collection's membership is stable, unlike the ever-growing
 // timeline, so a plain running offset is enough).
-import { useCallback, useEffect, useReducer, useRef } from 'react';
-import type { CollectionItemsPageDTO, CollectionSummaryDTO, ItemCardDTO } from '@shared/kawsay-api';
+import { useCallback } from 'react';
+import type { CollectionSummaryDTO, ItemCardDTO } from '@shared/kawsay-api';
 import { useKawsayApi } from './kawsay-api';
 import { ipcErrorCopy } from './ipc-error-copy';
+import { useInfiniteQuery } from './use-infinite-query';
 import { useQuery } from './use-query';
 
 export type CollectionsStatus = 'unavailable' | 'loading' | 'ready' | 'error';
@@ -87,138 +88,60 @@ export interface UseCollectionItemsResult {
   reload: () => void;
 }
 
-interface CollectionItemsState {
-  collection: CollectionSummaryDTO | null;
-  items: ItemCardDTO[];
-  status: CollectionItemsStatus;
-  error: string | null;
-  hasMore: boolean;
-}
-
-type Action =
-  | { type: 'load-start' }
-  | { type: 'load-more-start' }
-  | { type: 'page'; page: CollectionItemsPageDTO; append: boolean }
-  | { type: 'fail'; error: string };
-
-function initialState(available: boolean): CollectionItemsState {
-  return {
-    collection: null,
-    items: [],
-    status: available ? 'loading' : 'unavailable',
-    error: null,
-    hasMore: false,
-  };
-}
-
-function reducer(state: CollectionItemsState, action: Action): CollectionItemsState {
-  switch (action.type) {
-    case 'load-start':
-      return { collection: null, items: [], status: 'loading', error: null, hasMore: false };
-    case 'load-more-start':
-      return (state.status === 'ready' || state.status === 'error') && state.hasMore
-        ? { ...state, status: 'loadingMore', error: null }
-        : state;
-    case 'page': {
-      const items = action.append ? [...state.items, ...action.page.items] : action.page.items;
-      return {
-        collection: action.page.collection,
-        items,
-        status: 'ready',
-        error: null,
-        hasMore: items.length < action.page.total,
-      };
-    }
-    case 'fail':
-      return { ...state, status: 'error', error: action.error };
-    default:
-      return state;
-  }
-}
-
 /** Loads ONE collection's offset-paginated members (`catalog:getCollection`),
  *  fetching the first page on mount (and again whenever `collectionId`
- *  changes) and streaming further pages via `loadMore`. */
+ *  changes) and streaming further pages via `loadMore`. The append accumulator
+ *  and the inFlight+generation race guard now live in the shared
+ *  {@link useInfiniteQuery} primitive (#486); `collectionId` is its key, so a
+ *  collection switch discards the pages and refetches page 1. The offset is the
+ *  accumulated item count the primitive threads as `loaded`, and the collection
+ *  summary rides along as the page `meta`. */
 export function useCollectionItems(
   collectionId: string,
   options: { pageSize?: number } = {},
 ): UseCollectionItemsResult {
   const pageSize = options.pageSize ?? DEFAULT_COLLECTION_PAGE_SIZE;
   const api = useKawsayApi();
-  const [state, dispatch] = useReducer(reducer, api !== undefined, initialState);
 
-  // Mirror state into a ref so the fetcher reads a fresh item count / status
-  // without being re-created on every render (mirrors useTimeline).
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const inFlight = useRef(false);
-  // A fetch whose generation is no longer current on settle is superseded (a
-  // newer initial fetch started, e.g. collectionId changed) and its result is
-  // dropped rather than clobbering the newer one (mirrors useTimeline).
-  const generation = useRef(0);
-
-  const fetchPage = useCallback(
-    async (mode: 'initial' | 'more'): Promise<void> => {
+  const query = useInfiniteQuery<ItemCardDTO, string, CollectionSummaryDTO>({
+    // `null` while the bridge is missing keeps the query idle (mapped to
+    // `unavailable`); otherwise the collection id is the identity key.
+    key: api === undefined ? null : collectionId,
+    fetchPage: async ({ mode, loaded }) => {
+      // `key` is non-null exactly when `api` is defined.
       if (api === undefined) {
-        return;
+        return Promise.reject(new Error('bridge unavailable'));
       }
-      if (inFlight.current) {
-        return;
-      }
-      const current = stateRef.current;
-      if (
-        mode === 'more' &&
-        (!current.hasMore || (current.status !== 'ready' && current.status !== 'error'))
-      ) {
-        return;
-      }
-
-      inFlight.current = true;
-      const myGeneration = generation.current;
-      dispatch(mode === 'initial' ? { type: 'load-start' } : { type: 'load-more-start' });
-      try {
-        const offset = mode === 'more' ? current.items.length : 0;
-        const page = await api.getCollection({ id: collectionId, limit: pageSize, offset });
-        if (myGeneration === generation.current) {
-          dispatch({ type: 'page', page, append: mode === 'more' });
-        }
-      } catch (cause) {
-        if (myGeneration === generation.current) {
-          dispatch({ type: 'fail', error: ipcErrorCopy(cause) });
-        }
-      } finally {
-        inFlight.current = false;
-      }
+      const offset = mode === 'more' ? loaded : 0;
+      const page = await api.getCollection({ id: collectionId, limit: pageSize, offset });
+      return {
+        items: page.items,
+        // Offset pagination: no opaque cursor, hasMore is derived from the total.
+        cursor: null,
+        hasMore: offset + page.items.length < page.total,
+        meta: page.collection,
+      };
     },
-    [api, collectionId, pageSize],
-  );
+  });
 
-  // Fetch page 1 on mount, and again whenever `collectionId` (or `api`)
-  // changes — `fetchPage`'s own identity already changes with `collectionId`,
-  // so this re-fires exactly on a genuine change (mirrors useTimeline).
-  useEffect(() => {
-    generation.current += 1;
-    if (api !== undefined) {
-      void fetchPage('initial');
-    }
-  }, [api, fetchPage]);
-
-  const loadMore = useCallback((): void => {
-    void fetchPage('more');
-  }, [fetchPage]);
-
-  const reload = useCallback((): void => {
-    generation.current += 1;
-    void fetchPage('initial');
-  }, [fetchPage]);
+  const status: CollectionItemsStatus =
+    api === undefined
+      ? 'unavailable'
+      : query.status === 'ready'
+        ? 'ready'
+        : query.status === 'loadingMore'
+          ? 'loadingMore'
+          : query.status === 'error'
+            ? 'error'
+            : 'loading';
 
   return {
-    collection: state.collection,
-    items: state.items,
-    status: state.status,
-    error: state.error,
-    hasMore: state.hasMore,
-    loadMore,
-    reload,
+    collection: query.meta ?? null,
+    items: query.items,
+    status,
+    error: query.error != null ? ipcErrorCopy(query.error) : null,
+    hasMore: query.hasMore,
+    loadMore: query.loadMore,
+    reload: query.reload,
   };
 }
