@@ -470,6 +470,57 @@ describe('ItemView — favourite toggle race + lifecycle guards (#434)', () => {
     // Once settled it is interactive again.
     expect(screen.getByRole('button', { name: /remove from favourites/i })).not.toBeDisabled();
   });
+
+  it('never settles a phantom favourite when two rapid toggles BOTH fail (#493)', async () => {
+    // Disk truth: NOT a favourite. The user double-toggles (on → off) quickly, then BOTH
+    // saves fail. The revert baseline must be the last SETTLED (disk) value, not the
+    // optimistic in-flight value — otherwise the second failure reverts to the phantom
+    // optimistic `true` the first toggle set, leaving a favourite that never touched disk.
+    const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+    const first = deferred<{ isFavourite: boolean }>();
+    const second = deferred<{ isFavourite: boolean }>();
+    const calls: Array<{ id: string; favourite: boolean }> = [];
+    const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+      calls.push(input);
+      return calls.length === 1 ? first.promise : second.promise;
+    });
+    const api = makeFakeApi({ setFavourite });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <KawsayApiProvider api={api}>
+        <NavigationProvider>{children}</NavigationProvider>
+      </KawsayApiProvider>
+    );
+    const { result } = renderHook(
+      () => ({ fav: useFavourite(item.id, item.isFavourite), nav: useNavigation() }),
+      { wrapper },
+    );
+
+    act(() => result.current.fav.toggle()); // favourite: true (optimistic)
+    act(() => result.current.fav.toggle()); // favourite: false (optimistic, back to disk truth)
+    expect(calls).toEqual([
+      { id: item.id, favourite: true },
+      { id: item.id, favourite: false },
+    ]);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Both saves FAIL, in order — disk never changed.
+      await act(async () => {
+        first.reject(new Error('SQLITE_BUSY'));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        second.reject(new Error('SQLITE_BUSY'));
+        await Promise.resolve();
+      });
+
+      // Settled truth is disk truth (false) — never a phantom `true` that was never saved.
+      expect(result.current.fav.isFavourite).toBe(false);
+      expect(result.current.nav.favouriteOverrides[item.id]).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe('ItemView — favourite save is bounded + busy-clear gate (#489, #490)', () => {

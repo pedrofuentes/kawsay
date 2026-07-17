@@ -119,6 +119,37 @@ describe('favourite overrides — settled truth only for overlay consumers (#488
     expect(result.current.favouriteOverrides['item-3']).toBe(true);
   });
 
+  it('does not let a SUPERSEDED older reply move the overlay to its now-stale value (#494)', () => {
+    // The #489 timeout makes this reachable even on the SAME token: the timeout settles
+    // token N (revert), the user retries as token N+1, THEN the real reply for token N
+    // lands. That older reply is superseded — its value must NOT flip the overlay (seen
+    // on OTHER views) to a stale value while the newer save is still in flight.
+    const { result } = renderHook(() => useNavigation(), { wrapper: wrapper() });
+    let older = 0;
+    act(() => {
+      older = result.current.beginFavouriteSave('item-5', true); // attempt 1, optimistic true
+      // The NEWER attempt (attempt 2) stays in flight for the whole test; its optimistic
+      // value (false) is what the user last intended and what must govern.
+      result.current.beginFavouriteSave('item-5', false);
+    });
+    // The mounted toggle already shows the NEWEST optimistic value.
+    expect(result.current.favouriteStateFor('item-5')?.value).toBe(false);
+
+    // The OLDER reply lands — it persisted `true` — while the newer save is still pending.
+    // Its value is superseded and must not move the overlay or the mounted value.
+    act(() => {
+      result.current.settleFavouriteSave('item-5', older, { ok: true, value: true });
+    });
+
+    // The overlay must NOT show the superseded older value; the newest attempt governs.
+    expect(result.current.favouriteOverrides['item-5']).not.toBe(true);
+    // The mounted value still reflects the NEWEST attempt (false), not the older reply.
+    expect(result.current.favouriteStateFor('item-5')?.value).toBe(false);
+    // The newer save is still in flight, so the toggle stays busy (an older reply must
+    // not re-enable the control).
+    expect(result.current.favouriteStateFor('item-5')?.saving).toBe(true);
+  });
+
   it('records settled truth from an older reply that lands while a newer save is still pending', () => {
     // Two overlapping saves on the SAME id, older reply settling first. This exercises
     // the isNewestAttempt=false branch AND the settledValue short-circuit clause: the
