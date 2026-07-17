@@ -153,6 +153,18 @@ export function useItemCategories(itemId: string, enabled: boolean): UseItemCate
   // arrives AFTER a later success cannot surface a spurious retryable banner
   // (#383, the symmetric residual of #360). Reset on item-switch so a new
   // item starts clean.
+  //
+  // INTENTIONALLY NOT migrated onto the shared `useMutation` primitive (#486):
+  // this is an ADVANCE-ONLY successor guard (`seq < lastSucceededSeqRef.current`,
+  // a `<` comparison below, not `useMutation`'s `!==`). An earlier attempt that
+  // happens to RESOLVE after a later one, but before any later one has yet
+  // SUCCEEDED, is deliberately APPLIED — `lastSucceededSeqRef` only advances on a
+  // committed success, so an earlier success is dropped ONLY once a later one has
+  // actually landed, never merely because a later attempt has started (the
+  // #360/#388 oracle pins exactly this). `useMutation`'s guard bumps its
+  // generation the INSTANT a newer `mutate` starts, so it would unconditionally
+  // drop that earlier success the moment a later correction began — an
+  // observable divergence from the pinned behaviour. Keep this hand-rolled.
   const attemptSeqRef = useRef(0);
   const lastSucceededSeqRef = useRef(0);
 
