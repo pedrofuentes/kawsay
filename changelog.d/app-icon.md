@@ -1,0 +1,1 @@
+- Kawsay now has its own app icon — a hand-drawn sprout — in your dock, taskbar, and installer, in place of the earlier placeholder.
