@@ -69,10 +69,24 @@ export function projectError(error: unknown): SafeError {
  * The redacted wire payload: a stable `code` + the error class `name`. NEVER a
  * `message` or `stack`. `strict()` so a malformed/oversized payload can't slip
  * through the decode.
+ *
+ * `code` is ALSO charset-guarded (defense-in-depth, #481): every value it takes
+ * today — a static {@link IPC_ERROR_CODES} entry (`ERR_SCREAMING_SNAKE`) or a
+ * Node errno-style code an origin error carried (e.g. `EACCES`,
+ * `ERR_NATIVE_MODULE`) — is uppercase ASCII letters/digits/underscore only, so a
+ * decoded `code` outside that charset can never be one of ours; the guard just
+ * makes that invariant explicit rather than relying on length alone. `name` is
+ * NOT charset-guarded: it legitimately carries PascalCase error class names
+ * (`CatalogSessionError`, `ZodError`, `TypeError`) that a fixed charset can't
+ * predict.
  */
 export const ipcErrorPayloadSchema = z
   .object({
-    code: z.string().min(1).max(120),
+    code: z
+      .string()
+      .min(1)
+      .max(120)
+      .regex(/^[A-Z0-9_]+$/),
     name: z.string().min(1).max(120),
   })
   .strict();
