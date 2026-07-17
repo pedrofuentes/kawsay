@@ -500,6 +500,12 @@ export function createCatalogSession(options: CatalogSessionOptions): CatalogSes
       // so an import between pages can't skip, duplicate, or re-count a match. An
       // unknown / evicted token falls through to a fresh search (a new snapshot + token)
       // — the same bounded degrade as a first search, never an error (#482).
+      //
+      // The token is opaque and the renderer clears it on ANY query / filter change, so
+      // in practice a token is only ever replayed for its OWN search. Even a mismatched
+      // replay is bounded: it would just serve that frozen id set (the query text is not
+      // re-consulted here) — never a wrong-library row, since the store is cleared on
+      // every library switch.
       if (input.snapshotToken !== undefined) {
         const snapshot = getSearchSnapshot(input.snapshotToken);
         if (snapshot !== undefined) return pageFromSnapshot(snapshot, input.snapshotToken);
