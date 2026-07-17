@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createIngestionCoordinator } from '../../electron/main/importers/ingestion/coordinator';
 import type {
   HostToWorkerMessage,
@@ -176,6 +176,41 @@ describe('createIngestionCoordinator (AC-9 host orchestration)', () => {
 
     expect(worker.terminations).toBe(1);
     expect(coordinator.active()).toEqual([]);
+  });
+
+  // #480 — the DEFAULT worker-fault sink (used when no `logWorkerFault` is injected)
+  // must route the Error through the REDACTING logger, not `console.error(error.stack)`.
+  // A raw stack/message can embed a filesystem path / item text; even the local console
+  // must only ever see the projected {name, code} shape (AC "no PII to logs").
+  describe('default logWorkerFault sink redacts through the logger (#480)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('never writes a raw worker stack/message to the local console', () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const worker = fakeHandle();
+      // No `logWorkerFault` injected → the coordinator's DEFAULT sink is exercised.
+      const coordinator = createIngestionCoordinator({
+        spawn: () => worker.handle,
+        emitProgress: () => {},
+      });
+
+      coordinator.start(job());
+      worker.emit({ type: 'ready' });
+      worker.emitError(new Error('native crash at /Users/alice/private/secret.json'));
+
+      expect(consoleError).toHaveBeenCalled();
+      const serialized = JSON.stringify(consoleError.mock.calls);
+      // The raw stack/message must never reach the console — only the projected shape.
+      expect(serialized).not.toContain('/Users/alice');
+      expect(serialized).not.toContain('secret.json');
+      expect(serialized).not.toContain('native crash');
+      // The projected {name} is what the redacting logger emits.
+      expect(consoleError.mock.calls.some((call) => call.some((arg) =>
+        arg !== null && typeof arg === 'object' && (arg as { name?: unknown }).name === 'IngestionWorkerFaultError',
+      ))).toBe(true);
+    });
   });
 
   it('forwards a cooperative cancel to the running worker', () => {

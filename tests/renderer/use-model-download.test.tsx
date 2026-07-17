@@ -145,7 +145,7 @@ describe('useModelDownload', () => {
         makeModelDownloadProgressEvent({
           phase: 'error',
           bytesDownloaded: 12,
-          error: { kind: 'network', message: 'getaddrinfo ENOTFOUND raw.host', retryable: true },
+          error: { kind: 'network', retryable: true },
         }),
       );
     });
@@ -165,7 +165,7 @@ describe('useModelDownload', () => {
       api.emitModelDownloadProgress(
         makeModelDownloadProgressEvent({
           phase: 'error',
-          error: { kind: 'network', message: 'offline', retryable: true },
+          error: { kind: 'network', retryable: true },
         }),
       );
     });

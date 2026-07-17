@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   installNetworkGuard,
   isAllowedModelDownloadRequest,
@@ -140,6 +140,42 @@ function createFakeSession(): {
     });
   return { session, onBeforeRequest, fire };
 }
+
+// #480 — the DEV-only cancellation breadcrumb must log a BOUNDED origin (scheme +
+// host + port), never the full request URL. A raw URL can carry a path, query, or
+// embedded credentials/token — even a local-console diagnostic must not dump it.
+describe('installNetworkGuard — cancellation breadcrumb logs a bounded origin, not the full URL (#480)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('logs only the request origin for a cancelled non-local request in DEV', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { session, fire } = createFakeSession();
+    installNetworkGuard(session, { isPackaged: false });
+
+    expect(
+      await fire('https://tracker.evil.example/beacon/collect?token=SUPERSECRETTOKEN&uid=abc123'),
+    ).toEqual({ cancel: true });
+
+    expect(consoleError).toHaveBeenCalled();
+    const serialized = JSON.stringify(consoleError.mock.calls);
+    // The bounded origin is fine to surface…
+    expect(serialized).toContain('https://tracker.evil.example');
+    // …but the path, query, and any token must NEVER be logged.
+    expect(serialized).not.toContain('SUPERSECRETTOKEN');
+    expect(serialized).not.toContain('/beacon/collect');
+    expect(serialized).not.toContain('uid=abc123');
+  });
+
+  it('stays silent in a PACKAGED build (no breadcrumb at all)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { session, fire } = createFakeSession();
+    installNetworkGuard(session, { isPackaged: true });
+    expect(await fire('https://evil.example/track?x=1')).toEqual({ cancel: true });
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+});
 
 describe('installNetworkGuard — webRequest.onBeforeRequest kill-switch', () => {
   it('registers a single catch-all <all_urls> handler', () => {

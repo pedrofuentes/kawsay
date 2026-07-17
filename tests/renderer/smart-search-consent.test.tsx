@@ -188,7 +188,6 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
         phase: 'error',
         error: {
           kind: 'network',
-          message: 'getaddrinfo ENOTFOUND release-assets',
           retryable: true,
         },
       }),
@@ -208,7 +207,7 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
     api.emitSmartSearchModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
-        error: { kind: 'network', message: 'offline', retryable: true },
+        error: { kind: 'network', retryable: true },
       }),
     );
     await user.click(await screen.findByRole('button', { name: /try again/i }));
@@ -224,7 +223,7 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
     api.emitSmartSearchModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
-        error: { kind: 'disk', message: 'ENOSPC: no space left on device', retryable: true },
+        error: { kind: 'disk', retryable: true },
       }),
     );
 
@@ -240,7 +239,7 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
     api.emitSmartSearchModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
-        error: { kind: 'integrity', message: 'sha256 checksum mismatch', retryable: true },
+        error: { kind: 'integrity', retryable: true },
       }),
     );
 
@@ -260,7 +259,7 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
     api.emitSmartSearchModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
-        error: { kind: 'http', message: 'HTTP 503 Service Unavailable', retryable: true },
+        error: { kind: 'http', retryable: true },
       }),
     );
 
@@ -282,7 +281,7 @@ describe('SmartSearchConsent — graceful offline / error handling (never a scar
     api.emitSmartSearchModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
-        error: { kind: 'http', message: 'HTTP 403 Forbidden', retryable: false },
+        error: { kind: 'http', retryable: false },
       }),
     );
 
@@ -382,7 +381,7 @@ describe('SmartSearchConsent — accessibility (WCAG 2.1 AA)', () => {
     api.emitSmartSearchModelDownloadProgress(
       makeModelDownloadProgressEvent({
         phase: 'error',
-        error: { kind: 'network', message: 'offline', retryable: true },
+        error: { kind: 'network', retryable: true },
       }),
     );
     await screen.findByRole('alert');
