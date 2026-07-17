@@ -97,9 +97,12 @@ export interface NavigationValue {
    * `token` is not older than the last settled token for this id — a superseded
    * reply must never regress a newer intent. Clears `saving` only when this token is
    * the newest attempt (an older reply must not re-enable the control while a newer
-   * save is still pending). Returns whether it applied, so the caller can gate a
-   * failure announcement. Safe to call from an unmounted child: it targets this
-   * always-mounted provider.
+   * save is still pending). A non-newest reply also never moves `value`/`settledValue`
+   * to a value the newest attempt's optimistic intent contradicts — the newest value
+   * governs, so a superseded reply can't transiently flip the overlay on another view
+   * (#494); it may still confirm settled truth that agrees with the newest value.
+   * Returns whether it applied, so the caller can gate a failure announcement. Safe to
+   * call from an unmounted child: it targets this always-mounted provider.
    */
   settleFavouriteSave: (id: string, token: number, outcome: FavouriteSettlement) => boolean;
   /**
@@ -175,8 +178,21 @@ export function NavigationProvider({
       setFavourites((prev) => {
         const current = prev[id];
         // Only the newest in-flight save clears the busy flag; an older reply must not
-        // re-enable the control while a newer save is still pending.
+        // re-enable the control while a newer save is still pending (#490).
         const saving = isNewestAttempt ? false : (current?.saving ?? false);
+        // A NON-newest reply (`token < seq.attempt`, still in flight when it lands) must
+        // never move `value`/`settledValue` to a value the newest attempt's optimistic
+        // intent CONTRADICTS — the newest optimistic value governs. Applying a superseded,
+        // differing value would transiently flip the overlay (seen on OTHER views) to a
+        // stale value until the newer save settles (#494). This is reachable even without
+        // being STRICTLY older than `settled`: the #489 timeout can settle token N, the
+        // user retry as N+1, then N's real (differing) reply land. It may still CONFIRM
+        // settled truth when it AGREES with the newest optimistic value (the benign
+        // in-order case, #488) — that value already governs, so recording it is safe. We
+        // keep the `settled` bookkeeping above regardless, so ordering still holds.
+        if (!isNewestAttempt && current !== undefined && value !== current.value) {
+          return prev;
+        }
         // This settlement establishes the persisted truth for overlay consumers (#488):
         // the durable value on success, the reverted value on failure.
         if (
