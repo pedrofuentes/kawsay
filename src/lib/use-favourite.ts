@@ -91,6 +91,12 @@ export function useFavourite(itemId: string, initial: boolean): UseFavouriteResu
     }
     const current = favouriteStateFor(itemId)?.value ?? initial;
     const next = !current;
+    // Revert to the last SETTLED (disk) value on failure, NOT the optimistic `current`.
+    // With two rapid failing toggles, `current` is the phantom in-flight value the first
+    // toggle set, so reverting to it would settle a favourite that never touched disk
+    // (#493). `settledValue` is the last value a save actually persisted; falling back to
+    // `initial` (the card's persisted-at-open flag) when nothing has settled this session.
+    const revertBaseline = favouriteStateFor(itemId)?.settledValue ?? initial;
     const token = beginFavouriteSave(itemId, next);
     const optimisticNotice = next ? 'Added to favourites.' : 'Removed from favourites.';
     setAnnouncement(optimisticNotice);
@@ -101,7 +107,7 @@ export function useFavourite(itemId: string, initial: boolean): UseFavouriteResu
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      const applied = settleFavouriteSave(itemId, token, { ok: false, revertTo: current });
+      const applied = settleFavouriteSave(itemId, token, { ok: false, revertTo: revertBaseline });
       if (!applied) {
         console.debug('[kawsay] favourite timeout superseded by a newer toggle; dropping', itemId);
         return;
@@ -137,7 +143,7 @@ export function useFavourite(itemId: string, initial: boolean): UseFavouriteResu
         // must not keep claiming the change. The provider drops this if a newer toggle
         // already settled (an older reply must never regress the newer intent), or if
         // the timeout already reverted this same token.
-        const applied = settleFavouriteSave(itemId, token, { ok: false, revertTo: current });
+        const applied = settleFavouriteSave(itemId, token, { ok: false, revertTo: revertBaseline });
         if (!applied) {
           console.debug('[kawsay] favourite revert superseded; dropping', itemId);
           return;
