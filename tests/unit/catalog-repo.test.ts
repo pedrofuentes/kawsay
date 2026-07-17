@@ -328,6 +328,37 @@ describe('CatalogRepo (dedup-with-provenance, ADR-0003)', () => {
     });
   });
 
+  describe('searchIds — cheap ordered id set for a "show more" snapshot (#482)', () => {
+    it('returns the match set ids in the SAME order as search (rank, capture_date DESC, id DESC)', () => {
+      // Five rank-tied matches whose ids sort OPPOSITE to insertion order, so only the
+      // real (capture_date DESC, id DESC) tiebreak yields this sequence.
+      const ids = ['1', '2', '3', '4', '5'];
+      for (const id of ids) {
+        repo.insertItem({ id, mediaType: 'message', description: 'familia', contentHash: `h-${id}` });
+      }
+      const full = repo.search({ query: 'familia', limit: 100, offset: 0 });
+      const orderedIds = repo.searchIds({ query: 'familia', limit: 100 });
+      expect(orderedIds).toEqual(full.rows.map((r) => r.id));
+    });
+
+    it('caps the id set at `limit`', () => {
+      for (const id of ['1', '2', '3', '4', '5']) {
+        repo.insertItem({ id, mediaType: 'message', description: 'familia', contentHash: `h-${id}` });
+      }
+      expect(repo.searchIds({ query: 'familia', limit: 2 })).toEqual(['5', '4']);
+    });
+
+    it('applies the same server-side filters as search (an out-of-filter id never appears)', () => {
+      const photo = repo.insertItem({ id: 'p', mediaType: 'photo', description: 'familia', contentHash: 'h-p' });
+      repo.insertItem({ id: 'a', mediaType: 'audio', description: 'familia', contentHash: 'h-a' });
+      expect(repo.searchIds({ query: 'familia', limit: 100, types: ['photo'] })).toEqual([photo]);
+    });
+
+    it('returns [] for a query with no tokenizable content (never throws)', () => {
+      expect(repo.searchIds({ query: '   -- ', limit: 100 })).toEqual([]);
+    });
+  });
+
   describe('search — type/date filters server-side, past the page (#431)', () => {
     // Seed a match set BIGGER than one search page so a filter that runs only over
     // the first page (the old client-side bug) could never see a low-ranked match.
