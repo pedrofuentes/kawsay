@@ -627,6 +627,62 @@ describe('ItemView — favourite save is bounded + busy-clear gate (#489, #490)'
     }
   });
 
+  it('reverts to disk truth known at settle time, not a stale baseline, when a timed-out save later commits and the retry fails (#493 F1)', async () => {
+    vi.useFakeTimers();
+    try {
+      // Disk starts un-favourited. Favourite it (t1) with a SLOW save; it times out and
+      // reverts. Retry (t2). Then t1's slow save actually COMMITS true, and t2 FAILS.
+      // The revert must target disk truth as known at SETTLE time (true), not the value
+      // frozen when t2 was clicked (false) — else a phantom un-favourite over a real save.
+      const item = makeItemCard({ mediaType: 'photo', title: 'A quiet afternoon', isFavourite: false });
+      const d1 = deferred<{ isFavourite: boolean }>();
+      const d2 = deferred<{ isFavourite: boolean }>();
+      const calls: Array<{ id: string; favourite: boolean }> = [];
+      const setFavourite = vi.fn((input: { id: string; favourite: boolean }) => {
+        calls.push(input);
+        return calls.length === 1 ? d1.promise : d2.promise;
+      });
+      const api = makeFakeApi({ setFavourite });
+      const { result } = renderHook(() => useFavourite(item.id, item.isFavourite), {
+        wrapper: hookWrapper(api),
+      });
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        act(() => result.current.toggle()); // t1 → favourite true (slow)
+        expect(result.current.isFavourite).toBe(true);
+
+        // t1 times out → assume failure, revert to false, re-enable.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(SAVE_TIMEOUT_MS);
+        });
+        expect(result.current.isFavourite).toBe(false);
+
+        act(() => result.current.toggle()); // t2 → favourite true again (pending)
+        expect(result.current.isFavourite).toBe(true);
+
+        // t1's slow save actually committed true (disk truth advances to true)...
+        await act(async () => {
+          d1.resolve({ isFavourite: true });
+          await Promise.resolve();
+        });
+        // ...and the retry then fails, persisting nothing. Disk still holds true.
+        await act(async () => {
+          d2.reject(new Error('SQLITE_BUSY'));
+          await Promise.resolve();
+        });
+
+        // Reverting to a baseline frozen at t2's click (false) would phantom-un-favourite
+        // a memory that IS favourited on disk. Settle-time truth keeps it true.
+        expect(result.current.isFavourite).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the toggle disabled until the NEWEST save settles, even when an older reply lands first (#490)', async () => {
     // Distinct from the out-of-order "drop entirely" test above: here the OLDER-sent
     // save resolves FIRST (in order) while the newer is still pending. The busy-clear
