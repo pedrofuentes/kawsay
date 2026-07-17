@@ -94,6 +94,80 @@ describe('CategorizationRun', () => {
     expect(progress).toHaveAttribute('aria-live', 'polite');
   });
 
+  it('stops organizing when the user asks', async () => {
+    const cancel = vi.fn(() => Promise.resolve({ cancelled: true }));
+    const { api, user } = setup(offeredApi({ cancelCategorization: cancel }));
+    await screen.findByRole('button', { name: 'Organize now' });
+
+    act(() => {
+      api.emitCategorizationProgress(
+        snapshot({
+          state: 'running',
+          counts: counts({ categorized: 3 }),
+        }),
+      );
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Stop organizing' }));
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the stopped face when organizing is cancelled', async () => {
+    const start = vi.fn(() =>
+      Promise.resolve(startResult({ outcome: 'cancelled', reason: null })),
+    );
+    const { user } = setup(offeredApi({ startCategorization: start }));
+
+    await user.click(await screen.findByRole('button', { name: 'Organize now' }));
+
+    expect(await screen.findByText(/Organizing stopped/)).toBeInTheDocument();
+  });
+
+  it('shows the nothing face when memories are already organized', async () => {
+    const start = vi.fn(() => Promise.resolve(startResult({ outcome: 'idle', reason: null })));
+    const { user } = setup(offeredApi({ startCategorization: start }));
+
+    await user.click(await screen.findByRole('button', { name: 'Organize now' }));
+
+    expect(await screen.findByText(/already organized/i)).toBeInTheDocument();
+  });
+
+  it('shows the complete face when there is nothing new to gather', async () => {
+    const start = vi.fn(() =>
+      Promise.resolve(
+        startResult({
+          outcome: 'completed',
+          reason: null,
+          counts: counts({ categorized: 0 }),
+        }),
+      ),
+    );
+    const { user } = setup(offeredApi({ startCategorization: start }));
+
+    await user.click(await screen.findByRole('button', { name: 'Organize now' }));
+
+    expect(await screen.findByText(/nothing new to gather/i)).toBeInTheDocument();
+  });
+
+  it('shows the completed count and reassures when some memories failed', async () => {
+    const start = vi.fn(() =>
+      Promise.resolve(
+        startResult({
+          outcome: 'completed',
+          reason: null,
+          counts: counts({ categorized: 3, failed: 1 }),
+        }),
+      ),
+    );
+    const { user } = setup(offeredApi({ startCategorization: start }));
+
+    await user.click(await screen.findByRole('button', { name: 'Organize now' }));
+
+    expect(await screen.findByText(/3 memories/)).toBeInTheDocument();
+    expect(screen.getByText(/couldn.t be sorted/i)).toBeInTheDocument();
+  });
+
   it('guides the user to turn on suggestions when a run is refused', async () => {
     const start = vi.fn(() =>
       Promise.resolve(
@@ -108,6 +182,41 @@ describe('CategorizationRun', () => {
     await user.click(await screen.findByRole('button', { name: 'Organize now' }));
 
     expect(await screen.findByText(/turn on suggestions in the step above/i)).toBeInTheDocument();
+  });
+
+  it('explains when there is nothing to gather after a no-signal refusal', async () => {
+    const start = vi.fn(() =>
+      Promise.resolve(startResult({ outcome: 'refused', reason: 'no-signal' })),
+    );
+    const { user } = setup(offeredApi({ startCategorization: start }));
+
+    await user.click(await screen.findByRole('button', { name: 'Organize now' }));
+
+    expect(await screen.findByText(/nothing to gather just yet/i)).toBeInTheDocument();
+  });
+
+  it('shows a gentle failure face and retries after a rejected start', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(
+        startResult({
+          outcome: 'completed',
+          reason: null,
+          counts: counts({ categorized: 1 }),
+        }),
+      );
+    const { user } = setup(offeredApi({ startCategorization: start }));
+
+    await user.click(await screen.findByRole('button', { name: 'Organize now' }));
+
+    expect(await screen.findByText(/Something interrupted organizing/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(/1 memory/)).toBeInTheDocument();
+    warn.mockRestore();
   });
 
   it('intro has no axe violations', async () => {
