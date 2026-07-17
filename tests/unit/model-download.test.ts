@@ -263,6 +263,13 @@ describe('createModelDownloader — typed, calm failures (no crash)', () => {
     expect(existsSync(modelPath)).toBe(false);
     expect(progress.at(-1)?.phase).toBe('error');
     expect(progress.at(-1)?.error?.kind).toBe('network');
+    // #480 — the terminal error progress event crosses the IPC boundary into the
+    // renderer world. It must carry ONLY the typed {kind, retryable}; the raw
+    // `error.message` (which embedded `net::ERR_INTERNET_DISCONNECTED` here, and can
+    // embed a path / item text) must NEVER be projected onto the wire payload.
+    expect(progress.at(-1)?.error).toEqual({ kind: 'network', retryable: true });
+    expect(progress.at(-1)?.error).not.toHaveProperty('message');
+    expect(JSON.stringify(progress.at(-1))).not.toContain('net::ERR_INTERNET_DISCONNECTED');
   });
 
   it('disk-full mid-write → typed disk ModelDownloadError, temp cleaned up', async () => {

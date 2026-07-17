@@ -771,15 +771,28 @@ describe('ipcEventContract — transcription:modelDownloadProgress (AC-17)', () 
     }
   });
 
-  it('accepts a typed error terminal tick', () => {
+  it('accepts a typed error terminal tick carrying ONLY {kind, retryable} (#480)', () => {
     expect(
       schema.safeParse({
         phase: 'error',
         bytesDownloaded: 2048,
         totalBytes: 487601967,
-        error: { kind: 'network', message: 'offline', retryable: true },
+        error: { kind: 'network', retryable: true },
       }).success,
     ).toBe(true);
+  });
+
+  it('REJECTS a raw error.message on the wire — the boundary is redacted (#480)', () => {
+    // The renderer only ever reads {kind, retryable}; a raw `message` (a path, an
+    // id, item text) must never cross the boundary, so the strict schema forbids it.
+    expect(
+      schema.safeParse({
+        phase: 'error',
+        bytesDownloaded: 2048,
+        totalBytes: 487601967,
+        error: { kind: 'network', message: 'offline at /Users/alice/lib', retryable: true },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a bad phase, bad error kind, negative bytes, or unknown keys', () => {
@@ -792,7 +805,7 @@ describe('ipcEventContract — transcription:modelDownloadProgress (AC-17)', () 
         phase: 'error',
         bytesDownloaded: 0,
         totalBytes: 0,
-        error: { kind: 'cosmic-ray', message: 'x', retryable: false },
+        error: { kind: 'cosmic-ray', retryable: false },
       }).success,
     ).toBe(false);
     expect(
@@ -883,9 +896,20 @@ describe('ipcEventContract — smartSearch:modelDownloadProgress (M4-1b, separat
         phase: 'error',
         bytesDownloaded: 0,
         totalBytes: 130_000_000,
-        error: { kind: 'integrity', message: 'bad', retryable: true },
+        error: { kind: 'integrity', retryable: true },
       }).success,
     ).toBe(true);
+  });
+
+  it('REJECTS a raw error.message on the wire — the boundary is redacted (#480)', () => {
+    expect(
+      schema.safeParse({
+        phase: 'error',
+        bytesDownloaded: 0,
+        totalBytes: 130_000_000,
+        error: { kind: 'integrity', message: 'bad', retryable: true },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a bad phase or unknown keys', () => {
