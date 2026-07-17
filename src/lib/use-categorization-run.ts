@@ -18,6 +18,7 @@ export type CategorizationRunFace =
   | 'intro' // resting: offer to organize
   | 'running' // a run is in flight: gentle live count + stop
   | 'complete' // a run finished: what was gathered
+  | 'failed' // a start request rejected: nothing changed, offer to try again
   | 'refused' // gated: guide kindly (see `reason`)
   | 'nothing' // idle outcome: nothing to organize right now
   | 'stopped'; // cancelled: what was gathered is saved
@@ -43,6 +44,7 @@ export function useCategorizationRun(): UseCategorizationRunResult {
   const [snapshot, setSnapshot] = useState<CategorizationSnapshotDTO | null>(null);
   const [lastOutcome, setLastOutcome] = useState<CategorizationStartResultDTO | null>(null);
   const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState(false);
 
   // Subscribe once to the live progress stream; every tick is a full snapshot.
   useEffect(() => {
@@ -57,10 +59,12 @@ export function useCategorizationRun(): UseCategorizationRunResult {
       return;
     }
     setStarting(true);
+    setStartError(false);
     try {
       setLastOutcome(await api.startCategorization());
     } catch (error) {
       console.warn('[kawsay] categorization start request failed; leaving controls at rest', error);
+      setStartError(true);
     } finally {
       setStarting(false);
     }
@@ -77,7 +81,7 @@ export function useCategorizationRun(): UseCategorizationRunResult {
     }
   }, [api]);
 
-  const face = computeFace(snapshot, lastOutcome, starting);
+  const face = computeFace(snapshot, lastOutcome, starting, startError);
   const counts = displayCounts(snapshot, lastOutcome);
   const reason = face === 'refused' ? (lastOutcome?.reason ?? null) : null;
 
@@ -88,9 +92,13 @@ function computeFace(
   snapshot: CategorizationSnapshotDTO | null,
   lastOutcome: CategorizationStartResultDTO | null,
   starting: boolean,
+  startError: boolean,
 ): CategorizationRunFace {
   if (starting) {
     return 'running';
+  }
+  if (startError) {
+    return 'failed';
   }
   if (snapshot?.state === 'running') {
     return 'running';

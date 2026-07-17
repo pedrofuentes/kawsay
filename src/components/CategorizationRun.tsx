@@ -67,7 +67,7 @@ export function CategorizationRun(): ReactElement {
             </p>
             <div>
               <Button variant="secondary" onClick={() => void run.cancel()}>
-                Stop
+                Stop organizing
               </Button>
             </div>
           </div>
@@ -86,6 +86,21 @@ export function CategorizationRun(): ReactElement {
                 A few memories couldn’t be sorted, and that’s okay — they’re safe and unchanged.
               </p>
             ) : null}
+          </div>
+        );
+
+      case 'failed':
+        return (
+          <div role="status" className="flex flex-col gap-4">
+            <p className="font-body text-base leading-relaxed text-text-primary">
+              Something interrupted organizing, and nothing was changed — your memories are safe.
+              You can try again whenever you’re ready.
+            </p>
+            <div>
+              <Button variant="primary" onClick={() => void run.start()}>
+                Try again
+              </Button>
+            </div>
           </div>
         );
 
