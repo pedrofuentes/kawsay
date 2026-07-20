@@ -299,7 +299,7 @@ jobs:
         # blockmaps, latest*.yml). No matrix leg creates a release, so the #122
         # publish race cannot recur. fail_on_unmatched_files guards against an empty
         # upload. The token is the repo-scoped Actions token (contents: write).
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           fail_on_unmatched_files: true
