@@ -219,3 +219,49 @@ describe('useSuggestions — DEFAULT-OFF list read (#486 part 3)', () => {
     expect(result.current.collections).toEqual([]);
   });
 });
+
+describe('useSuggestions — refreshes when a categorization run completes (#510)', () => {
+  it('re-reads the suggestions list on a complete progress tick so a fresh run surfaces live', async () => {
+    const listSuggestions = vi
+      .fn()
+      .mockResolvedValueOnce(makeSuggestionsView()) // pre-run: the tray is empty
+      .mockResolvedValueOnce(oneSuggestionView()); // the run produced one suggestion
+    const api = makeFakeApi({ listSuggestions });
+    const { result } = renderHook(() => useSuggestions(true), { wrapper: wrapper(api) });
+
+    // The initial (pre-run) read is empty, so nothing shows.
+    await waitFor(() => expect(listSuggestions).toHaveBeenCalledTimes(1));
+    expect(result.current.suggestions).toHaveLength(0);
+
+    // A run finishes. Without a refetch the just-produced suggestion would only
+    // appear after the user navigates away and back — the tray must re-read here
+    // so "Organize now" surfaces its result live (#510).
+    act(() => {
+      api.emitCategorizationProgress({
+        state: 'complete',
+        counts: { categorized: 3, skipped: 0, failed: 0, inFlight: 0 },
+        lastItem: null,
+      });
+    });
+
+    await waitFor(() => expect(result.current.suggestions.length).toBeGreaterThan(0));
+    expect(listSuggestions).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not subscribe to progress while disabled (no read, no refetch)', async () => {
+    const listSuggestions = vi.fn(() => Promise.resolve(oneSuggestionView()));
+    const api = makeFakeApi({ listSuggestions });
+    renderHook(() => useSuggestions(false), { wrapper: wrapper(api) });
+
+    act(() => {
+      api.emitCategorizationProgress({
+        state: 'complete',
+        counts: { categorized: 1, skipped: 0, failed: 0, inFlight: 0 },
+        lastItem: null,
+      });
+    });
+
+    // Disabled: the list is never read and a complete tick triggers no refetch.
+    expect(listSuggestions).not.toHaveBeenCalled();
+  });
+});
