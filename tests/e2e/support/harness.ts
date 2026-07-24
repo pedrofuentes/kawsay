@@ -25,8 +25,8 @@
  * role/label selectors (never brittle CSS) and explicit visibility sync points
  * (never arbitrary sleeps).
  */
-import { mkdirSync, mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -101,6 +101,26 @@ export async function launchKawsay(): Promise<KawsayApp> {
   // Prove we are on a REAL, mounted renderer (a blank page would pass vacuously).
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   return { app, page, userDataDir };
+}
+
+/** Gazetteer sample path relative to a `resources/` root. */
+const GAZETTEER_SAMPLE_SUBPATH = join('gazetteer', 'cities1000.sample.ndjson');
+
+/**
+ * Stage the committed sample gazetteer where the STANDALONE-launched built app
+ * looks for it. The app resolves its dev asset root from `app.getAppPath()`, which
+ * for `electron <out/main/index.js>` is `out/main` — not the repo root — so the
+ * gazetteer (shipped under `resources/`, staged into the packaged app by
+ * electron-builder) is absent for the e2e launch, leaving categorization
+ * `offered: false` and the whole surface hidden. Copying the sample into
+ * `<out/main>/resources/gazetteer/` makes the offline PLACE path available for the
+ * AC-32 journey (#510). Idempotent; safe to call before every launch.
+ */
+export function stageGazetteerForE2e(): void {
+  const source = join(projectRoot, 'resources', GAZETTEER_SAMPLE_SUBPATH);
+  const target = join(dirname(mainEntry), 'resources', GAZETTEER_SAMPLE_SUBPATH);
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(source, target);
 }
 
 /** Make a fresh, empty temp directory to be used as a Kawsay library root. */

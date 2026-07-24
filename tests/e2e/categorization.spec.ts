@@ -18,6 +18,7 @@ import {
   makeLibraryDir,
   completeOnboardingWithPhotoImport,
   nativeCatalogAvailable,
+  stageGazetteerForE2e,
   NATIVE_DB_SKIP_REASON,
 } from './support/harness';
 
@@ -28,6 +29,9 @@ test.describe.serial('categorization: organize photos into a suggested collectio
 
   test.beforeAll(async () => {
     test.skip(!(await nativeCatalogAvailable()), NATIVE_DB_SKIP_REASON);
+    // The place path needs the gazetteer; stage the committed sample where the
+    // standalone-launched build resolves it (#510).
+    stageGazetteerForE2e();
     ({ app, page } = await launchKawsay());
   });
 
