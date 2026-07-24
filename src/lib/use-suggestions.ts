@@ -78,7 +78,24 @@ export function useSuggestions(enabled: boolean): UseSuggestionsResult {
       return api.listSuggestions();
     },
   });
-  const { setData: setListData } = listQuery;
+  const { setData: setListData, refetch: refetchList } = listQuery;
+
+  // Surface a just-finished run live. `startCategorization` (the "Organize now"
+  // control) writes its place/theme suggestions to the catalog, but this list read
+  // resolved once when the tray was enabled — so without a nudge the new
+  // suggestions would only appear after the user navigates away and back. While
+  // enabled, subscribe to the progress stream and re-read the list when a run
+  // COMPLETES, so the tray reflects the outcome the completion copy promises (#510).
+  useEffect(() => {
+    if (!actionsEnabled || api === undefined) {
+      return undefined;
+    }
+    return api.onCategorizationProgress((snapshot) => {
+      if (snapshot.state === 'complete') {
+        refetchList();
+      }
+    });
+  }, [actionsEnabled, api, refetchList]);
 
   // The tray's view: the query's last committed data, or the calm EMPTY_VIEW
   // while disabled, still loading, or after a failed read (a failure leaves
