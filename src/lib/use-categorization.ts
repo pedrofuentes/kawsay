@@ -26,6 +26,21 @@ export interface UseCategorizationStatusResult {
   setOptedIn(next: boolean): void;
 }
 
+// The opt-in gate is read by several sibling surfaces at once — the Settings
+// consent card, the "Organize now" run control, the suggestions tray, and the
+// timeline chips — each through its OWN `useQuery` instance (the gate deliberately
+// does not share the SWR cache, see the note in the hook). So a toggle in one is
+// invisible to the others live: opting in via the consent card would not enable the
+// tray/run until a remount (#510). This tiny module-level broadcast carries the new
+// opt-in value to every mounted instance, which applies it through its own query
+// the SAME optimistic way the toggling card does — no shared provider, no refetch
+// round-trip, and each instance keeps its own `offered` reading untouched.
+const optInListeners = new Set<(optedIn: boolean) => void>();
+
+function broadcastOptIn(optedIn: boolean): void {
+  for (const listener of optInListeners) listener(optedIn);
+}
+
 export function useCategorizationStatus(): UseCategorizationStatusResult {
   const api = useKawsayApi();
   // The gate read (is the surface offered, and has the user opted in) now runs
@@ -53,6 +68,20 @@ export function useCategorizationStatus(): UseCategorizationStatusResult {
   // rather than surfacing an error; the next open revalidates. `loading` is true
   // only while the FIRST read is in flight.
 
+  // Apply an opt-in value broadcast by a SIBLING instance (see the broadcast note
+  // above): write it straight into this instance's query the same way an in-place
+  // toggle would, keeping the local `offered` reading. This is how opting in on the
+  // consent card enables the tray / run control live in the same view (#510).
+  useEffect(() => {
+    const apply = (optedIn: boolean): void => {
+      setData((prev) => ({ offered: prev?.offered ?? true, optedIn }));
+    };
+    optInListeners.add(apply);
+    return () => {
+      optInListeners.delete(apply);
+    };
+  }, [setData]);
+
   const setOptedIn = useCallback(
     (next: boolean): void => {
       if (api === undefined) {
@@ -60,17 +89,21 @@ export function useCategorizationStatus(): UseCategorizationStatusResult {
       }
       // Reflect the choice immediately (the toggle feels instant) by writing the
       // optimistic value straight into the query's data, then reconcile with the
-      // durable value the main process echoes back.
+      // durable value the main process echoes back. Each write is also broadcast so
+      // every sibling instance stays in lockstep (#510).
       setData((prev) => ({ offered: prev?.offered ?? true, optedIn: next }));
+      broadcastOptIn(next);
       void api
         .setCategorizationConsent({ optedIn: next })
         .then((result) => {
           setData((prev) => ({ offered: prev?.offered ?? true, optedIn: result.optedIn }));
+          broadcastOptIn(result.optedIn);
         })
         .catch(() => {
           // Persisting failed — fall back to the previous state so the toggle never
           // lies about what is actually stored on disk.
           setData((prev) => ({ offered: prev?.offered ?? true, optedIn: !next }));
+          broadcastOptIn(!next);
         });
     },
     [api, setData],

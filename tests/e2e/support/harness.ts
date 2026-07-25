@@ -25,8 +25,8 @@
  * role/label selectors (never brittle CSS) and explicit visibility sync points
  * (never arbitrary sleeps).
  */
-import { mkdirSync, mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -47,6 +47,13 @@ export const WHATSAPP_FIXTURE_DIR = fileURLToPath(
  *  "Add memories" re-entry brings genuinely new memories into an open library. */
 export const WHATSAPP_MORE_FIXTURE_DIR = fileURLToPath(
   new URL('../fixtures/whatsapp-more', import.meta.url),
+);
+
+/** The committed folder of three GPS-tagged photos clustered near the Shanghai
+ *  gazetteer entry — a fully offline signal for the place categorizer (#510). A
+ *  folder of images needs no ffmpeg/model/network, so the import stays offline. */
+export const PHOTOS_SHANGHAI_FIXTURE_DIR = fileURLToPath(
+  new URL('../fixtures/photos-shanghai', import.meta.url),
 );
 
 /** The four messages the fixture yields, in the chat order. Newest-first on the
@@ -94,6 +101,26 @@ export async function launchKawsay(): Promise<KawsayApp> {
   // Prove we are on a REAL, mounted renderer (a blank page would pass vacuously).
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   return { app, page, userDataDir };
+}
+
+/** Gazetteer sample path relative to a `resources/` root. */
+const GAZETTEER_SAMPLE_SUBPATH = join('gazetteer', 'cities1000.sample.ndjson');
+
+/**
+ * Stage the committed sample gazetteer where the STANDALONE-launched built app
+ * looks for it. The app resolves its dev asset root from `app.getAppPath()`, which
+ * for `electron <out/main/index.js>` is `out/main` — not the repo root — so the
+ * gazetteer (shipped under `resources/`, staged into the packaged app by
+ * electron-builder) is absent for the e2e launch, leaving categorization
+ * `offered: false` and the whole surface hidden. Copying the sample into
+ * `<out/main>/resources/gazetteer/` makes the offline PLACE path available for the
+ * AC-32 journey (#510). Idempotent; safe to call before every launch.
+ */
+export function stageGazetteerForE2e(): void {
+  const source = join(projectRoot, 'resources', GAZETTEER_SAMPLE_SUBPATH);
+  const target = join(dirname(mainEntry), 'resources', GAZETTEER_SAMPLE_SUBPATH);
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(source, target);
 }
 
 /** Make a fresh, empty temp directory to be used as a Kawsay library root. */
@@ -258,6 +285,58 @@ export async function driveWhatsAppImportToCompletion(
   // The import runs off-thread; wait on the deterministic completion heading
   // rather than any timer. A failed resolve would land on "We hit a small snag".
   await expect(page.getByRole('heading', { name: "They're here" })).toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * Drive the "A folder of photos" source through its one-screen primer → locate
+ * (typed folder path) → a live off-thread import, stopping on the "They're here"
+ * completion face. The folder is a set of GPS-tagged JPEGs (defaults to the
+ * committed Shanghai fixtures), giving the place categorizer an offline signal.
+ */
+export async function drivePhotoFolderImportToCompletion(
+  page: Page,
+  options: { name: string; folderPath?: string },
+): Promise<void> {
+  const folderPath = options.folderPath ?? PHOTOS_SHANGHAI_FIXTURE_DIR;
+
+  await page.getByRole('button', { name: 'A folder of photos' }).click();
+
+  // The folder source shows a one-screen primer ("Step 1 of 2") rather than the
+  // multi-step export recipe; acknowledge it to reach the locate step.
+  await expect(page.getByText('Step 1 of 2')).toBeVisible();
+  await page.getByRole('button', { name: "I've done this" }).click();
+
+  await expect(page.getByRole('heading', { name: 'Which folder should we look in?' })).toBeVisible();
+  await page.getByLabel('Which folder are the photos in?').fill(folderPath);
+  await page.getByRole('button', { name: `Bring ${options.name}'s memories in` }).click();
+
+  await expect(page.getByRole('heading', { name: "They're here" })).toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * Whole first-run journey for the photo-folder source: welcome → name → create
+ * library → import the GPS photo folder → land on the timeline. Mirrors
+ * {@link completeOnboardingWithImport} but for the folder source (#510).
+ */
+export async function completeOnboardingWithPhotoImport(
+  page: Page,
+  options: { name: string; libraryDir: string; folderPath?: string },
+): Promise<{ libraryDir: string }> {
+  const { name, libraryDir } = options;
+
+  await startOnboarding(page);
+  await enterName(page, name);
+
+  await expect(
+    page.getByRole('heading', { name: `Where should we keep ${name}'s memories?` }),
+  ).toBeVisible();
+  await page.getByLabel(`Folder for ${name}'s memories`).fill(libraryDir);
+  await page.getByRole('button', { name: `Create ${name}'s library` }).click();
+
+  await drivePhotoFolderImportToCompletion(page, { name, folderPath: options.folderPath });
+  await page.getByRole('button', { name: 'See everything' }).click();
+  await landOnTimeline(page, name);
+  return { libraryDir };
 }
 
 /** Re-open an existing (already-populated) library and land on its timeline, via
