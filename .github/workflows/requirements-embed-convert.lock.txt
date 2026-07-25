@@ -10,7 +10,7 @@
 #       -> -r requirements-convert_legacy_llama.txt
 #          (numpy~=1.26.4, sentencepiece>=0.1.98,<0.3.0, transformers==4.57.6,
 #           gguf>=0.1.0, protobuf>=4.21.0,<5.0.0)
-#       -> torch==2.11.0  (from https://download.pytorch.org/whl/cpu -> torch==2.11.0+cpu)
+#       -> torch==2.11.0  (from https://download.pytorch.org/whl/cpu -> torch==2.12.1+cpu)
 #   + huggingface_hub==0.36.2
 #
 # Platform target: linux x86_64 / CPython 3.11 (the convert job runs on
